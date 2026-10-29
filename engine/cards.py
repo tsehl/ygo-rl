@@ -6,7 +6,7 @@ Joueurs relatifs : ME = celui qui active, OPP = son adversaire.
 """
 import numpy as np
 
-from core import (BIG, E, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMON, EV_SPSUMMON, EV_SUMMON, EV_TO_GRAVE,
+from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMON, EV_SPSUMMON, EV_SUMMON, EV_TO_GRAVE,
                   FW, K_TRIG_F, K_TRIG_O, OP_COND_EVP, OP_COND_SELF, OP_COND_TURN, OP_EVENT, OP_LOCK, K_ACTIVATE,
                   K_IGNITION, NF, OP_CHAINCARD, OP_CHOOSE, OP_COND_CHAIN, OP_DAMAGE, OP_DRAW,
                   OP_FILTER, OP_MINATK, OP_MOVE, OP_NEGATE, OP_PAY_LP, OP_RECOVER, OP_REQ, OP_REQ_FREE, OP_SELF,
@@ -161,6 +161,7 @@ def assemble(codes, cards=CARDS):
             fl = []
             for g, pr in enumerate(progs):
                 assert len(pr) < P, (code, g)  # toujours au moins un OP_END
+                assert g == PG_RESOLVE or len(pr) <= PT, (code, g)  # test_ok ne lit que PT instructions
                 for j, (op, a, b, cc) in enumerate(pr):
                     if op == OP_FILTER:
                         if b not in fl:
