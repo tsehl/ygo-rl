@@ -1,0 +1,32 @@
+[colab] Creating session 'ablation-l4'...
+[colab] Session READY (ablation-l4). Executing ablation.py...
+ablation | devices: [CudaDevice(id=0)] | jax 0.11.1
+  ... compilation NN réel (états figés) B=2048
+NN réel (états figés) B=2048                     25,031 /s   13.3 TFLOPS   (compile  8.0s)
+  ... compilation NN synth d=256 L=4 tok=80 B=2048
+NN synth d=256 L=4 tok=80 B=2048                 25,389 /s   13.4 TFLOPS   (compile  3.8s)
+  ... compilation NN synth d=256 L=4 tok=80 sans attn B=2048
+NN synth d=256 L=4 tok=80 sans attn B=2048       58,293 /s   19.6 TFLOPS   (compile  5.2s)
+  ... compilation NN synth d=256 L=4 tok=80 sans FFN B=2048
+NN synth d=256 L=4 tok=80 sans FFN B=2048        44,426 /s    8.6 TFLOPS   (compile  6.2s)
+  ... compilation NN synth d=128 L=4 tok=80 B=2048
+NN synth d=128 L=4 tok=80 B=2048                 52,203 /s    7.3 TFLOPS   (compile  5.7s)
+  ... compilation NN synth d=512 L=4 tok=80 B=2048
+NN synth d=512 L=4 tok=80 B=2048                 10,565 /s   21.8 TFLOPS   (compile 10.6s)
+  ... compilation NN synth d=256 L=4 tok=32 B=2048
+NN synth d=256 L=4 tok=32 B=2048                 74,464 /s   15.3 TFLOPS   (compile  5.6s)
+  ... compilation NN synth d=256 L=4 tok=80 B=8192
+NN synth d=256 L=4 tok=80 B=8192                 25,231 /s   13.4 TFLOPS   (compile 13.7s)
+  ... compilation moteur base (32 cycles) B=16384
+moteur base (32 cycles) B=16384                 275,738 /s   (compile 37.3s)
+  ... compilation moteur 8 cycles B=16384
+moteur 8 cycles B=16384                         358,446 /s   (compile 36.1s)
+  ... compilation moteur rank O(N) B=16384
+moteur rank O(N) B=16384                      1,062,435 /s   (compile  8.4s)
+  ... compilation moteur sans reset B=16384
+moteur sans reset B=16384                       787,273 /s   (compile  4.5s)
+  ... compilation moteur 8 cycles + rank O(N) + sans reset B=16384
+moteur 8 cycles + rank O(N) + sans reset B=16384    4,989,230 /s   (compile  4.1s)
+FIN
+[colab] Stopping session 'ablation-l4'...
+[colab] Session terminated.

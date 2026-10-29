@@ -1,0 +1,8 @@
+[colab] Creating session 'run-505f5d'...
+[colab] Session READY (run-505f5d). Executing interp_bench.py...
+devices: [CudaDevice(id=0)] | jax 0.11.1
+random B=  1024        71,766 coups/s   (compile  15.4s, 5346 parties finies)
+random B=  4096        89,368 coups/s   (compile  16.4s, 21426 parties finies)
+random B= 16384        88,178 coups/s   (compile  23.6s, 85902 parties finies)
+random B= 65536        83,081 coups/s   (compile  55.2s, 342830 parties finies)
+NN     B=  1024         4,577 coups/s   (compile  26.7s, 5088 parties finies)

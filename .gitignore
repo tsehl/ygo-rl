@@ -1,0 +1,10 @@
+# dépendances externes, installées par setup.sh
+oracle/ygopro-core/
+data/CardScripts/
+data/BabelCDB/
+.tools/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

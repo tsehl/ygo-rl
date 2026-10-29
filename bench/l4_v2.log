@@ -1,0 +1,13 @@
+[colab] Creating session 'run-9e57f9'...
+[colab] Session READY (run-9e57f9). Executing interp_bench_v2.py...
+v2 | devices: [CudaDevice(id=0)] | jax 0.11.1
+  ... compilation random B=4096
+random B=  4096       249,721 coups/s   (compile  37.7s, 21426 parties finies)
+  ... compilation random B=16384
+random B= 16384       280,789 coups/s   (compile  39.6s, 85902 parties finies)
+  ... compilation NN B=1024
+NN     B=  1024        22,320 coups/s   (compile  15.9s, 5103 parties finies)
+  ... compilation NN B=4096
+NN     B=  4096        21,878 coups/s   (compile  52.5s, 20275 parties finies)
+[colab] Stopping session 'run-9e57f9'...
+[colab] Session terminated.

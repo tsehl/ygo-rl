@@ -1,0 +1,298 @@
+{
+  "source": {
+    "database": "/Users/thomas/Documents/collab/ygo/data/BabelCDB/cards.cdb",
+    "constants": "/Users/thomas/Documents/collab/ygo/data/CardScripts/constant.lua",
+    "table": "datas/texts"
+  },
+  "filter": {
+    "rows_total": 14759,
+    "excluded_alias_rows": 438,
+    "alias_rule": "rows with alias != 0 excluded (alternate artworks)",
+    "cards_after_filter": 14321
+  },
+  "constants": {
+    "TYPE": {
+      "MONSTER": "0x1",
+      "SPELL": "0x2",
+      "TRAP": "0x4",
+      "NORMAL": "0x10",
+      "EFFECT": "0x20",
+      "FUSION": "0x40",
+      "RITUAL": "0x80",
+      "TRAPMONSTER": "0x100",
+      "SPIRIT": "0x200",
+      "UNION": "0x400",
+      "GEMINI": "0x800",
+      "TUNER": "0x1000",
+      "SYNCHRO": "0x2000",
+      "TOKEN": "0x4000",
+      "MAXIMUM": "0x8000",
+      "QUICKPLAY": "0x10000",
+      "CONTINUOUS": "0x20000",
+      "EQUIP": "0x40000",
+      "FIELD": "0x80000",
+      "COUNTER": "0x100000",
+      "FLIP": "0x200000",
+      "TOON": "0x400000",
+      "XYZ": "0x800000",
+      "PENDULUM": "0x1000000",
+      "SPSUMMON": "0x2000000",
+      "LINK": "0x4000000",
+      "SKILL": "0x8000000",
+      "ACTION": "0x10000000",
+      "PLUS": "0x20000000",
+      "MINUS": "0x40000000",
+      "ARMOR": "0x80000000"
+    },
+    "RACE": {
+      "WARRIOR": "0x1",
+      "SPELLCASTER": "0x2",
+      "FAIRY": "0x4",
+      "FIEND": "0x8",
+      "ZOMBIE": "0x10",
+      "MACHINE": "0x20",
+      "AQUA": "0x40",
+      "PYRO": "0x80",
+      "ROCK": "0x100",
+      "WINGEDBEAST": "0x200",
+      "PLANT": "0x400",
+      "INSECT": "0x800",
+      "THUNDER": "0x1000",
+      "DRAGON": "0x2000",
+      "BEAST": "0x4000",
+      "BEASTWARRIOR": "0x8000",
+      "DINOSAUR": "0x10000",
+      "FISH": "0x20000",
+      "SEASERPENT": "0x40000",
+      "REPTILE": "0x80000",
+      "PSYCHIC": "0x100000",
+      "DIVINE": "0x200000",
+      "CREATORGOD": "0x400000",
+      "WYRM": "0x800000",
+      "CYBERSE": "0x1000000",
+      "ILLUSION": "0x2000000",
+      "CYBORG": "0x4000000",
+      "MAGICALKNIGHT": "0x8000000",
+      "HIGHDRAGON": "0x10000000",
+      "OMEGAPSYCHIC": "0x20000000",
+      "CELESTIALWARRIOR": "0x40000000",
+      "GALAXY": "0x80000000",
+      "YOKAI": "0x4000000000000000"
+    },
+    "ATTRIBUTE": {
+      "EARTH": "0x1",
+      "WATER": "0x2",
+      "FIRE": "0x4",
+      "WIND": "0x8",
+      "LIGHT": "0x10",
+      "DARK": "0x20",
+      "DIVINE": "0x40"
+    },
+    "composite_lines_skipped": [
+      {
+        "line": 77,
+        "text": "TYPE_EXTRA       = TYPE_FUSION|TYPE_SYNCHRO|TYPE_XYZ|TYPE_LINK"
+      },
+      {
+        "line": 78,
+        "text": "TYPE_PLUSMINUS   = TYPE_PLUS|TYPE_MINUS"
+      },
+      {
+        "line": 87,
+        "text": "ATTRIBUTE_ALL    = ATTRIBUTE_EARTH|ATTRIBUTE_WATER|ATTRIBUTE_FIRE|ATTRIBUTE_WIND|ATTRIBUTE_LIGHT|ATTRIBUTE_DARK|ATTRIBUTE_DIVINE"
+      }
+    ]
+  },
+  "top_level_kind": {
+    "Monster": 9224,
+    "Spell": 2838,
+    "Trap": 2059,
+    "other": 200,
+    "other_breakdown": {
+      "token": 200
+    },
+    "token_rows_with_TYPE_TOKEN": 200,
+    "anomalies_multiple_top_kind_bits": 0
+  },
+  "monster": {
+    "deck_split": {
+      "main": 7067,
+      "extra": 2157,
+      "extra_definition": "TYPE_FUSION|TYPE_SYNCHRO|TYPE_XYZ|TYPE_LINK"
+    },
+    "subtype_counts": {
+      "NORMAL": 722,
+      "EFFECT": 8417,
+      "FUSION": 568,
+      "RITUAL": 148,
+      "TRAPMONSTER": 0,
+      "SPIRIT": 42,
+      "UNION": 40,
+      "GEMINI": 45,
+      "TUNER": 602,
+      "SYNCHRO": 533,
+      "MAXIMUM": 0,
+      "QUICKPLAY": 0,
+      "CONTINUOUS": 0,
+      "EQUIP": 0,
+      "FIELD": 0,
+      "COUNTER": 0,
+      "FLIP": 212,
+      "TOON": 18,
+      "XYZ": 593,
+      "PENDULUM": 389,
+      "SPSUMMON": 344,
+      "LINK": 463,
+      "SKILL": 0,
+      "ACTION": 0,
+      "PLUS": 0,
+      "MINUS": 0,
+      "ARMOR": 0
+    },
+    "level_rank_main_deck": {
+      "1": 675,
+      "2": 697,
+      "3": 1179,
+      "4": 2336,
+      "5": 510,
+      "6": 479,
+      "7": 369,
+      "8": 522,
+      "9": 81,
+      "10": 172,
+      "11": 21,
+      "12": 26
+    },
+    "link_rating": {
+      "1": 62,
+      "2": 222,
+      "3": 110,
+      "4": 54,
+      "5": 13,
+      "6": 2
+    },
+    "pendulum_left_scale": {
+      "0": 28,
+      "1": 81,
+      "2": 39,
+      "3": 39,
+      "4": 37,
+      "5": 38,
+      "6": 16,
+      "7": 28,
+      "8": 48,
+      "9": 13,
+      "10": 13,
+      "11": 4,
+      "12": 3,
+      "13": 2
+    },
+    "atk_buckets": {
+      "0-499": 1481,
+      "500-999": 1100,
+      "1000-1499": 1525,
+      "1500-1999": 1946,
+      "2000-2499": 1369,
+      "2500-2999": 1065,
+      "3000+": 656,
+      "?": 82,
+      "negative_other": 0
+    },
+    "race_counts": {
+      "AQUA": 289,
+      "BEAST": 430,
+      "BEASTWARRIOR": 264,
+      "CREATORGOD": 1,
+      "CYBERSE": 293,
+      "DINOSAUR": 150,
+      "DIVINE": 5,
+      "DRAGON": 806,
+      "FAIRY": 577,
+      "FIEND": 903,
+      "FISH": 147,
+      "ILLUSION": 55,
+      "INSECT": 267,
+      "MACHINE": 1055,
+      "PLANT": 257,
+      "PSYCHIC": 210,
+      "PYRO": 161,
+      "REPTILE": 193,
+      "ROCK": 269,
+      "SEASERPENT": 98,
+      "SPELLCASTER": 794,
+      "THUNDER": 153,
+      "WARRIOR": 1149,
+      "WINGEDBEAST": 332,
+      "WYRM": 98,
+      "ZOMBIE": 268
+    },
+    "attribute_counts": {
+      "DARK": 2619,
+      "DIVINE": 6,
+      "EARTH": 2073,
+      "FIRE": 815,
+      "LIGHT": 1928,
+      "WATER": 929,
+      "WIND": 854
+    },
+    "unknown_race_bits": {},
+    "unknown_attribute_bits": {}
+  },
+  "spell": {
+    "subtype_counts": {
+      "Normal": 1069,
+      "QUICKPLAY": 565,
+      "CONTINUOUS": 511,
+      "EQUIP": 282,
+      "FIELD": 328,
+      "RITUAL": 83
+    },
+    "note": "subtype flags are not mutually exclusive; Normal = no subtype flag set"
+  },
+  "trap": {
+    "subtype_counts": {
+      "Normal": 1320,
+      "CONTINUOUS": 563,
+      "COUNTER": 176
+    },
+    "note": "subtype flags are not mutually exclusive; Normal = no subtype flag set"
+  },
+  "setcodes": {
+    "distinct_setcodes_per_card": {
+      "0": 6351,
+      "1": 7317,
+      "2": 598,
+      "3": 48,
+      "4": 7
+    },
+    "max_distinct_setcodes_on_one_card": 4,
+    "distinct_archetype_codes": 616
+  },
+  "effect_text_length_chars": {
+    "effect_monsters": {
+      "count": 8417,
+      "min": 18,
+      "median": 364,
+      "p90": 543,
+      "max": 1112
+    },
+    "spells": {
+      "count": 2838,
+      "min": 13,
+      "median": 291.5,
+      "p90": 499,
+      "max": 713
+    },
+    "traps": {
+      "count": 2059,
+      "min": 12,
+      "median": 245,
+      "p90": 475,
+      "max": 695
+    },
+    "missing_desc_rows_by_kind": {}
+  },
+  "data_quality": {
+    "unmapped_type_bits": {}
+  }
+}

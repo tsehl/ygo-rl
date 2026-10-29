@@ -1,0 +1,6171 @@
+{
+  "meta": {
+    "data_dir": "/Users/thomas/Documents/collab/ygo/data/CardScripts/official",
+    "files_matched": 13541,
+    "files_processed": 13541,
+    "files_failed": 0,
+    "failed_files": []
+  },
+  "duel_api_calls": [
+    {
+      "token": "SetOperationInfo",
+      "files": 10651,
+      "occurrences": 17216
+    },
+    {
+      "token": "Hint",
+      "files": 9372,
+      "occurrences": 14957
+    },
+    {
+      "token": "IsExistingMatchingCard",
+      "files": 7242,
+      "occurrences": 11109
+    },
+    {
+      "token": "SelectMatchingCard",
+      "files": 5399,
+      "occurrences": 7146
+    },
+    {
+      "token": "GetLocationCount",
+      "files": 5359,
+      "occurrences": 8940
+    },
+    {
+      "token": "SelectTarget",
+      "files": 4788,
+      "occurrences": 5463
+    },
+    {
+      "token": "IsExistingTarget",
+      "files": 4588,
+      "occurrences": 5316
+    },
+    {
+      "token": "GetFirstTarget",
+      "files": 4490,
+      "occurrences": 4909
+    },
+    {
+      "token": "SpecialSummon",
+      "files": 4419,
+      "occurrences": 4951
+    },
+    {
+      "token": "GetMatchingGroup",
+      "files": 3176,
+      "occurrences": 5123
+    },
+    {
+      "token": "SendtoHand",
+      "files": 2925,
+      "occurrences": 3204
+    },
+    {
+      "token": "Destroy",
+      "files": 2752,
+      "occurrences": 3042
+    },
+    {
+      "token": "ConfirmCards",
+      "files": 2577,
+      "occurrences": 2875
+    },
+    {
+      "token": "RegisterEffect",
+      "files": 1986,
+      "occurrences": 2764
+    },
+    {
+      "token": "SendtoGrave",
+      "files": 1808,
+      "occurrences": 2003
+    },
+    {
+      "token": "BreakEffect",
+      "files": 1751,
+      "occurrences": 1975
+    },
+    {
+      "token": "GetChainInfo",
+      "files": 1723,
+      "occurrences": 1855
+    },
+    {
+      "token": "Remove",
+      "files": 1519,
+      "occurrences": 1703
+    },
+    {
+      "token": "SelectYesNo",
+      "files": 1147,
+      "occurrences": 1245
+    },
+    {
+      "token": "SetPossibleOperationInfo",
+      "files": 1048,
+      "occurrences": 1423
+    },
+    {
+      "token": "IsTurnPlayer",
+      "files": 1022,
+      "occurrences": 1137
+    },
+    {
+      "token": "GetFieldGroupCount",
+      "files": 999,
+      "occurrences": 1516
+    },
+    {
+      "token": "SetTargetPlayer",
+      "files": 948,
+      "occurrences": 987
+    },
+    {
+      "token": "SetTargetParam",
+      "files": 934,
+      "occurrences": 965
+    },
+    {
+      "token": "SendtoDeck",
+      "files": 907,
+      "occurrences": 972
+    },
+    {
+      "token": "Draw",
+      "files": 839,
+      "occurrences": 911
+    },
+    {
+      "token": "Damage",
+      "files": 824,
+      "occurrences": 925
+    },
+    {
+      "token": "GetAttacker",
+      "files": 817,
+      "occurrences": 1180
+    },
+    {
+      "token": "HintSelection",
+      "files": 790,
+      "occurrences": 893
+    },
+    {
+      "token": "SpecialSummonStep",
+      "files": 784,
+      "occurrences": 864
+    },
+    {
+      "token": "SpecialSummonComplete",
+      "files": 783,
+      "occurrences": 793
+    },
+    {
+      "token": "IsPlayerAffectedByEffect",
+      "files": 764,
+      "occurrences": 1185
+    },
+    {
+      "token": "Release",
+      "files": 741,
+      "occurrences": 759
+    },
+    {
+      "token": "SetTargetCard",
+      "files": 711,
+      "occurrences": 759
+    },
+    {
+      "token": "GetTargetCards",
+      "files": 656,
+      "occurrences": 665
+    },
+    {
+      "token": "IsPlayerCanDraw",
+      "files": 649,
+      "occurrences": 746
+    },
+    {
+      "token": "GetAttackTarget",
+      "files": 627,
+      "occurrences": 888
+    },
+    {
+      "token": "DiscardHand",
+      "files": 620,
+      "occurrences": 636
+    },
+    {
+      "token": "GetMatchingGroupCount",
+      "files": 572,
+      "occurrences": 734
+    },
+    {
+      "token": "ShuffleHand",
+      "files": 540,
+      "occurrences": 602
+    },
+    {
+      "token": "GetMZoneCount",
+      "files": 512,
+      "occurrences": 559
+    },
+    {
+      "token": "ChangePosition",
+      "files": 505,
+      "occurrences": 567
+    },
+    {
+      "token": "CheckReleaseGroupCost",
+      "files": 485,
+      "occurrences": 497
+    },
+    {
+      "token": "SelectReleaseGroupCost",
+      "files": 483,
+      "occurrences": 493
+    },
+    {
+      "token": "GetFieldGroup",
+      "files": 461,
+      "occurrences": 599
+    },
+    {
+      "token": "GetLocationCountFromEx",
+      "files": 423,
+      "occurrences": 493
+    },
+    {
+      "token": "NegateActivation",
+      "files": 391,
+      "occurrences": 393
+    },
+    {
+      "token": "IsChainNegatable",
+      "files": 380,
+      "occurrences": 386
+    },
+    {
+      "token": "SelectEffect",
+      "files": 371,
+      "occurrences": 386
+    },
+    {
+      "token": "IsMainPhase",
+      "files": 369,
+      "occurrences": 375
+    },
+    {
+      "token": "RegisterFlagEffect",
+      "files": 362,
+      "occurrences": 476
+    },
+    {
+      "token": "SSet",
+      "files": 362,
+      "occurrences": 367
+    },
+    {
+      "token": "GetOperatedGroup",
+      "files": 335,
+      "occurrences": 349
+    },
+    {
+      "token": "IsPlayerCanSpecialSummonMonster",
+      "files": 324,
+      "occurrences": 596
+    },
+    {
+      "token": "IsPhase",
+      "files": 308,
+      "occurrences": 337
+    },
+    {
+      "token": "Equip",
+      "files": 306,
+      "occurrences": 318
+    },
+    {
+      "token": "ShuffleDeck",
+      "files": 277,
+      "occurrences": 294
+    },
+    {
+      "token": "Recover",
+      "files": 269,
+      "occurrences": 291
+    },
+    {
+      "token": "NegateEffect",
+      "files": 264,
+      "occurrences": 271
+    },
+    {
+      "token": "Overlay",
+      "files": 258,
+      "occurrences": 282
+    },
+    {
+      "token": "GetLP",
+      "files": 255,
+      "occurrences": 439
+    },
+    {
+      "token": "SelectEffectYesNo",
+      "files": 253,
+      "occurrences": 254
+    },
+    {
+      "token": "GetTurnPlayer",
+      "files": 245,
+      "occurrences": 276
+    },
+    {
+      "token": "CreateToken",
+      "files": 243,
+      "occurrences": 262
+    },
+    {
+      "token": "GetTurnCount",
+      "files": 240,
+      "occurrences": 431
+    },
+    {
+      "token": "SelectOption",
+      "files": 229,
+      "occurrences": 434
+    },
+    {
+      "token": "IsBattlePhase",
+      "files": 229,
+      "occurrences": 232
+    },
+    {
+      "token": "MoveToField",
+      "files": 216,
+      "occurrences": 242
+    },
+    {
+      "token": "GetCurrentChain",
+      "files": 200,
+      "occurrences": 223
+    },
+    {
+      "token": "GetFlagEffect",
+      "files": 199,
+      "occurrences": 279
+    },
+    {
+      "token": "GetCurrentPhase",
+      "files": 188,
+      "occurrences": 195
+    },
+    {
+      "token": "AddCustomActivityCounter",
+      "files": 181,
+      "occurrences": 193
+    },
+    {
+      "token": "GetCustomActivityCount",
+      "files": 176,
+      "occurrences": 205
+    },
+    {
+      "token": "GetDecktopGroup",
+      "files": 175,
+      "occurrences": 234
+    },
+    {
+      "token": "IsChainDisablable",
+      "files": 169,
+      "occurrences": 173
+    },
+    {
+      "token": "ConfirmDecktop",
+      "files": 160,
+      "occurrences": 184
+    },
+    {
+      "token": "GetControl",
+      "files": 159,
+      "occurrences": 160
+    },
+    {
+      "token": "HasFlagEffect",
+      "files": 157,
+      "occurrences": 297
+    },
+    {
+      "token": "PayLPCost",
+      "files": 156,
+      "occurrences": 162
+    },
+    {
+      "token": "DiscardDeck",
+      "files": 136,
+      "occurrences": 159
+    },
+    {
+      "token": "DisableShuffleCheck",
+      "files": 131,
+      "occurrences": 151
+    },
+    {
+      "token": "NegateAttack",
+      "files": 124,
+      "occurrences": 127
+    },
+    {
+      "token": "SelectReleaseGroup",
+      "files": 113,
+      "occurrences": 113
+    },
+    {
+      "token": "CheckReleaseGroup",
+      "files": 111,
+      "occurrences": 113
+    },
+    {
+      "token": "IsPlayerCanDiscardDeck",
+      "files": 102,
+      "occurrences": 160
+    },
+    {
+      "token": "NegateRelatedChain",
+      "files": 101,
+      "occurrences": 103
+    },
+    {
+      "token": "CheckLPCost",
+      "files": 100,
+      "occurrences": 106
+    },
+    {
+      "token": "IsAbleToEnterBP",
+      "files": 98,
+      "occurrences": 104
+    },
+    {
+      "token": "SetChainLimit",
+      "files": 89,
+      "occurrences": 91
+    },
+    {
+      "token": "Summon",
+      "files": 87,
+      "occurrences": 89
+    },
+    {
+      "token": "MoveSequence",
+      "files": 86,
+      "occurrences": 94
+    },
+    {
+      "token": "RaiseEvent",
+      "files": 85,
+      "occurrences": 97
+    },
+    {
+      "token": "IsEnvironment",
+      "files": 84,
+      "occurrences": 104
+    },
+    {
+      "token": "CheckPendulumZones",
+      "files": 83,
+      "occurrences": 154
+    },
+    {
+      "token": "SetLP",
+      "files": 83,
+      "occurrences": 93
+    },
+    {
+      "token": "GetActivityCount",
+      "files": 82,
+      "occurrences": 122
+    },
+    {
+      "token": "GetOperationInfo",
+      "files": 79,
+      "occurrences": 108
+    },
+    {
+      "token": "SynchroSummon",
+      "files": 77,
+      "occurrences": 77
+    },
+    {
+      "token": "RaiseSingleEvent",
+      "files": 74,
+      "occurrences": 79
+    },
+    {
+      "token": "GetBattleMonster",
+      "files": 73,
+      "occurrences": 107
+    },
+    {
+      "token": "GetFirstMatchingCard",
+      "files": 65,
+      "occurrences": 71
+    },
+    {
+      "token": "ReturnToField",
+      "files": 64,
+      "occurrences": 66
+    },
+    {
+      "token": "TossDice",
+      "files": 61,
+      "occurrences": 69
+    },
+    {
+      "token": "IsDamageCalculated",
+      "files": 61,
+      "occurrences": 63
+    },
+    {
+      "token": "ChainAttack",
+      "files": 61,
+      "occurrences": 62
+    },
+    {
+      "token": "IsCanRemoveCounter",
+      "files": 59,
+      "occurrences": 77
+    },
+    {
+      "token": "RemoveCounter",
+      "files": 58,
+      "occurrences": 63
+    },
+    {
+      "token": "SkipPhase",
+      "files": 57,
+      "occurrences": 82
+    },
+    {
+      "token": "SortDeckbottom",
+      "files": 54,
+      "occurrences": 62
+    },
+    {
+      "token": "IsPlayerCanRemove",
+      "files": 53,
+      "occurrences": 55
+    },
+    {
+      "token": "AnnounceNumber",
+      "files": 52,
+      "occurrences": 58
+    },
+    {
+      "token": "CheckRemoveOverlayCard",
+      "files": 52,
+      "occurrences": 56
+    },
+    {
+      "token": "NegateSummon",
+      "files": 51,
+      "occurrences": 51
+    },
+    {
+      "token": "RemoveOverlayCard",
+      "files": 49,
+      "occurrences": 52
+    },
+    {
+      "token": "GetFieldCard",
+      "files": 47,
+      "occurrences": 91
+    },
+    {
+      "token": "AdjustInstantly",
+      "files": 47,
+      "occurrences": 47
+    },
+    {
+      "token": "SetChainLimitTillChainEnd",
+      "files": 43,
+      "occurrences": 59
+    },
+    {
+      "token": "IsPlayerCanSpecialSummonCount",
+      "files": 43,
+      "occurrences": 45
+    },
+    {
+      "token": "ShuffleExtra",
+      "files": 41,
+      "occurrences": 46
+    },
+    {
+      "token": "RDComplete",
+      "files": 40,
+      "occurrences": 40
+    },
+    {
+      "token": "SortDecktop",
+      "files": 39,
+      "occurrences": 46
+    },
+    {
+      "token": "SelectDisableField",
+      "files": 39,
+      "occurrences": 43
+    },
+    {
+      "token": "CheckEvent",
+      "files": 38,
+      "occurrences": 46
+    },
+    {
+      "token": "IsChainSolving",
+      "files": 37,
+      "occurrences": 38
+    },
+    {
+      "token": "PlaceFieldSpell",
+      "files": 33,
+      "occurrences": 36
+    },
+    {
+      "token": "MoveToDeckBottom",
+      "files": 33,
+      "occurrences": 33
+    },
+    {
+      "token": "TossCoin",
+      "files": 32,
+      "occurrences": 35
+    },
+    {
+      "token": "GetReleaseGroup",
+      "files": 31,
+      "occurrences": 51
+    },
+    {
+      "token": "AnnounceCard",
+      "files": 31,
+      "occurrences": 34
+    },
+    {
+      "token": "EnableGlobalFlag",
+      "files": 31,
+      "occurrences": 31
+    },
+    {
+      "token": "XyzSummon",
+      "files": 31,
+      "occurrences": 31
+    },
+    {
+      "token": "AnnounceAttribute",
+      "files": 30,
+      "occurrences": 33
+    },
+    {
+      "token": "ClearOperationInfo",
+      "files": 30,
+      "occurrences": 31
+    },
+    {
+      "token": "AnnounceLevel",
+      "files": 30,
+      "occurrences": 30
+    },
+    {
+      "token": "CalculateDamage",
+      "files": 28,
+      "occurrences": 30
+    },
+    {
+      "token": "AnnounceNumberRange",
+      "files": 28,
+      "occurrences": 28
+    },
+    {
+      "token": "ChangeTargetCard",
+      "files": 28,
+      "occurrences": 28
+    },
+    {
+      "token": "ChangeAttackTarget",
+      "files": 27,
+      "occurrences": 28
+    },
+    {
+      "token": "SendtoExtraP",
+      "files": 25,
+      "occurrences": 26
+    },
+    {
+      "token": "CheckPhaseActivity",
+      "files": 25,
+      "occurrences": 25
+    },
+    {
+      "token": "CheckLocation",
+      "files": 24,
+      "occurrences": 51
+    },
+    {
+      "token": "GetBattleDamage",
+      "files": 24,
+      "occurrences": 30
+    },
+    {
+      "token": "IsPlayerCanDiscardDeckAsCost",
+      "files": 24,
+      "occurrences": 29
+    },
+    {
+      "token": "GetTargetGroup",
+      "files": 24,
+      "occurrences": 26
+    },
+    {
+      "token": "GetPlayerEffect",
+      "files": 23,
+      "occurrences": 27
+    },
+    {
+      "token": "AnnounceRace",
+      "files": 23,
+      "occurrences": 24
+    },
+    {
+      "token": "ActivateFieldSpell",
+      "files": 23,
+      "occurrences": 23
+    },
+    {
+      "token": "GetTargetCount",
+      "files": 22,
+      "occurrences": 22
+    },
+    {
+      "token": "IsPlayerCanSummon",
+      "files": 21,
+      "occurrences": 23
+    },
+    {
+      "token": "ChangeChainOperation",
+      "files": 21,
+      "occurrences": 22
+    },
+    {
+      "token": "EquipComplete",
+      "files": 21,
+      "occurrences": 21
+    },
+    {
+      "token": "LinkSummon",
+      "files": 21,
+      "occurrences": 21
+    },
+    {
+      "token": "Win",
+      "files": 20,
+      "occurrences": 26
+    },
+    {
+      "token": "IsPlayerCanSpecialSummon",
+      "files": 20,
+      "occurrences": 23
+    },
+    {
+      "token": "GetDrawCount",
+      "files": 19,
+      "occurrences": 37
+    },
+    {
+      "token": "SwapControl",
+      "files": 19,
+      "occurrences": 20
+    },
+    {
+      "token": "AttackCostPaid",
+      "files": 18,
+      "occurrences": 25
+    },
+    {
+      "token": "IsAttackCostPaid",
+      "files": 17,
+      "occurrences": 27
+    },
+    {
+      "token": "GetCounter",
+      "files": 17,
+      "occurrences": 18
+    },
+    {
+      "token": "CallCoin",
+      "files": 17,
+      "occurrences": 17
+    },
+    {
+      "token": "SelectPosition",
+      "files": 16,
+      "occurrences": 18
+    },
+    {
+      "token": "IsPlayerCanAdditionalSummon",
+      "files": 16,
+      "occurrences": 17
+    },
+    {
+      "token": "ResetFlagEffect",
+      "files": 15,
+      "occurrences": 16
+    },
+    {
+      "token": "ClearTargetCard",
+      "files": 12,
+      "occurrences": 13
+    },
+    {
+      "token": "IsDuelType",
+      "files": 12,
+      "occurrences": 13
+    },
+    {
+      "token": "SummonOrSet",
+      "files": 12,
+      "occurrences": 13
+    },
+    {
+      "token": "ReleaseRitualMaterial",
+      "files": 11,
+      "occurrences": 12
+    },
+    {
+      "token": "CheckTribute",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "CountHeads",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "CheckChainTarget",
+      "files": 10,
+      "occurrences": 12
+    },
+    {
+      "token": "IsCanAddCounter",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "MoveToDeckTop",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "SelectTribute",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "GetOverlayCount",
+      "files": 9,
+      "occurrences": 10
+    },
+    {
+      "token": "AnnounceAnotherAttribute",
+      "files": 9,
+      "occurrences": 9
+    },
+    {
+      "token": "GetPossibleOperationInfo",
+      "files": 9,
+      "occurrences": 9
+    },
+    {
+      "token": "Readjust",
+      "files": 9,
+      "occurrences": 9
+    },
+    {
+      "token": "CheckChainUniqueness",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "GetOverlayGroup",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "IsDamageStep",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "SwapSequence",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "GetFlagEffectLabel",
+      "files": 6,
+      "occurrences": 10
+    },
+    {
+      "token": "GetUsableMZoneCount",
+      "files": 6,
+      "occurrences": 8
+    },
+    {
+      "token": "ShuffleSetCard",
+      "files": 6,
+      "occurrences": 7
+    },
+    {
+      "token": "LoadCardScript",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "IsPlayerCanAdditionalTributeSummon",
+      "files": 5,
+      "occurrences": 9
+    },
+    {
+      "token": "IsMainPhase2",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "SelectFusionMaterial",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "IsPlayerCanRelease",
+      "files": 4,
+      "occurrences": 5
+    },
+    {
+      "token": "AnnounceAnotherRace",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "IsStandbyPhase",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "RockPaperScissors",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "SetFlagEffectLabel",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "GetZoneWithLinkedCount",
+      "files": 3,
+      "occurrences": 6
+    },
+    {
+      "token": "IsPlayerCanSendtoGrave",
+      "files": 3,
+      "occurrences": 4
+    },
+    {
+      "token": "SelectFieldZone",
+      "files": 3,
+      "occurrences": 4
+    },
+    {
+      "token": "ChangeBattleDamage",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "CheckReleaseGroupEx",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "CountTails",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "MSet",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "SelectReleaseGroupEx",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "CanPlayerSetSpellTrap",
+      "files": 2,
+      "occurrences": 3
+    },
+    {
+      "token": "IsPlayerCanPendulumSummon",
+      "files": 2,
+      "occurrences": 3
+    },
+    {
+      "token": "IsPlayerCanSendtoDeck",
+      "files": 2,
+      "occurrences": 3
+    },
+    {
+      "token": "GetDiceResult",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetLinkedGroup",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsSummonCancelable",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "PendulumSummon",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "SetDiceResult",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "SetSelectedCard",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetBattledCount",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "GetDeckbottomGroup",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "GetRitualMaterial",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "SwapDeckAndGrave",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "AnnounceCoin",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "AssumeReset",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ChangeTargetParam",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ChangeTargetPlayer",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ConfirmExtratop",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ForceAttack",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardFromCardID",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardTypeFromCode",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCoinResult",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetExtraTopGroup",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetFusionMaterial",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetMetatable",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetOperationCount",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsBattleStep",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsDrawPhase",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsEndPhase",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsMainPhase1",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsPlayerCanSendtoHand",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "LoadCardScriptAlias",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "MajesticCopy",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "SelectCardsFromCodes",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "Sendto",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "SetCoinResult",
+      "files": 1,
+      "occurrences": 1
+    }
+  ],
+  "aux_helpers": [
+    {
+      "token": "Stringid",
+      "files": 10385,
+      "occurrences": 20316
+    },
+    {
+      "token": "FaceupFilter",
+      "files": 1393,
+      "occurrences": 2150
+    },
+    {
+      "token": "NecroValleyFilter",
+      "files": 905,
+      "occurrences": 1041
+    },
+    {
+      "token": "FilterBoolFunctionEx",
+      "files": 853,
+      "occurrences": 945
+    },
+    {
+      "token": "SelectUnselectGroup",
+      "files": 795,
+      "occurrences": 1403
+    },
+    {
+      "token": "Next",
+      "files": 500,
+      "occurrences": 557
+    },
+    {
+      "token": "SpElimFilter",
+      "files": 485,
+      "occurrences": 502
+    },
+    {
+      "token": "TRUE",
+      "files": 437,
+      "occurrences": 819
+    },
+    {
+      "token": "TargetBoolFunction",
+      "files": 429,
+      "occurrences": 474
+    },
+    {
+      "token": "FilterBoolFunction",
+      "files": 402,
+      "occurrences": 446
+    },
+    {
+      "token": "RegisterClientHint",
+      "files": 266,
+      "occurrences": 273
+    },
+    {
+      "token": "StatChangeDamageStepCondition",
+      "files": 256,
+      "occurrences": 259
+    },
+    {
+      "token": "AddEquipProcedure",
+      "files": 250,
+      "occurrences": 250
+    },
+    {
+      "token": "tgoval",
+      "files": 236,
+      "occurrences": 240
+    },
+    {
+      "token": "GlobalCheck",
+      "files": 207,
+      "occurrences": 207
+    },
+    {
+      "token": "addTempLizardCheck",
+      "files": 184,
+      "occurrences": 184
+    },
+    {
+      "token": "ChkfMMZ",
+      "files": 172,
+      "occurrences": 278
+    },
+    {
+      "token": "dncheck",
+      "files": 165,
+      "occurrences": 210
+    },
+    {
+      "token": "AND",
+      "files": 161,
+      "occurrences": 293
+    },
+    {
+      "token": "FALSE",
+      "files": 146,
+      "occurrences": 152
+    },
+    {
+      "token": "NOT",
+      "files": 140,
+      "occurrences": 180
+    },
+    {
+      "token": "ToHandOrElse",
+      "files": 130,
+      "occurrences": 131
+    },
+    {
+      "token": "exccon",
+      "files": 120,
+      "occurrences": 120
+    },
+    {
+      "token": "DoubleSnareValidity",
+      "files": 100,
+      "occurrences": 100
+    },
+    {
+      "token": "GetMustBeMaterialGroup",
+      "files": 94,
+      "occurrences": 163
+    },
+    {
+      "token": "AddEREquipLimit",
+      "files": 91,
+      "occurrences": 103
+    },
+    {
+      "token": "indoval",
+      "files": 87,
+      "occurrences": 87
+    },
+    {
+      "token": "fuslimit",
+      "files": 75,
+      "occurrences": 75
+    },
+    {
+      "token": "bdocon",
+      "files": 74,
+      "occurrences": 74
+    },
+    {
+      "token": "DelayedOperation",
+      "files": 71,
+      "occurrences": 71
+    },
+    {
+      "token": "AddNormalSummonProcedure",
+      "files": 59,
+      "occurrences": 59
+    },
+    {
+      "token": "ChangeBattleDamage",
+      "files": 53,
+      "occurrences": 53
+    },
+    {
+      "token": "ReleaseCheckMMZ",
+      "files": 51,
+      "occurrences": 95
+    },
+    {
+      "token": "ReleaseCheckTarget",
+      "files": 48,
+      "occurrences": 96
+    },
+    {
+      "token": "dpcheck",
+      "files": 48,
+      "occurrences": 66
+    },
+    {
+      "token": "RemainFieldCost",
+      "files": 44,
+      "occurrences": 44
+    },
+    {
+      "token": "chainreg",
+      "files": 44,
+      "occurrences": 44
+    },
+    {
+      "token": "bfgcost",
+      "files": 43,
+      "occurrences": 62
+    },
+    {
+      "token": "AddUnionProcedure",
+      "files": 40,
+      "occurrences": 40
+    },
+    {
+      "token": "AddValuesReset",
+      "files": 38,
+      "occurrences": 38
+    },
+    {
+      "token": "RemoveUntil",
+      "files": 35,
+      "occurrences": 36
+    },
+    {
+      "token": "AddNormalSetProcedure",
+      "files": 35,
+      "occurrences": 35
+    },
+    {
+      "token": "imval1",
+      "files": 32,
+      "occurrences": 32
+    },
+    {
+      "token": "addContinuousLizardCheck",
+      "files": 30,
+      "occurrences": 30
+    },
+    {
+      "token": "cannotmatfilter",
+      "files": 29,
+      "occurrences": 30
+    },
+    {
+      "token": "bdogcon",
+      "files": 29,
+      "occurrences": 29
+    },
+    {
+      "token": "DefaultFieldReturnOp",
+      "files": 28,
+      "occurrences": 28
+    },
+    {
+      "token": "PersistentTargetFilter",
+      "files": 25,
+      "occurrences": 31
+    },
+    {
+      "token": "LimitParams",
+      "files": 24,
+      "occurrences": 28
+    },
+    {
+      "token": "GetMMZonesPointedTo",
+      "files": 23,
+      "occurrences": 44
+    },
+    {
+      "token": "AddPersistentProcedure",
+      "files": 23,
+      "occurrences": 23
+    },
+    {
+      "token": "FilterSummonCode",
+      "files": 21,
+      "occurrences": 22
+    },
+    {
+      "token": "bdcon",
+      "files": 21,
+      "occurrences": 21
+    },
+    {
+      "token": "IsUnionState",
+      "files": 20,
+      "occurrences": 29
+    },
+    {
+      "token": "damcon1",
+      "files": 20,
+      "occurrences": 22
+    },
+    {
+      "token": "imval2",
+      "files": 20,
+      "occurrences": 20
+    },
+    {
+      "token": "FieldSummonProcTg",
+      "files": 19,
+      "occurrences": 19
+    },
+    {
+      "token": "nvfilter",
+      "files": 19,
+      "occurrences": 19
+    },
+    {
+      "token": "ritlimit",
+      "files": 17,
+      "occurrences": 17
+    },
+    {
+      "token": "EquipAndLimitRegister",
+      "files": 16,
+      "occurrences": 18
+    },
+    {
+      "token": "createContinuousLizardCheck",
+      "files": 16,
+      "occurrences": 16
+    },
+    {
+      "token": "sumreg",
+      "files": 16,
+      "occurrences": 16
+    },
+    {
+      "token": "AddZWEquipLimit",
+      "files": 14,
+      "occurrences": 14
+    },
+    {
+      "token": "gbspcon",
+      "files": 14,
+      "occurrences": 14
+    },
+    {
+      "token": "zptcon",
+      "files": 14,
+      "occurrences": 14
+    },
+    {
+      "token": "EnableCheckReincarnation",
+      "files": 13,
+      "occurrences": 13
+    },
+    {
+      "token": "synlimit",
+      "files": 12,
+      "occurrences": 12
+    },
+    {
+      "token": "CheckSummonGate",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "EnableNeosReturn",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "bdgcon",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "CheckStealEquip",
+      "files": 10,
+      "occurrences": 23
+    },
+    {
+      "token": "FilterEqualFunction",
+      "files": 9,
+      "occurrences": 13
+    },
+    {
+      "token": "CheckUnionEquip",
+      "files": 8,
+      "occurrences": 11
+    },
+    {
+      "token": "FossilLimit",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "PersistentTgCon",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "SetUnionState",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "qlifilter",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "OR",
+      "files": 7,
+      "occurrences": 12
+    },
+    {
+      "token": "IceBarrierDiscardCost",
+      "files": 7,
+      "occurrences": 9
+    },
+    {
+      "token": "IsZone",
+      "files": 7,
+      "occurrences": 8
+    },
+    {
+      "token": "evospcon",
+      "files": 7,
+      "occurrences": 8
+    },
+    {
+      "token": "AddAttractionEquipProc",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "AddKaijuProcedure",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "EvilHeroLimit",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "lnklimit",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "AttractionEquipCon",
+      "files": 6,
+      "occurrences": 12
+    },
+    {
+      "token": "GetCoinEffectHintString",
+      "files": 6,
+      "occurrences": 12
+    },
+    {
+      "token": "AddMaleficSummonProcedure",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "MaleficUniqueFilter",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "AddLavaProcedure",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "GetAttributeStrings",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "penlimit",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "seqmovcon",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "PropertyTableFilter",
+      "files": 4,
+      "occurrences": 5
+    },
+    {
+      "token": "dogcon",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "zptgroup",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "WelcomeLabrynthTrapDestroyOperation",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "seqmovtg",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "seqmovtgop",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "AddAmazementQuickEquipEffect",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetCoinCountFromEv",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetCoinHeadsFromEv",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "indsval",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "seqmovop",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "zptgroupcon",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "RitualSummoningLevel",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "GetDiceCountOppoFromEv",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetDiceCountSelfFromEv",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "LavaCondition",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "NULL",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "PersistentTgOp",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ReleaseCostFilter",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "createTempLizardCheck",
+      "files": 1,
+      "occurrences": 1
+    }
+  ],
+  "card_methods": [
+    {
+      "token": "GetHandler",
+      "files": 10275,
+      "occurrences": 28480
+    },
+    {
+      "token": "IsRelateToEffect",
+      "files": 7632,
+      "occurrences": 11159
+    },
+    {
+      "token": "IsLocation",
+      "files": 5788,
+      "occurrences": 7550
+    },
+    {
+      "token": "IsFaceup",
+      "files": 5521,
+      "occurrences": 8302
+    },
+    {
+      "token": "IsSetCard",
+      "files": 5087,
+      "occurrences": 8173
+    },
+    {
+      "token": "IsControler",
+      "files": 4885,
+      "occurrences": 6174
+    },
+    {
+      "token": "IsCanBeSpecialSummoned",
+      "files": 4724,
+      "occurrences": 5560
+    },
+    {
+      "token": "GetFirst",
+      "files": 3430,
+      "occurrences": 4570
+    },
+    {
+      "token": "IsAbleToHand",
+      "files": 2789,
+      "occurrences": 3075
+    },
+    {
+      "token": "EnableReviveLimit",
+      "files": 2641,
+      "occurrences": 2642
+    },
+    {
+      "token": "IsCode",
+      "files": 2547,
+      "occurrences": 3070
+    },
+    {
+      "token": "IsRace",
+      "files": 2373,
+      "occurrences": 3258
+    },
+    {
+      "token": "IsExists",
+      "files": 2328,
+      "occurrences": 2932
+    },
+    {
+      "token": "IsType",
+      "files": 2246,
+      "occurrences": 3029
+    },
+    {
+      "token": "IsMonster",
+      "files": 2071,
+      "occurrences": 2366
+    },
+    {
+      "token": "GetLabel",
+      "files": 1612,
+      "occurrences": 2277
+    },
+    {
+      "token": "IsReason",
+      "files": 1579,
+      "occurrences": 2088
+    },
+    {
+      "token": "GetLabelObject",
+      "files": 1387,
+      "occurrences": 2298
+    },
+    {
+      "token": "IsPreviousLocation",
+      "files": 1379,
+      "occurrences": 1475
+    },
+    {
+      "token": "IsAttribute",
+      "files": 1294,
+      "occurrences": 1682
+    },
+    {
+      "token": "GetHandlerPlayer",
+      "files": 1179,
+      "occurrences": 1351
+    },
+    {
+      "token": "GetControler",
+      "files": 1134,
+      "occurrences": 1561
+    },
+    {
+      "token": "Select",
+      "files": 1127,
+      "occurrences": 1307
+    },
+    {
+      "token": "RegisterFlagEffect",
+      "files": 1078,
+      "occurrences": 1258
+    },
+    {
+      "token": "IsOnField",
+      "files": 1006,
+      "occurrences": 1052
+    },
+    {
+      "token": "IsFacedown",
+      "files": 815,
+      "occurrences": 964
+    },
+    {
+      "token": "Filter",
+      "files": 810,
+      "occurrences": 1105
+    },
+    {
+      "token": "IsHasType",
+      "files": 770,
+      "occurrences": 856
+    },
+    {
+      "token": "IsLevelBelow",
+      "files": 764,
+      "occurrences": 806
+    },
+    {
+      "token": "GetLevel",
+      "files": 755,
+      "occurrences": 1253
+    },
+    {
+      "token": "IsPreviousControler",
+      "files": 754,
+      "occurrences": 791
+    },
+    {
+      "token": "GetFlagEffect",
+      "files": 749,
+      "occurrences": 878
+    },
+    {
+      "token": "IsContains",
+      "files": 747,
+      "occurrences": 896
+    },
+    {
+      "token": "IsSpellTrap",
+      "files": 714,
+      "occurrences": 771
+    },
+    {
+      "token": "GetAttack",
+      "files": 712,
+      "occurrences": 1196
+    },
+    {
+      "token": "IsStatus",
+      "files": 705,
+      "occurrences": 784
+    },
+    {
+      "token": "IsMonsterEffect",
+      "files": 690,
+      "occurrences": 738
+    },
+    {
+      "token": "IsAbleToRemove",
+      "files": 678,
+      "occurrences": 758
+    },
+    {
+      "token": "IsAbleToRemoveAsCost",
+      "files": 654,
+      "occurrences": 720
+    },
+    {
+      "token": "IsAbleToGraveAsCost",
+      "files": 611,
+      "occurrences": 659
+    },
+    {
+      "token": "IsRelateToBattle",
+      "files": 600,
+      "occurrences": 821
+    },
+    {
+      "token": "FilterCount",
+      "files": 581,
+      "occurrences": 740
+    },
+    {
+      "token": "IsAbleToGrave",
+      "files": 520,
+      "occurrences": 556
+    },
+    {
+      "token": "GetCode",
+      "files": 510,
+      "occurrences": 703
+    },
+    {
+      "token": "IsAbleToDeck",
+      "files": 494,
+      "occurrences": 533
+    },
+    {
+      "token": "IsPreviousPosition",
+      "files": 482,
+      "occurrences": 486
+    },
+    {
+      "token": "GetBattleTarget",
+      "files": 478,
+      "occurrences": 707
+    },
+    {
+      "token": "GetSequence",
+      "files": 471,
+      "occurrences": 565
+    },
+    {
+      "token": "IsLevelAbove",
+      "files": 454,
+      "occurrences": 513
+    },
+    {
+      "token": "Iter",
+      "files": 437,
+      "occurrences": 474
+    },
+    {
+      "token": "IsLevel",
+      "files": 422,
+      "occurrences": 496
+    },
+    {
+      "token": "IsImmuneToEffect",
+      "files": 416,
+      "occurrences": 468
+    },
+    {
+      "token": "IsCanBeEffectTarget",
+      "files": 405,
+      "occurrences": 428
+    },
+    {
+      "token": "KeepAlive",
+      "files": 405,
+      "occurrences": 415
+    },
+    {
+      "token": "IsDestructable",
+      "files": 372,
+      "occurrences": 379
+    },
+    {
+      "token": "GetClassCount",
+      "files": 366,
+      "occurrences": 492
+    },
+    {
+      "token": "IsSSetable",
+      "files": 361,
+      "occurrences": 458
+    },
+    {
+      "token": "Merge",
+      "files": 332,
+      "occurrences": 429
+    },
+    {
+      "token": "DeleteGroup",
+      "files": 319,
+      "occurrences": 335
+    },
+    {
+      "token": "IsSpell",
+      "files": 313,
+      "occurrences": 353
+    },
+    {
+      "token": "GetOwner",
+      "files": 311,
+      "occurrences": 452
+    },
+    {
+      "token": "GetBaseAttack",
+      "files": 310,
+      "occurrences": 471
+    },
+    {
+      "token": "HasLevel",
+      "files": 306,
+      "occurrences": 388
+    },
+    {
+      "token": "IsForbidden",
+      "files": 290,
+      "occurrences": 313
+    },
+    {
+      "token": "GetEquipTarget",
+      "files": 289,
+      "occurrences": 502
+    },
+    {
+      "token": "AddCounter",
+      "files": 271,
+      "occurrences": 318
+    },
+    {
+      "token": "Reset",
+      "files": 267,
+      "occurrences": 337
+    },
+    {
+      "token": "IsDiscardable",
+      "files": 265,
+      "occurrences": 279
+    },
+    {
+      "token": "AddCard",
+      "files": 264,
+      "occurrences": 300
+    },
+    {
+      "token": "IsPublic",
+      "files": 264,
+      "occurrences": 290
+    },
+    {
+      "token": "FilterSelect",
+      "files": 247,
+      "occurrences": 268
+    },
+    {
+      "token": "IsSummonLocation",
+      "files": 226,
+      "occurrences": 239
+    },
+    {
+      "token": "CompleteProcedure",
+      "files": 225,
+      "occurrences": 228
+    },
+    {
+      "token": "GetMaterial",
+      "files": 222,
+      "occurrences": 244
+    },
+    {
+      "token": "IsOriginalType",
+      "files": 222,
+      "occurrences": 237
+    },
+    {
+      "token": "ListsCode",
+      "files": 220,
+      "occurrences": 254
+    },
+    {
+      "token": "IsPosition",
+      "files": 214,
+      "occurrences": 277
+    },
+    {
+      "token": "HasFlagEffect",
+      "files": 214,
+      "occurrences": 250
+    },
+    {
+      "token": "IsAttackPos",
+      "files": 204,
+      "occurrences": 252
+    },
+    {
+      "token": "GetReasonCard",
+      "files": 203,
+      "occurrences": 257
+    },
+    {
+      "token": "IsSynchroSummoned",
+      "files": 203,
+      "occurrences": 228
+    },
+    {
+      "token": "IsLinkMonster",
+      "files": 197,
+      "occurrences": 256
+    },
+    {
+      "token": "GetCounter",
+      "files": 192,
+      "occurrences": 300
+    },
+    {
+      "token": "IsTrap",
+      "files": 189,
+      "occurrences": 216
+    },
+    {
+      "token": "IsHasProperty",
+      "files": 188,
+      "occurrences": 189
+    },
+    {
+      "token": "GetFieldID",
+      "files": 186,
+      "occurrences": 268
+    },
+    {
+      "token": "IsSpellEffect",
+      "files": 186,
+      "occurrences": 197
+    },
+    {
+      "token": "IsLinkSummoned",
+      "files": 182,
+      "occurrences": 192
+    },
+    {
+      "token": "EnableCounterPermit",
+      "files": 180,
+      "occurrences": 180
+    },
+    {
+      "token": "IsHasEffect",
+      "files": 179,
+      "occurrences": 237
+    },
+    {
+      "token": "GetSum",
+      "files": 174,
+      "occurrences": 239
+    },
+    {
+      "token": "NegateEffects",
+      "files": 172,
+      "occurrences": 175
+    },
+    {
+      "token": "IsSummonPlayer",
+      "files": 167,
+      "occurrences": 171
+    },
+    {
+      "token": "RandomSelect",
+      "files": 161,
+      "occurrences": 163
+    },
+    {
+      "token": "GetOverlayCount",
+      "files": 157,
+      "occurrences": 202
+    },
+    {
+      "token": "SetUniqueOnField",
+      "files": 157,
+      "occurrences": 157
+    },
+    {
+      "token": "GetReasonPlayer",
+      "files": 152,
+      "occurrences": 155
+    },
+    {
+      "token": "GetAttribute",
+      "files": 151,
+      "occurrences": 244
+    },
+    {
+      "token": "IsCanChangePosition",
+      "files": 151,
+      "occurrences": 165
+    },
+    {
+      "token": "IsAttackBelow",
+      "files": 151,
+      "occurrences": 162
+    },
+    {
+      "token": "GetFlagEffectLabel",
+      "files": 150,
+      "occurrences": 183
+    },
+    {
+      "token": "GetDefense",
+      "files": 148,
+      "occurrences": 199
+    },
+    {
+      "token": "IsFusionSummoned",
+      "files": 148,
+      "occurrences": 163
+    },
+    {
+      "token": "GetEquipGroup",
+      "files": 146,
+      "occurrences": 217
+    },
+    {
+      "token": "IsDisabled",
+      "files": 146,
+      "occurrences": 178
+    },
+    {
+      "token": "IsDefensePos",
+      "files": 145,
+      "occurrences": 170
+    },
+    {
+      "token": "IsActivated",
+      "files": 144,
+      "occurrences": 147
+    },
+    {
+      "token": "GetOwnerPlayer",
+      "files": 143,
+      "occurrences": 174
+    },
+    {
+      "token": "IsCanTurnSet",
+      "files": 141,
+      "occurrences": 156
+    },
+    {
+      "token": "GetLinkedGroup",
+      "files": 140,
+      "occurrences": 193
+    },
+    {
+      "token": "IsCanBeXyzMaterial",
+      "files": 135,
+      "occurrences": 162
+    },
+    {
+      "token": "Match",
+      "files": 134,
+      "occurrences": 163
+    },
+    {
+      "token": "CheckUniqueOnField",
+      "files": 132,
+      "occurrences": 158
+    },
+    {
+      "token": "GetOverlayGroup",
+      "files": 131,
+      "occurrences": 168
+    },
+    {
+      "token": "SetMaterial",
+      "files": 127,
+      "occurrences": 128
+    },
+    {
+      "token": "IsSpecialSummoned",
+      "files": 126,
+      "occurrences": 133
+    },
+    {
+      "token": "UpdateAttack",
+      "files": 125,
+      "occurrences": 135
+    },
+    {
+      "token": "GetNext",
+      "files": 125,
+      "occurrences": 132
+    },
+    {
+      "token": "GetDescription",
+      "files": 123,
+      "occurrences": 189
+    },
+    {
+      "token": "IsSpellTrapEffect",
+      "files": 123,
+      "occurrences": 133
+    },
+    {
+      "token": "IsRitualMonster",
+      "files": 120,
+      "occurrences": 142
+    },
+    {
+      "token": "IsXyzSummoned",
+      "files": 119,
+      "occurrences": 124
+    },
+    {
+      "token": "GetPreviousControler",
+      "files": 116,
+      "occurrences": 124
+    },
+    {
+      "token": "CancelToGrave",
+      "files": 115,
+      "occurrences": 128
+    },
+    {
+      "token": "CreateEffectRelation",
+      "files": 114,
+      "occurrences": 129
+    },
+    {
+      "token": "IsControlerCanBeChanged",
+      "files": 114,
+      "occurrences": 118
+    },
+    {
+      "token": "GetRace",
+      "files": 112,
+      "occurrences": 164
+    },
+    {
+      "token": "IsTributeSummoned",
+      "files": 109,
+      "occurrences": 124
+    },
+    {
+      "token": "GetOriginalLevel",
+      "files": 108,
+      "occurrences": 188
+    },
+    {
+      "token": "IsAttackAbove",
+      "files": 108,
+      "occurrences": 122
+    },
+    {
+      "token": "GetSummonType",
+      "files": 106,
+      "occurrences": 111
+    },
+    {
+      "token": "IsTrapEffect",
+      "files": 106,
+      "occurrences": 110
+    },
+    {
+      "token": "GetTextAttack",
+      "files": 105,
+      "occurrences": 142
+    },
+    {
+      "token": "SetCardTarget",
+      "files": 103,
+      "occurrences": 104
+    },
+    {
+      "token": "IsAttack",
+      "files": 102,
+      "occurrences": 123
+    },
+    {
+      "token": "EquipByEffectAndLimitRegister",
+      "files": 97,
+      "occurrences": 102
+    },
+    {
+      "token": "GetPreviousLocation",
+      "files": 97,
+      "occurrences": 98
+    },
+    {
+      "token": "GetRank",
+      "files": 95,
+      "occurrences": 162
+    },
+    {
+      "token": "IsAbleToChangeControler",
+      "files": 95,
+      "occurrences": 109
+    },
+    {
+      "token": "IsActiveType",
+      "files": 95,
+      "occurrences": 101
+    },
+    {
+      "token": "GetFirstCardTarget",
+      "files": 91,
+      "occurrences": 149
+    },
+    {
+      "token": "ResetFlagEffect",
+      "files": 91,
+      "occurrences": 106
+    },
+    {
+      "token": "IsRank",
+      "files": 90,
+      "occurrences": 100
+    },
+    {
+      "token": "GetTurnID",
+      "files": 88,
+      "occurrences": 90
+    },
+    {
+      "token": "IsAbleToExtra",
+      "files": 88,
+      "occurrences": 89
+    },
+    {
+      "token": "RemoveCounter",
+      "files": 84,
+      "occurrences": 91
+    },
+    {
+      "token": "IsPreviousSetCard",
+      "files": 84,
+      "occurrences": 86
+    },
+    {
+      "token": "IsSummonable",
+      "files": 83,
+      "occurrences": 88
+    },
+    {
+      "token": "RemoveCard",
+      "files": 80,
+      "occurrences": 92
+    },
+    {
+      "token": "GetOriginalCode",
+      "files": 77,
+      "occurrences": 108
+    },
+    {
+      "token": "Clear",
+      "files": 76,
+      "occurrences": 91
+    },
+    {
+      "token": "Remove",
+      "files": 76,
+      "occurrences": 84
+    },
+    {
+      "token": "AddMonsterAttribute",
+      "files": 76,
+      "occurrences": 76
+    },
+    {
+      "token": "AddMonsterAttributeComplete",
+      "files": 76,
+      "occurrences": 76
+    },
+    {
+      "token": "SetSPSummonOnce",
+      "files": 76,
+      "occurrences": 76
+    },
+    {
+      "token": "IsAttributeExcept",
+      "files": 75,
+      "occurrences": 83
+    },
+    {
+      "token": "IsDefense",
+      "files": 74,
+      "occurrences": 91
+    },
+    {
+      "token": "GetLocation",
+      "files": 73,
+      "occurrences": 77
+    },
+    {
+      "token": "IsOriginalRace",
+      "files": 73,
+      "occurrences": 75
+    },
+    {
+      "token": "IsReleasable",
+      "files": 71,
+      "occurrences": 82
+    },
+    {
+      "token": "IsNegatableMonster",
+      "files": 71,
+      "occurrences": 76
+    },
+    {
+      "token": "GetColumnGroup",
+      "files": 69,
+      "occurrences": 103
+    },
+    {
+      "token": "IsPendulumSummoned",
+      "files": 69,
+      "occurrences": 74
+    },
+    {
+      "token": "GetLinkedZone",
+      "files": 68,
+      "occurrences": 134
+    },
+    {
+      "token": "RemoveOverlayCard",
+      "files": 68,
+      "occurrences": 68
+    },
+    {
+      "token": "IsRitualSummoned",
+      "files": 67,
+      "occurrences": 71
+    },
+    {
+      "token": "GetOperation",
+      "files": 65,
+      "occurrences": 72
+    },
+    {
+      "token": "IsMonsterCard",
+      "files": 64,
+      "occurrences": 68
+    },
+    {
+      "token": "Sub",
+      "files": 63,
+      "occurrences": 68
+    },
+    {
+      "token": "GetOriginalRace",
+      "files": 62,
+      "occurrences": 109
+    },
+    {
+      "token": "GetMaxGroup",
+      "files": 62,
+      "occurrences": 82
+    },
+    {
+      "token": "IsFieldSpell",
+      "files": 62,
+      "occurrences": 74
+    },
+    {
+      "token": "IsSummonCode",
+      "files": 61,
+      "occurrences": 62
+    },
+    {
+      "token": "GetBaseDefense",
+      "files": 60,
+      "occurrences": 77
+    },
+    {
+      "token": "CanAttack",
+      "files": 60,
+      "occurrences": 63
+    },
+    {
+      "token": "CanChainAttack",
+      "files": 60,
+      "occurrences": 62
+    },
+    {
+      "token": "IsCanAddCounter",
+      "files": 59,
+      "occurrences": 84
+    },
+    {
+      "token": "GetBattledGroupCount",
+      "files": 59,
+      "occurrences": 59
+    },
+    {
+      "token": "CheckRemoveOverlayCard",
+      "files": 58,
+      "occurrences": 61
+    },
+    {
+      "token": "GetAttackAnnouncedCount",
+      "files": 58,
+      "occurrences": 61
+    },
+    {
+      "token": "GetChainData",
+      "files": 57,
+      "occurrences": 136
+    },
+    {
+      "token": "IsHasCardTarget",
+      "files": 57,
+      "occurrences": 66
+    },
+    {
+      "token": "IsDefenseBelow",
+      "files": 57,
+      "occurrences": 62
+    },
+    {
+      "token": "IsCanRemoveCounter",
+      "files": 56,
+      "occurrences": 65
+    },
+    {
+      "token": "SetStatus",
+      "files": 54,
+      "occurrences": 103
+    },
+    {
+      "token": "GetType",
+      "files": 54,
+      "occurrences": 84
+    },
+    {
+      "token": "IsOriginalSetCard",
+      "files": 54,
+      "occurrences": 65
+    },
+    {
+      "token": "IsNormalTrap",
+      "files": 53,
+      "occurrences": 65
+    },
+    {
+      "token": "GetPreviousRaceOnField",
+      "files": 53,
+      "occurrences": 54
+    },
+    {
+      "token": "SetTurnCounter",
+      "files": 52,
+      "occurrences": 90
+    },
+    {
+      "token": "IsContinuousSpell",
+      "files": 52,
+      "occurrences": 56
+    },
+    {
+      "token": "IsAbleToDeckAsCost",
+      "files": 52,
+      "occurrences": 52
+    },
+    {
+      "token": "GetPreviousEquipTarget",
+      "files": 51,
+      "occurrences": 62
+    },
+    {
+      "token": "CheckEquipTarget",
+      "files": 51,
+      "occurrences": 59
+    },
+    {
+      "token": "IsReleasableByEffect",
+      "files": 49,
+      "occurrences": 52
+    },
+    {
+      "token": "GetOriginalAttribute",
+      "files": 48,
+      "occurrences": 92
+    },
+    {
+      "token": "GetTarget",
+      "files": 48,
+      "occurrences": 85
+    },
+    {
+      "token": "IsOriginalAttribute",
+      "files": 48,
+      "occurrences": 49
+    },
+    {
+      "token": "IsNegatable",
+      "files": 46,
+      "occurrences": 53
+    },
+    {
+      "token": "GetActivateLocation",
+      "files": 46,
+      "occurrences": 48
+    },
+    {
+      "token": "IsQuickPlaySpell",
+      "files": 46,
+      "occurrences": 48
+    },
+    {
+      "token": "Split",
+      "files": 44,
+      "occurrences": 53
+    },
+    {
+      "token": "GetReason",
+      "files": 44,
+      "occurrences": 44
+    },
+    {
+      "token": "IsRitualSpell",
+      "files": 43,
+      "occurrences": 46
+    },
+    {
+      "token": "GetLink",
+      "files": 42,
+      "occurrences": 72
+    },
+    {
+      "token": "GetOriginalCodeRule",
+      "files": 41,
+      "occurrences": 62
+    },
+    {
+      "token": "GetPreviousTypeOnField",
+      "files": 41,
+      "occurrences": 42
+    },
+    {
+      "token": "IsContinuousTrap",
+      "files": 40,
+      "occurrences": 43
+    },
+    {
+      "token": "AssumeProperty",
+      "files": 39,
+      "occurrences": 67
+    },
+    {
+      "token": "IsDefenseAbove",
+      "files": 39,
+      "occurrences": 44
+    },
+    {
+      "token": "GetEquipCount",
+      "files": 38,
+      "occurrences": 50
+    },
+    {
+      "token": "GetMaterialCount",
+      "files": 38,
+      "occurrences": 47
+    },
+    {
+      "token": "IsSynchroMonster",
+      "files": 38,
+      "occurrences": 44
+    },
+    {
+      "token": "IsSummonType",
+      "files": 38,
+      "occurrences": 41
+    },
+    {
+      "token": "IsEquipSpell",
+      "files": 38,
+      "occurrences": 39
+    },
+    {
+      "token": "IsAbleToHandAsCost",
+      "files": 37,
+      "occurrences": 37
+    },
+    {
+      "token": "GetTurnCounter",
+      "files": 36,
+      "occurrences": 42
+    },
+    {
+      "token": "GetSummonPlayer",
+      "files": 36,
+      "occurrences": 40
+    },
+    {
+      "token": "SetCounterLimit",
+      "files": 36,
+      "occurrences": 36
+    },
+    {
+      "token": "GetCardEffect",
+      "files": 35,
+      "occurrences": 46
+    },
+    {
+      "token": "IsXyzMonster",
+      "files": 34,
+      "occurrences": 42
+    },
+    {
+      "token": "GetOriginalType",
+      "files": 34,
+      "occurrences": 39
+    },
+    {
+      "token": "GetValue",
+      "files": 34,
+      "occurrences": 38
+    },
+    {
+      "token": "IsHasCategory",
+      "files": 34,
+      "occurrences": 38
+    },
+    {
+      "token": "AddMustBeSpecialSummoned",
+      "files": 34,
+      "occurrences": 34
+    },
+    {
+      "token": "EnableUnsummonable",
+      "files": 33,
+      "occurrences": 33
+    },
+    {
+      "token": "CheckActivateEffect",
+      "files": 32,
+      "occurrences": 69
+    },
+    {
+      "token": "IsSummonableCard",
+      "files": 32,
+      "occurrences": 37
+    },
+    {
+      "token": "IsNormalSummoned",
+      "files": 32,
+      "occurrences": 33
+    },
+    {
+      "token": "IsNormalSpell",
+      "files": 32,
+      "occurrences": 32
+    },
+    {
+      "token": "GetActivateEffect",
+      "files": 31,
+      "occurrences": 49
+    },
+    {
+      "token": "IsLink",
+      "files": 31,
+      "occurrences": 36
+    },
+    {
+      "token": "GetPreviousAttributeOnField",
+      "files": 31,
+      "occurrences": 31
+    },
+    {
+      "token": "GetActiveType",
+      "files": 30,
+      "occurrences": 33
+    },
+    {
+      "token": "HasNonZeroAttack",
+      "files": 30,
+      "occurrences": 32
+    },
+    {
+      "token": "GetBattlePosition",
+      "files": 30,
+      "occurrences": 30
+    },
+    {
+      "token": "IsSynchroSummonable",
+      "files": 30,
+      "occurrences": 30
+    },
+    {
+      "token": "IsRaceExcept",
+      "files": 29,
+      "occurrences": 35
+    },
+    {
+      "token": "GetEffectCount",
+      "files": 28,
+      "occurrences": 31
+    },
+    {
+      "token": "GetPreviousPosition",
+      "files": 28,
+      "occurrences": 31
+    },
+    {
+      "token": "IsOriginalCode",
+      "files": 28,
+      "occurrences": 31
+    },
+    {
+      "token": "GetPreviousSequence",
+      "files": 28,
+      "occurrences": 30
+    },
+    {
+      "token": "IsOriginalCodeRule",
+      "files": 27,
+      "occurrences": 31
+    },
+    {
+      "token": "ListsCodeAsMaterial",
+      "files": 27,
+      "occurrences": 28
+    },
+    {
+      "token": "GetAttackedCount",
+      "files": 27,
+      "occurrences": 27
+    },
+    {
+      "token": "IsActivatable",
+      "files": 26,
+      "occurrences": 29
+    },
+    {
+      "token": "IsFusionMonster",
+      "files": 25,
+      "occurrences": 30
+    },
+    {
+      "token": "CopyEffect",
+      "files": 25,
+      "occurrences": 25
+    },
+    {
+      "token": "GetPosition",
+      "files": 25,
+      "occurrences": 25
+    },
+    {
+      "token": "CheckWithSumEqual",
+      "files": 24,
+      "occurrences": 35
+    },
+    {
+      "token": "CheckFusionMaterial",
+      "files": 24,
+      "occurrences": 24
+    },
+    {
+      "token": "GetLeftScale",
+      "files": 23,
+      "occurrences": 49
+    },
+    {
+      "token": "GetMutualLinkedGroupCount",
+      "files": 23,
+      "occurrences": 34
+    },
+    {
+      "token": "GetMinGroup",
+      "files": 23,
+      "occurrences": 32
+    },
+    {
+      "token": "ForEach",
+      "files": 23,
+      "occurrences": 25
+    },
+    {
+      "token": "IsCanBeDisabledByEffect",
+      "files": 23,
+      "occurrences": 23
+    },
+    {
+      "token": "GetCardTarget",
+      "files": 22,
+      "occurrences": 29
+    },
+    {
+      "token": "GetPreviousCodeOnField",
+      "files": 22,
+      "occurrences": 23
+    },
+    {
+      "token": "IsCardSetcode",
+      "files": 22,
+      "occurrences": 22
+    },
+    {
+      "token": "GetTextDefense",
+      "files": 21,
+      "occurrences": 30
+    },
+    {
+      "token": "IsSequence",
+      "files": 21,
+      "occurrences": 27
+    },
+    {
+      "token": "IsLinkAbove",
+      "files": 21,
+      "occurrences": 21
+    },
+    {
+      "token": "IsXyzSummonable",
+      "files": 21,
+      "occurrences": 21
+    },
+    {
+      "token": "CheckDifferentProperty",
+      "files": 20,
+      "occurrences": 22
+    },
+    {
+      "token": "GetProperty",
+      "files": 20,
+      "occurrences": 21
+    },
+    {
+      "token": "GetBinClassCount",
+      "files": 19,
+      "occurrences": 21
+    },
+    {
+      "token": "SetHint",
+      "files": 19,
+      "occurrences": 21
+    },
+    {
+      "token": "AnnounceAnotherAttribute",
+      "files": 19,
+      "occurrences": 20
+    },
+    {
+      "token": "IsAbleToExtraAsCost",
+      "files": 19,
+      "occurrences": 20
+    },
+    {
+      "token": "GetCardTargetCount",
+      "files": 19,
+      "occurrences": 19
+    },
+    {
+      "token": "UpdateLevel",
+      "files": 18,
+      "occurrences": 24
+    },
+    {
+      "token": "GetColumnZone",
+      "files": 18,
+      "occurrences": 21
+    },
+    {
+      "token": "IsRankAbove",
+      "files": 18,
+      "occurrences": 21
+    },
+    {
+      "token": "IsRankBelow",
+      "files": 18,
+      "occurrences": 20
+    },
+    {
+      "token": "AddMustBeFusionSummoned",
+      "files": 18,
+      "occurrences": 18
+    },
+    {
+      "token": "SelectWithSumEqual",
+      "files": 18,
+      "occurrences": 18
+    },
+    {
+      "token": "GetBitwiseOr",
+      "files": 17,
+      "occurrences": 19
+    },
+    {
+      "token": "GetSummonLocation",
+      "files": 17,
+      "occurrences": 17
+    },
+    {
+      "token": "IsLinkSummonable",
+      "files": 17,
+      "occurrences": 17
+    },
+    {
+      "token": "IsOwner",
+      "files": 16,
+      "occurrences": 20
+    },
+    {
+      "token": "CreateRelation",
+      "files": 16,
+      "occurrences": 18
+    },
+    {
+      "token": "IsInMainMZone",
+      "files": 16,
+      "occurrences": 17
+    },
+    {
+      "token": "SelectUnselect",
+      "files": 16,
+      "occurrences": 16
+    },
+    {
+      "token": "GetScale",
+      "files": 15,
+      "occurrences": 31
+    },
+    {
+      "token": "IsInExtraMZone",
+      "files": 15,
+      "occurrences": 18
+    },
+    {
+      "token": "IsRelateToCard",
+      "files": 15,
+      "occurrences": 18
+    },
+    {
+      "token": "IsAbleToDeckOrExtraAsCost",
+      "files": 15,
+      "occurrences": 16
+    },
+    {
+      "token": "IsLinked",
+      "files": 15,
+      "occurrences": 16
+    },
+    {
+      "token": "UpdateDefense",
+      "files": 15,
+      "occurrences": 15
+    },
+    {
+      "token": "GetRealFieldID",
+      "files": 14,
+      "occurrences": 26
+    },
+    {
+      "token": "IsPendulumMonster",
+      "files": 14,
+      "occurrences": 25
+    },
+    {
+      "token": "IsCanBeFusionMaterial",
+      "files": 14,
+      "occurrences": 19
+    },
+    {
+      "token": "CheckDifferentPropertyBinary",
+      "files": 14,
+      "occurrences": 17
+    },
+    {
+      "token": "GetAttackableTarget",
+      "files": 14,
+      "occurrences": 15
+    },
+    {
+      "token": "IsReincarnationSummoned",
+      "files": 14,
+      "occurrences": 14
+    },
+    {
+      "token": "SetFlagEffectLabel",
+      "files": 13,
+      "occurrences": 18
+    },
+    {
+      "token": "GetReasonEffect",
+      "files": 13,
+      "occurrences": 16
+    },
+    {
+      "token": "IsPreviousRaceOnField",
+      "files": 13,
+      "occurrences": 13
+    },
+    {
+      "token": "GetLinkedGroupCount",
+      "files": 12,
+      "occurrences": 17
+    },
+    {
+      "token": "ResetEffect",
+      "files": 12,
+      "occurrences": 16
+    },
+    {
+      "token": "IsLinkBelow",
+      "files": 12,
+      "occurrences": 15
+    },
+    {
+      "token": "IsNonEffectMonster",
+      "files": 12,
+      "occurrences": 14
+    },
+    {
+      "token": "IsBaseAttack",
+      "files": 12,
+      "occurrences": 12
+    },
+    {
+      "token": "GetFreeLinkedZone",
+      "files": 11,
+      "occurrences": 22
+    },
+    {
+      "token": "GetMetatable",
+      "files": 11,
+      "occurrences": 17
+    },
+    {
+      "token": "GetClass",
+      "files": 11,
+      "occurrences": 16
+    },
+    {
+      "token": "AddMustFirstBeFusionSummoned",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "GetColumnGroupCount",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "IsColumn",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "IsReasonPlayer",
+      "files": 11,
+      "occurrences": 11
+    },
+    {
+      "token": "HasRank",
+      "files": 10,
+      "occurrences": 17
+    },
+    {
+      "token": "GetMainCardType",
+      "files": 10,
+      "occurrences": 15
+    },
+    {
+      "token": "GetPreviousAttackOnField",
+      "files": 10,
+      "occurrences": 12
+    },
+    {
+      "token": "IsEffectMonster",
+      "files": 10,
+      "occurrences": 11
+    },
+    {
+      "token": "GetCategory",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "HasNonZeroDefense",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "IsCanBeLinkMaterial",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "IsContinuousSpellTrap",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "IsPreviousTypeOnField",
+      "files": 10,
+      "occurrences": 10
+    },
+    {
+      "token": "GetMutualLinkedGroup",
+      "files": 9,
+      "occurrences": 15
+    },
+    {
+      "token": "CheckSameProperty",
+      "files": 9,
+      "occurrences": 12
+    },
+    {
+      "token": "GetOriginalRank",
+      "files": 9,
+      "occurrences": 11
+    },
+    {
+      "token": "AddCannotBeSpecialSummoned",
+      "files": 9,
+      "occurrences": 9
+    },
+    {
+      "token": "ReleaseEffectRelation",
+      "files": 8,
+      "occurrences": 16
+    },
+    {
+      "token": "GetOwnEffects",
+      "files": 8,
+      "occurrences": 14
+    },
+    {
+      "token": "GetRightScale",
+      "files": 8,
+      "occurrences": 11
+    },
+    {
+      "token": "GetTributeRequirement",
+      "files": 8,
+      "occurrences": 10
+    },
+    {
+      "token": "HasCounter",
+      "files": 8,
+      "occurrences": 10
+    },
+    {
+      "token": "CanSummonOrSet",
+      "files": 8,
+      "occurrences": 9
+    },
+    {
+      "token": "GetPreviousLevelOnField",
+      "files": 8,
+      "occurrences": 9
+    },
+    {
+      "token": "IsOriginalLevel",
+      "files": 8,
+      "occurrences": 9
+    },
+    {
+      "token": "CheckUnionTarget",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "IsBaseDefense",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "IsGeminiStatus",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "IsPreviousAttributeOnField",
+      "files": 8,
+      "occurrences": 8
+    },
+    {
+      "token": "GetCount",
+      "files": 7,
+      "occurrences": 9
+    },
+    {
+      "token": "HasEquipCard",
+      "files": 7,
+      "occurrences": 9
+    },
+    {
+      "token": "CheckWithSumGreater",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "EnableGeminiStatus",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "GetCost",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "GetDestination",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "IsDeleted",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "IsOriginalRank",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "ListsCodeWithArchetype",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "MoveAdjacent",
+      "files": 7,
+      "occurrences": 7
+    },
+    {
+      "token": "IsNegatableSpellTrap",
+      "files": 6,
+      "occurrences": 7
+    },
+    {
+      "token": "IsPreviousCodeOnField",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "Level",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "ListsArchetypeAsMaterial",
+      "files": 6,
+      "occurrences": 6
+    },
+    {
+      "token": "IsNormalSpellTrap",
+      "files": 5,
+      "occurrences": 7
+    },
+    {
+      "token": "AddMustBeRitualSummoned",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "AddMustBeSpecialSummonedByCardEffect",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "CheckAdjacent",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "GetOverlayTarget",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "IsDirectAttacked",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "IsRikkaReleasable",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "SelectWithSumGreater",
+      "files": 5,
+      "occurrences": 5
+    },
+    {
+      "token": "GetSynchroLevel",
+      "files": 4,
+      "occurrences": 9
+    },
+    {
+      "token": "GetCondition",
+      "files": 4,
+      "occurrences": 7
+    },
+    {
+      "token": "HasDefense",
+      "files": 4,
+      "occurrences": 5
+    },
+    {
+      "token": "CancelCardTarget",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "GetBattledGroup",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "HasSelfChangePositionCost",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "IsCanBeSynchroMaterial",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "IsEquipCard",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "IsTrapMonster",
+      "files": 4,
+      "occurrences": 4
+    },
+    {
+      "token": "GetToBeLinkedZone",
+      "files": 3,
+      "occurrences": 6
+    },
+    {
+      "token": "IsMSetable",
+      "files": 3,
+      "occurrences": 6
+    },
+    {
+      "token": "AddMustBeSpecialSummonedByDarkFusion",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "AddMustBeSynchroSummoned",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "AddSetcodesRule",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "Attribute",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "CheckFusionSubstitute",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "GetOwnerTargetCount",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "IsCardRace",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "IsController",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "IsScale",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "ListsCardType",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "ReverseInDeck",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "UseCountLimit",
+      "files": 3,
+      "occurrences": 3
+    },
+    {
+      "token": "HasSelfDiscardCost",
+      "files": 2,
+      "occurrences": 4
+    },
+    {
+      "token": "IsCompositeType",
+      "files": 2,
+      "occurrences": 4
+    },
+    {
+      "token": "IsNouvellesSummoned",
+      "files": 2,
+      "occurrences": 4
+    },
+    {
+      "token": "GetCardID",
+      "files": 2,
+      "occurrences": 3
+    },
+    {
+      "token": "GetPreviousDefenseOnField",
+      "files": 2,
+      "occurrences": 3
+    },
+    {
+      "token": "AnnounceAnotherRace",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "ClearEffectRelation",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "Equal",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetPreviousRankOnField",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "GetRitualLevel",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCanBeMaterial",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCanBeRitualMaterial",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCardCode",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCardControler",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCardSummonLocation",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCardSummonType",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsEquipTrap",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsLevelBetween",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsReasonCard",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "PlacesCounter",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "Race",
+      "files": 2,
+      "occurrences": 2
+    },
+    {
+      "token": "IsFieldID",
+      "files": 1,
+      "occurrences": 3
+    },
+    {
+      "token": "GetOriginalLeftScale",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "IsCounterTrap",
+      "files": 1,
+      "occurrences": 2
+    },
+    {
+      "token": "AddCannotBeNormalSummoned",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "AddMustBeLinkSummoned",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "AddMustBeXyzSummoned",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "Attack",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "CheckCountLimit",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "Defense",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetAttackedGroupCount",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardControler",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardLevel",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardLocation",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetCardSequence",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetLeaveFieldDest",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetOriginalRightScale",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetOriginalSetCard",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "GetRange",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsAllColumn",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCanBeBattleTarget",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCardAttribute",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCardAttributeExcept",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCardLocation",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCardType",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsCoLinked",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsEvenScale",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsExtraLinked",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsFusionSummonableCard",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsInMainZone",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsOddScale",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsOnFiel",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsRACE",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsRelateToChain",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsSpellCard",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "IsTrapCard",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ListsCounter",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ReleaseRelation",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "RemoveAllCounters",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "ReplaceEffect",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "SelectAdjacent",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "SetReason",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "SetReasonEffect",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "UpdateRank",
+      "files": 1,
+      "occurrences": 1
+    },
+    {
+      "token": "UpdateScale",
+      "files": 1,
+      "occurrences": 1
+    }
+  ],
+  "effect_setters": {
+    "SetCategory": [
+      {
+        "token": "CATEGORY_SPECIAL_SUMMON",
+        "files": 5209,
+        "occurrences": 5831
+      },
+      {
+        "token": "CATEGORY_TOHAND",
+        "files": 2890,
+        "occurrences": 3117
+      },
+      {
+        "token": "CATEGORY_DESTROY",
+        "files": 2308,
+        "occurrences": 2436
+      },
+      {
+        "token": "CATEGORY_SEARCH",
+        "files": 1794,
+        "occurrences": 1847
+      },
+      {
+        "token": "CATEGORY_ATKCHANGE",
+        "files": 1078,
+        "occurrences": 1119
+      },
+      {
+        "token": "CATEGORY_DRAW",
+        "files": 801,
+        "occurrences": 826
+      },
+      {
+        "token": "CATEGORY_REMOVE",
+        "files": 764,
+        "occurrences": 801
+      },
+      {
+        "token": "CATEGORY_DAMAGE",
+        "files": 730,
+        "occurrences": 755
+      },
+      {
+        "token": "CATEGORY_TOGRAVE",
+        "files": 725,
+        "occurrences": 753
+      },
+      {
+        "token": "CATEGORY_TODECK",
+        "files": 699,
+        "occurrences": 723
+      },
+      {
+        "token": "CATEGORY_SET",
+        "files": 653,
+        "occurrences": 695
+      },
+      {
+        "token": "CATEGORY_POSITION",
+        "files": 427,
+        "occurrences": 461
+      },
+      {
+        "token": "CATEGORY_DISABLE",
+        "files": 415,
+        "occurrences": 426
+      },
+      {
+        "token": "CATEGORY_NEGATE",
+        "files": 388,
+        "occurrences": 390
+      },
+      {
+        "token": "CATEGORY_EQUIP",
+        "files": 378,
+        "occurrences": 390
+      },
+      {
+        "token": "CATEGORY_HANDES",
+        "files": 266,
+        "occurrences": 272
+      },
+      {
+        "token": "CATEGORY_RECOVER",
+        "files": 239,
+        "occurrences": 244
+      },
+      {
+        "token": "CATEGORY_TOKEN",
+        "files": 230,
+        "occurrences": 239
+      },
+      {
+        "token": "CATEGORY_CONTROL",
+        "files": 186,
+        "occurrences": 188
+      },
+      {
+        "token": "CATEGORY_LVCHANGE",
+        "files": 163,
+        "occurrences": 170
+      },
+      {
+        "token": "CATEGORY_DECKDES",
+        "files": 157,
+        "occurrences": 163
+      },
+      {
+        "token": "CATEGORY_DEFCHANGE",
+        "files": 156,
+        "occurrences": 158
+      },
+      {
+        "token": "CATEGORY_COUNTER",
+        "files": 150,
+        "occurrences": 167
+      },
+      {
+        "token": "CATEGORY_FUSION_SUMMON",
+        "files": 145,
+        "occurrences": 146
+      },
+      {
+        "token": "CATEGORY_LEAVE_GRAVE",
+        "files": 100,
+        "occurrences": 101
+      },
+      {
+        "token": "CATEGORY_SUMMON",
+        "files": 99,
+        "occurrences": 102
+      },
+      {
+        "token": "CATEGORY_TOEXTRA",
+        "files": 75,
+        "occurrences": 76
+      },
+      {
+        "token": "CATEGORY_RELEASE",
+        "files": 60,
+        "occurrences": 61
+      },
+      {
+        "token": "CATEGORY_COIN",
+        "files": 59,
+        "occurrences": 60
+      },
+      {
+        "token": "CATEGORY_DISABLE_SUMMON",
+        "files": 50,
+        "occurrences": 50
+      },
+      {
+        "token": "CATEGORY_DICE",
+        "files": 39,
+        "occurrences": 42
+      },
+      {
+        "token": "EFFECT_FLAG_CANNOT_DISABLE",
+        "files": 1,
+        "occurrences": 1
+      }
+    ],
+    "SetType": [
+      {
+        "token": "EFFECT_TYPE_SINGLE",
+        "files": 8154,
+        "occurrences": 13879
+      },
+      {
+        "token": "EFFECT_TYPE_FIELD",
+        "files": 6326,
+        "occurrences": 8926
+      },
+      {
+        "token": "EFFECT_TYPE_TRIGGER_O",
+        "files": 4934,
+        "occurrences": 5939
+      },
+      {
+        "token": "EFFECT_TYPE_ACTIVATE",
+        "files": 4455,
+        "occurrences": 4493
+      },
+      {
+        "token": "EFFECT_TYPE_IGNITION",
+        "files": 4039,
+        "occurrences": 4585
+      },
+      {
+        "token": "EFFECT_TYPE_CONTINUOUS",
+        "files": 2160,
+        "occurrences": 2652
+      },
+      {
+        "token": "EFFECT_TYPE_QUICK_O",
+        "files": 1948,
+        "occurrences": 2085
+      },
+      {
+        "token": "EFFECT_TYPE_TRIGGER_F",
+        "files": 1706,
+        "occurrences": 1870
+      },
+      {
+        "token": "EFFECT_TYPE_EQUIP",
+        "files": 440,
+        "occurrences": 589
+      },
+      {
+        "token": "EFFECT_TYPE_FLIP",
+        "files": 193,
+        "occurrences": 193
+      },
+      {
+        "token": "EFFECT_TYPE_GRANT",
+        "files": 30,
+        "occurrences": 30
+      },
+      {
+        "token": "EFFECT_TYPE_XMATERIAL",
+        "files": 28,
+        "occurrences": 30
+      },
+      {
+        "token": "EFFECT_TYPE_QUICK_F",
+        "files": 17,
+        "occurrences": 17
+      }
+    ],
+    "SetCode": [
+      {
+        "token": "EVENT_FREE_CHAIN",
+        "files": 4867,
+        "occurrences": 5315
+      },
+      {
+        "token": "EVENT_SPSUMMON_SUCCESS",
+        "files": 2306,
+        "occurrences": 2435
+      },
+      {
+        "token": "EFFECT_UPDATE_ATTACK",
+        "files": 1915,
+        "occurrences": 1984
+      },
+      {
+        "token": "EVENT_SUMMON_SUCCESS",
+        "files": 1345,
+        "occurrences": 1373
+      },
+      {
+        "token": "EVENT_PHASE",
+        "files": 1314,
+        "occurrences": 1388
+      },
+      {
+        "token": "EVENT_TO_GRAVE",
+        "files": 1237,
+        "occurrences": 1257
+      },
+      {
+        "token": "EVENT_CHAINING",
+        "files": 965,
+        "occurrences": 986
+      },
+      {
+        "token": "EFFECT_CANNOT_SPECIAL_SUMMON",
+        "files": 918,
+        "occurrences": 924
+      },
+      {
+        "token": "PHASE_END",
+        "files": 772,
+        "occurrences": 788
+      },
+      {
+        "token": "EVENT_DESTROYED",
+        "files": 657,
+        "occurrences": 678
+      },
+      {
+        "token": "EFFECT_SPSUMMON_PROC",
+        "files": 645,
+        "occurrences": 646
+      },
+      {
+        "token": "EFFECT_DISABLE",
+        "files": 532,
+        "occurrences": 544
+      },
+      {
+        "token": "EFFECT_INDESTRUCTABLE_BATTLE",
+        "files": 515,
+        "occurrences": 519
+      },
+      {
+        "token": "EFFECT_SPSUMMON_CONDITION",
+        "files": 504,
+        "occurrences": 504
+      },
+      {
+        "token": "EVENT_ATTACK_ANNOUNCE",
+        "files": 487,
+        "occurrences": 496
+      },
+      {
+        "token": "EFFECT_UPDATE_DEFENSE",
+        "files": 475,
+        "occurrences": 489
+      },
+      {
+        "token": "EFFECT_INDESTRUCTABLE_EFFECT",
+        "files": 440,
+        "occurrences": 444
+      },
+      {
+        "token": "EFFECT_DISABLE_EFFECT",
+        "files": 416,
+        "occurrences": 423
+      },
+      {
+        "token": "PHASE_STANDBY",
+        "files": 406,
+        "occurrences": 414
+      },
+      {
+        "token": "EFFECT_SET_ATTACK_FINAL",
+        "files": 358,
+        "occurrences": 369
+      },
+      {
+        "token": "EVENT_BATTLE_DESTROYED",
+        "files": 344,
+        "occurrences": 344
+      },
+      {
+        "token": "EVENT_BATTLE_DESTROYING",
+        "files": 326,
+        "occurrences": 330
+      },
+      {
+        "token": "EFFECT_CANNOT_ACTIVATE",
+        "files": 319,
+        "occurrences": 327
+      },
+      {
+        "token": "EFFECT_CANNOT_ATTACK",
+        "files": 318,
+        "occurrences": 323
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_EFFECT_TARGET",
+        "files": 316,
+        "occurrences": 319
+      },
+      {
+        "token": "EVENT_LEAVE_FIELD",
+        "files": 297,
+        "occurrences": 326
+      },
+      {
+        "token": "EFFECT_LEAVE_FIELD_REDIRECT",
+        "files": 277,
+        "occurrences": 278
+      },
+      {
+        "token": "EFFECT_IMMUNE_EFFECT",
+        "files": 247,
+        "occurrences": 250
+      },
+      {
+        "token": "EFFECT_DESTROY_REPLACE",
+        "files": 247,
+        "occurrences": 248
+      },
+      {
+        "token": "EFFECT_EQUIP_LIMIT",
+        "files": 245,
+        "occurrences": 251
+      },
+      {
+        "token": "EVENT_BE_MATERIAL",
+        "files": 237,
+        "occurrences": 239
+      },
+      {
+        "token": "EFFECT_UPDATE_LEVEL",
+        "files": 227,
+        "occurrences": 239
+      },
+      {
+        "token": "EFFECT_CHANGE_LEVEL",
+        "files": 205,
+        "occurrences": 214
+      },
+      {
+        "token": "EVENT_BATTLE_DAMAGE",
+        "files": 204,
+        "occurrences": 207
+      },
+      {
+        "token": "EVENT_REMOVE",
+        "files": 200,
+        "occurrences": 202
+      },
+      {
+        "token": "EFFECT_DIRECT_ATTACK",
+        "files": 195,
+        "occurrences": 195
+      },
+      {
+        "token": "EFFECT_PIERCE",
+        "files": 187,
+        "occurrences": 188
+      },
+      {
+        "token": "EFFECT_CHANGE_CODE",
+        "files": 174,
+        "occurrences": 175
+      },
+      {
+        "token": "EFFECT_MATERIAL_CHECK",
+        "files": 174,
+        "occurrences": 174
+      },
+      {
+        "token": "EVENT_FLIP_SUMMON_SUCCESS",
+        "files": 171,
+        "occurrences": 172
+      },
+      {
+        "token": "EVENT_BATTLED",
+        "files": 160,
+        "occurrences": 163
+      },
+      {
+        "token": "EFFECT_EXTRA_ATTACK",
+        "files": 160,
+        "occurrences": 160
+      },
+      {
+        "token": "EVENT_BE_BATTLE_TARGET",
+        "files": 150,
+        "occurrences": 151
+      },
+      {
+        "token": "EVENT_DAMAGE_STEP_END",
+        "files": 146,
+        "occurrences": 151
+      },
+      {
+        "token": "PHASE_BATTLE",
+        "files": 143,
+        "occurrences": 144
+      },
+      {
+        "token": "EVENT_CHAIN_SOLVING",
+        "files": 142,
+        "occurrences": 144
+      },
+      {
+        "token": "EFFECT_AVOID_BATTLE_DAMAGE",
+        "files": 136,
+        "occurrences": 136
+      },
+      {
+        "token": "EFFECT_CANNOT_SUMMON",
+        "files": 135,
+        "occurrences": 136
+      },
+      {
+        "token": "EVENT_PRE_DAMAGE_CALCULATE",
+        "files": 134,
+        "occurrences": 134
+      },
+      {
+        "token": "EVENT_CHAIN_SOLVED",
+        "files": 133,
+        "occurrences": 159
+      },
+      {
+        "token": "EVENT_BATTLE_START",
+        "files": 126,
+        "occurrences": 127
+      },
+      {
+        "token": "EFFECT_ADD_TYPE",
+        "files": 125,
+        "occurrences": 126
+      },
+      {
+        "token": "EFFECT_CANNOT_SELECT_BATTLE_TARGET",
+        "files": 125,
+        "occurrences": 126
+      },
+      {
+        "token": "EFFECT_SUMMON_PROC",
+        "files": 113,
+        "occurrences": 116
+      },
+      {
+        "token": "EFFECT_CANNOT_TRIGGER",
+        "files": 112,
+        "occurrences": 114
+      },
+      {
+        "token": "EVENT_FLIP",
+        "files": 111,
+        "occurrences": 126
+      },
+      {
+        "token": "EFFECT_CANNOT_ATTACK_ANNOUNCE",
+        "files": 111,
+        "occurrences": 111
+      },
+      {
+        "token": "EFFECT_INDESTRUCTABLE_COUNT",
+        "files": 105,
+        "occurrences": 105
+      },
+      {
+        "token": "EFFECT_SET_ATTACK",
+        "files": 101,
+        "occurrences": 101
+      },
+      {
+        "token": "EFFECT_SET_DEFENSE_FINAL",
+        "files": 99,
+        "occurrences": 103
+      },
+      {
+        "token": "EFFECT_CANNOT_DIRECT_ATTACK",
+        "files": 97,
+        "occurrences": 99
+      },
+      {
+        "token": "EFFECT_SET_BASE_ATTACK",
+        "files": 96,
+        "occurrences": 103
+      },
+      {
+        "token": "EVENT_CUSTOM",
+        "files": 94,
+        "occurrences": 98
+      },
+      {
+        "token": "EVENT_RELEASE",
+        "files": 92,
+        "occurrences": 93
+      },
+      {
+        "token": "EFFECT_CHANGE_DAMAGE",
+        "files": 89,
+        "occurrences": 91
+      },
+      {
+        "token": "EFFECT_CHANGE_BATTLE_DAMAGE",
+        "files": 88,
+        "occurrences": 88
+      },
+      {
+        "token": "EFFECT_SELF_DESTROY",
+        "files": 87,
+        "occurrences": 87
+      },
+      {
+        "token": "EVENT_TO_HAND",
+        "files": 86,
+        "occurrences": 88
+      },
+      {
+        "token": "EFFECT_CHANGE_ATTRIBUTE",
+        "files": 82,
+        "occurrences": 83
+      },
+      {
+        "token": "EFFECT_CHANGE_TYPE",
+        "files": 80,
+        "occurrences": 84
+      },
+      {
+        "token": "EVENT_LEAVE_FIELD_P",
+        "files": 77,
+        "occurrences": 77
+      },
+      {
+        "token": "EFFECT_CANNOT_CHANGE_POSITION",
+        "files": 75,
+        "occurrences": 75
+      },
+      {
+        "token": "EFFECT_EXTRA_SUMMON_COUNT",
+        "files": 73,
+        "occurrences": 73
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_SYNCHRO_MATERIAL",
+        "files": 72,
+        "occurrences": 72
+      },
+      {
+        "token": "EFFECT_UNRELEASABLE_SUM",
+        "files": 70,
+        "occurrences": 71
+      },
+      {
+        "token": "EVENT_DAMAGE",
+        "files": 69,
+        "occurrences": 72
+      },
+      {
+        "token": "EFFECT_CHANGE_RACE",
+        "files": 63,
+        "occurrences": 65
+      },
+      {
+        "token": "EFFECT_DISABLE_TRAPMONSTER",
+        "files": 61,
+        "occurrences": 61
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_BATTLE_TARGET",
+        "files": 58,
+        "occurrences": 58
+      },
+      {
+        "token": "EFFECT_EXTRA_ATTACK_MONSTER",
+        "files": 54,
+        "occurrences": 55
+      },
+      {
+        "token": "EVENT_CHANGE_POS",
+        "files": 54,
+        "occurrences": 55
+      },
+      {
+        "token": "EFFECT_MUST_ATTACK",
+        "files": 54,
+        "occurrences": 54
+      },
+      {
+        "token": "EFFECT_SET_DEFENSE",
+        "files": 54,
+        "occurrences": 54
+      },
+      {
+        "token": "EFFECT_TRAP_ACT_IN_SET_TURN",
+        "files": 53,
+        "occurrences": 53
+      },
+      {
+        "token": "EFFECT_NO_EFFECT_DAMAGE",
+        "files": 51,
+        "occurrences": 53
+      },
+      {
+        "token": "EVENT_DRAW",
+        "files": 51,
+        "occurrences": 53
+      },
+      {
+        "token": "EVENT_SPSUMMON",
+        "files": 51,
+        "occurrences": 52
+      },
+      {
+        "token": "EFFECT_CANNOT_BP",
+        "files": 49,
+        "occurrences": 49
+      },
+      {
+        "token": "EFFECT_UNRELEASABLE_NONSUM",
+        "files": 47,
+        "occurrences": 48
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_LINK_MATERIAL",
+        "files": 47,
+        "occurrences": 47
+      },
+      {
+        "token": "EFFECT_CANNOT_MSET",
+        "files": 45,
+        "occurrences": 46
+      },
+      {
+        "token": "EFFECT_TRAP_ACT_IN_HAND",
+        "files": 45,
+        "occurrences": 45
+      },
+      {
+        "token": "PHASE_BATTLE_START",
+        "files": 45,
+        "occurrences": 45
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_XYZ_MATERIAL",
+        "files": 44,
+        "occurrences": 44
+      },
+      {
+        "token": "EFFECT_ATTACK_ALL",
+        "files": 43,
+        "occurrences": 43
+      },
+      {
+        "token": "EFFECT_SET_BASE_DEFENSE",
+        "files": 38,
+        "occurrences": 38
+      },
+      {
+        "token": "EFFECT_CANNOT_FLIP_SUMMON",
+        "files": 35,
+        "occurrences": 35
+      },
+      {
+        "token": "EFFECT_TO_GRAVE_REDIRECT",
+        "files": 34,
+        "occurrences": 34
+      },
+      {
+        "token": "EVENT_BATTLE_CONFIRM",
+        "files": 32,
+        "occurrences": 33
+      },
+      {
+        "token": "EVENT_CHAIN_END",
+        "files": 32,
+        "occurrences": 32
+      },
+      {
+        "token": "EFFECT_SET_CONTROL",
+        "files": 31,
+        "occurrences": 33
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_MATERIAL",
+        "files": 30,
+        "occurrences": 31
+      },
+      {
+        "token": "EFFECT_MUST_ATTACK_MONSTER",
+        "files": 30,
+        "occurrences": 30
+      },
+      {
+        "token": "EFFECT_DOUBLE_TRIBUTE",
+        "files": 29,
+        "occurrences": 29
+      },
+      {
+        "token": "EFFECT_NO_BATTLE_DAMAGE",
+        "files": 28,
+        "occurrences": 28
+      },
+      {
+        "token": "EVENT_BECOME_TARGET",
+        "files": 28,
+        "occurrences": 28
+      },
+      {
+        "token": "EFFECT_CANNOT_SSET",
+        "files": 27,
+        "occurrences": 27
+      },
+      {
+        "token": "EFFECT_DRAW_COUNT",
+        "files": 27,
+        "occurrences": 27
+      },
+      {
+        "token": "EVENT_ADJUST",
+        "files": 27,
+        "occurrences": 27
+      },
+      {
+        "token": "EFFECT_MULTIPLE_TUNERS",
+        "files": 26,
+        "occurrences": 26
+      },
+      {
+        "token": "EFFECT_REFLECT_BATTLE_DAMAGE",
+        "files": 26,
+        "occurrences": 26
+      },
+      {
+        "token": "EVENT_PREDRAW",
+        "files": 26,
+        "occurrences": 26
+      },
+      {
+        "token": "EVENT_CHAIN_NEGATED",
+        "files": 25,
+        "occurrences": 25
+      },
+      {
+        "token": "EVENT_MOVE",
+        "files": 25,
+        "occurrences": 25
+      },
+      {
+        "token": "EVENT_SUMMON",
+        "files": 25,
+        "occurrences": 25
+      },
+      {
+        "token": "EFFECT_SPSUMMON_COST",
+        "files": 24,
+        "occurrences": 24
+      },
+      {
+        "token": "EVENT_EQUIP",
+        "files": 23,
+        "occurrences": 23
+      },
+      {
+        "token": "EVENT_TO_DECK",
+        "files": 23,
+        "occurrences": 23
+      },
+      {
+        "token": "EFFECT_DISABLE_FIELD",
+        "files": 22,
+        "occurrences": 24
+      },
+      {
+        "token": "EFFECT_PUBLIC",
+        "files": 22,
+        "occurrences": 23
+      },
+      {
+        "token": "EFFECT_CANNOT_DISABLE_SPSUMMON",
+        "files": 21,
+        "occurrences": 21
+      },
+      {
+        "token": "EFFECT_CANNOT_INACTIVATE",
+        "files": 21,
+        "occurrences": 21
+      },
+      {
+        "token": "EFFECT_DESTROY_SUBSTITUTE",
+        "files": 21,
+        "occurrences": 21
+      },
+      {
+        "token": "EFFECT_ADD_ATTRIBUTE",
+        "files": 20,
+        "occurrences": 20
+      },
+      {
+        "token": "EFFECT_CHANGE_LSCALE",
+        "files": 20,
+        "occurrences": 20
+      },
+      {
+        "token": "EFFECT_CHANGE_RSCALE",
+        "files": 20,
+        "occurrences": 20
+      },
+      {
+        "token": "EVENT_RECOVER",
+        "files": 19,
+        "occurrences": 20
+      },
+      {
+        "token": "EFFECT_CANNOT_BE_FUSION_MATERIAL",
+        "files": 19,
+        "occurrences": 19
+      },
+      {
+        "token": "EFFECT_CANNOT_DISEFFECT",
+        "files": 19,
+        "occurrences": 19
+      },
+      {
+        "token": "EFFECT_DEFENSE_ATTACK",
+        "files": 19,
+        "occurrences": 19
+      },
+      {
+        "token": "EFFECT_ATTACK_COST",
+        "files": 18,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_BATTLE_DESTROY_REDIRECT",
+        "files": 18,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_CANNOT_REMOVE",
+        "files": 18,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_CHANGE_LEVEL_FINAL",
+        "files": 18,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_MONSTER_SSET",
+        "files": 18,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_EXTRA_MATERIAL",
+        "files": 17,
+        "occurrences": 19
+      },
+      {
+        "token": "EFFECT_XYZ_LEVEL",
+        "files": 17,
+        "occurrences": 18
+      },
+      {
+        "token": "EVENT_MSET",
+        "files": 17,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_SELF_TOGRAVE",
+        "files": 17,
+        "occurrences": 17
+      },
+      {
+        "token": "EFFECT_SUMMON_COST",
+        "files": 17,
+        "occurrences": 17
+      },
+      {
+        "token": "EFFECT_FORCE_SPSUMMON_POSITION",
+        "files": 16,
+        "occurrences": 16
+      },
+      {
+        "token": "EFFECT_TO_GRAVE_REDIRECT_CB",
+        "files": 16,
+        "occurrences": 16
+      },
+      {
+        "token": "EVENT_FLIP_SUMMON",
+        "files": 16,
+        "occurrences": 16
+      },
+      {
+        "token": "EVENT_SSET",
+        "files": 16,
+        "occurrences": 16
+      },
+      {
+        "token": "EFFECT_ADD_SETCODE",
+        "files": 15,
+        "occurrences": 15
+      },
+      {
+        "token": "EFFECT_SET_POSITION",
+        "files": 15,
+        "occurrences": 15
+      },
+      {
+        "token": "EFFECT_CANNOT_TO_HAND",
+        "files": 14,
+        "occurrences": 14
+      },
+      {
+        "token": "EFFECT_NONTUNER",
+        "files": 14,
+        "occurrences": 14
+      },
+      {
+        "token": "EFFECT_COST_REPLACE",
+        "files": 13,
+        "occurrences": 13
+      },
+      {
+        "token": "EFFECT_IGNORE_BATTLE_TARGET",
+        "files": 13,
+        "occurrences": 13
+      },
+      {
+        "token": "EFFECT_SYNCHRO_MAT_RESTRICTION",
+        "files": 13,
+        "occurrences": 13
+      },
+      {
+        "token": "EFFECT_UPDATE_LSCALE",
+        "files": 13,
+        "occurrences": 13
+      },
+      {
+        "token": "EFFECT_UPDATE_RSCALE",
+        "files": 13,
+        "occurrences": 13
+      },
+      {
+        "token": "EFFECT_ADD_EXTRA_TRIBUTE",
+        "files": 12,
+        "occurrences": 14
+      },
+      {
+        "token": "EFFECT_FUSION_SUBSTITUTE",
+        "files": 12,
+        "occurrences": 12
+      },
+      {
+        "token": "EFFECT_QP_ACT_IN_NTPHAND",
+        "files": 12,
+        "occurrences": 12
+      },
+      {
+        "token": "EFFECT_REFLECT_DAMAGE",
+        "files": 12,
+        "occurrences": 12
+      },
+      {
+        "token": "EFFECT_ADD_CODE",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EFFECT_CANNOT_CHANGE_CONTROL",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EFFECT_EXTRA_RITUAL_MATERIAL",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EFFECT_SKIP_BP",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EFFECT_SKIP_DP",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EVENT_PHASE_START",
+        "files": 11,
+        "occurrences": 11
+      },
+      {
+        "token": "EFFECT_OVERLAY_REMOVE_REPLACE",
+        "files": 10,
+        "occurrences": 10
+      },
+      {
+        "token": "EFFECT_SET_PROC",
+        "files": 10,
+        "occurrences": 10
+      },
+      {
+        "token": "EFFECT_CANNOT_DISABLE_SUMMON",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_CANNOT_DRAW",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_CANNOT_TURN_SET",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_REVERSE_DAMAGE",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_SWAP_BASE_AD",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_SYNCHRO_MATERIAL_CUSTOM",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EFFECT_TRIBUTE_LIMIT",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EVENT_CONTROL_CHANGED",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "EVENT_DESTROY",
+        "files": 9,
+        "occurrences": 9
+      },
+      {
+        "token": "CARD_CLOCK_LIZARD",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_ACTIVATE_COST",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_DECREASE_TRIBUTE",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_FORCE_MZONE",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_LEFT_SPSUMMON_COUNT",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_LIMIT_SUMMON_PROC",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_SYNCHRO_CHECK",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_SYNCHRO_LEVEL",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EVENT_BREAK_EFFECT",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EVENT_CHAIN_ACTIVATING",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EVENT_DETACH_MATERIAL",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EVENT_TURN_END",
+        "files": 8,
+        "occurrences": 8
+      },
+      {
+        "token": "EFFECT_HAND_SYNCHRO",
+        "files": 7,
+        "occurrences": 14
+      },
+      {
+        "token": "EFFECT_CANNOT_RELEASE",
+        "files": 7,
+        "occurrences": 7
+      },
+      {
+        "token": "EFFECT_EXTRA_SET_COUNT",
+        "files": 7,
+        "occurrences": 7
+      },
+      {
+        "token": "EVENT_PAY_LPCOST",
+        "files": 7,
+        "occurrences": 7
+      },
+      {
+        "token": "EFFECT_EXTRA_FUSION_MATERIAL",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EFFECT_LPCOST_CHANGE",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EFFECT_REMAIN_FIELD",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EFFECT_REMOVE_TYPE",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EFFECT_SET_SUMMON_COUNT_LIMIT",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EVENT_ATTACK_DISABLED",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EVENT_LEAVE_GRAVE",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "PHASE_DRAW",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "EFFECT_SEND_REPLACE",
+        "files": 5,
+        "occurrences": 6
+      },
+      {
+        "token": "EVENT_DISCARD",
+        "files": 5,
+        "occurrences": 6
+      },
+      {
+        "token": "CARD_EHERO_BLAZEMAN",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_ALSO_BATTLE_DAMAGE",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_CLEAR_WORLD_IMMUNE",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_DOUBLE_XYZ_MATERIAL",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_HAND_LIMIT",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_NECRO_VALLEY_IM",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_ONLY_ATTACK_MONSTER",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_PATRICIAN_OF_DARKNESS",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_SKIP_M1",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_SKIP_TURN",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_SWAP_ATTACK_FINAL",
+        "files": 4,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_SWAP_DEFENSE_FINAL",
+        "files": 4,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_BP_TWICE",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_CANNOT_DISABLE",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_CANNOT_TO_DECK",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_CAN_BE_TUNER",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_INDESTRUCTABLE",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_TO_HAND_REDIRECT",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_UPDATE_RANK",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EVENT_PRE_BATTLE_DAMAGE",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EVENT_TOSS_COIN",
+        "files": 4,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT_SYNCHRO_MATERIAL",
+        "files": 3,
+        "occurrences": 5
+      },
+      {
+        "token": "COUNTER_SPELL",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_BOTH_BATTLE_DAMAGE",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_CANNOT_DISCARD_DECK",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_CANNOT_TO_GRAVE",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_CHAIN_MATERIAL",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_EXTRA_RELEASE_NONSUM",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_MAX_MZONE",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_QP_ACT_IN_SET_TURN",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EVENT_ADD_COUNTER",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EVENT_BE_PRE_MATERIAL",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EVENT_CHAIN_DISABLED",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EVENT_SPSUMMON_NEGATED",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EVENT_TOSS_DICE_NEGATE",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_CANNOT_DISCARD_HAND",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_CHANGE_ENVIRONMENT",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_CHANGE_RANK",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_DECREASE_TRIBUTE_SET",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_FLAG_CLIENT_HINT",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_FORBIDDEN",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_GEMINI_STATUS",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_LPCOST_REPLACE",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_MAX_SZONE",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_MUST_BE_MATERIAL",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_REVERSE_RECOVER",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_REVIVE_LIMIT",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_SKIP_M2",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_SPIRIT_MAYNOT_RETURN",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_SPSUMMON_COUNT_LIMIT",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_SYNCHRO_MAT_FROM_HAND",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_TO_DECK_REDIRECT",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_TRIPLE_TRIBUTE",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EVENT_REMOVE_COUNTER",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EVENT_TOHAND_CONFIRM",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EVENT_TOSS_COIN_NEGATE",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "PHASE_MAIN1",
+        "files": 2,
+        "occurrences": 2
+      },
+      {
+        "token": "EFFECT_NECRO_VALLEY",
+        "files": 1,
+        "occurrences": 2
+      },
+      {
+        "token": "CARD_ATLANTIS_CITY_OF_THE_SEA_DRAGON",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CARD_LABRYNTH_LABYRINTH",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CARD_LIGHT_BARRIER",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CARD_PSYFRAME_LAMBDA",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CARD_RIKKA_KONKON",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CARD_SUMMON_GATE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CATEGORY_REMOVE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CATEGORY_SPECIAL_SUMMON",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "CATEGORY_TOHAND",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "COUNTER_A",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "COUNTER_ACCESS",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_ADD_RACE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_ARS_MAGNA_CITRINITAS",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_BATTLE_DAMAGE_TO_EFFECT",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_BECOME_QUICK",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_CHANGE_POS_E",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_DISABLE_FLIP_SUMMON",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_EP",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_PLACE_COUNTER",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_SELECT_EFFECT_TARGET",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_TO_GRAVE_AS_COST",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CANNOT_USE_AS_COST",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CHANGE_BATTLE_STAT",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CLEAR_WALL",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_COUNTER_PERMIT",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_CYBERDARK_WORLD",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_DISCARD_COST_CHANGE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_EXTRA_RELEASE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_EXTRA_RELEASE_SUM",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_FIRST_ATTACK",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_FORMUD_SKIPPER",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_FUSION_MATERIAL",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_FUSION_MAT_RESTRICTION",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_GOLDEN_ALLURE_QUEEN",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_ICEBARRIER_REPLACE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_LIGHT_OF_INTERVENTION",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_LIMIT_SET_PROC",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_MATCH_KILL",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_MSET_COST",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_ONLY_BE_ATTACKED",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_RCOUNTER_REPLACE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_REMOVE_ATTRIBUTE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_REMOVE_BRAINWASHING",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_REMOVE_RACE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_REVERSE_DECK",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_REVERSE_UPDATE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SATELLARKNIGHT_CAPELLA",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SKIP_SP",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SPIRIT_DONOT_RETURN",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SSET_COST",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_STAR_SERAPH_SOVEREIGNTY",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SUPREME_CASTLE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SWAP_AD",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_SYNSUB_NORDIC",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_UNRELEASABLE_EFFECT",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_USE_EXTRA_MZONE",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_XYZ_MAT_RESTRICTION",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EVENT_CONFIRM",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EVENT_LEVEL_UP",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EVENT_SUMMON_NEGATED",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EVENT_TOSS_DICE",
+        "files": 1,
+        "occurrences": 1
+      }
+    ],
+    "SetProperty": [
+      {
+        "token": "EFFECT_FLAG_CARD_TARGET",
+        "files": 5129,
+        "occurrences": 5690
+      },
+      {
+        "token": "EFFECT_FLAG_DELAY",
+        "files": 3143,
+        "occurrences": 3667
+      },
+      {
+        "token": "EFFECT_FLAG_CANNOT_DISABLE",
+        "files": 2647,
+        "occurrences": 3203
+      },
+      {
+        "token": "EFFECT_FLAG_PLAYER_TARGET",
+        "files": 2311,
+        "occurrences": 2633
+      },
+      {
+        "token": "EFFECT_FLAG_CLIENT_HINT",
+        "files": 1616,
+        "occurrences": 1733
+      },
+      {
+        "token": "EFFECT_FLAG_DAMAGE_STEP",
+        "files": 1517,
+        "occurrences": 1618
+      },
+      {
+        "token": "EFFECT_FLAG_SINGLE_RANGE",
+        "files": 1439,
+        "occurrences": 1653
+      },
+      {
+        "token": "EFFECT_FLAG_UNCOPYABLE",
+        "files": 1389,
+        "occurrences": 1613
+      },
+      {
+        "token": "EFFECT_FLAG_IGNORE_IMMUNE",
+        "files": 631,
+        "occurrences": 663
+      },
+      {
+        "token": "EFFECT_FLAG_OATH",
+        "files": 363,
+        "occurrences": 395
+      },
+      {
+        "token": "EFFECT_FLAG_DAMAGE_CAL",
+        "files": 312,
+        "occurrences": 317
+      },
+      {
+        "token": "EFFECT_FLAG_SET_AVAILABLE",
+        "files": 245,
+        "occurrences": 265
+      },
+      {
+        "token": "EFFECT_FLAG2_CHECK_SIMULTANEOUS",
+        "files": 138,
+        "occurrences": 138
+      },
+      {
+        "token": "EFFECT_FLAG_COPY_INHERIT",
+        "files": 85,
+        "occurrences": 87
+      },
+      {
+        "token": "EFFECT_FLAG_OWNER_RELATE",
+        "files": 60,
+        "occurrences": 66
+      },
+      {
+        "token": "EFFECT_FLAG_NO_TURN_RESET",
+        "files": 58,
+        "occurrences": 58
+      },
+      {
+        "token": "EFFECT_FLAG_CANNOT_NEGATE",
+        "files": 56,
+        "occurrences": 57
+      },
+      {
+        "token": "EFFECT_FLAG_IGNORE_RANGE",
+        "files": 46,
+        "occurrences": 46
+      },
+      {
+        "token": "EFFECT_FLAG_SPSUM_PARAM",
+        "files": 33,
+        "occurrences": 33
+      },
+      {
+        "token": "EFFECT_FLAG_EVENT_PLAYER",
+        "files": 24,
+        "occurrences": 24
+      },
+      {
+        "token": "EFFECT_FLAG_BOTH_SIDE",
+        "files": 13,
+        "occurrences": 18
+      },
+      {
+        "token": "EFFECT_FLAG_CANNOT_INACTIVATE",
+        "files": 13,
+        "occurrences": 14
+      },
+      {
+        "token": "EFFECT_FLAG_REPEAT",
+        "files": 7,
+        "occurrences": 7
+      },
+      {
+        "token": "EFFECT_FLAG_LIMIT_ZONE",
+        "files": 5,
+        "occurrences": 5
+      },
+      {
+        "token": "EFFECT_CANNOT_DISABLE",
+        "files": 3,
+        "occurrences": 3
+      },
+      {
+        "token": "EFFECT_FLAG_CANNOT_NEGATE_ACTIV_EFF",
+        "files": 2,
+        "occurrences": 4
+      },
+      {
+        "token": "EFFECT",
+        "files": 1,
+        "occurrences": 1
+      },
+      {
+        "token": "EFFECT_FLAG_ABSOLUTE_TARGET",
+        "files": 1,
+        "occurrences": 1
+      }
+    ],
+    "SetRange": [
+      {
+        "token": "LOCATION_MZONE",
+        "files": 5596,
+        "occurrences": 7959
+      },
+      {
+        "token": "LOCATION_HAND",
+        "files": 2019,
+        "occurrences": 2082
+      },
+      {
+        "token": "LOCATION_GRAVE",
+        "files": 1802,
+        "occurrences": 1832
+      },
+      {
+        "token": "LOCATION_SZONE",
+        "files": 1305,
+        "occurrences": 2102
+      },
+      {
+        "token": "LOCATION_PZONE",
+        "files": 375,
+        "occurrences": 479
+      },
+      {
+        "token": "LOCATION_FZONE",
+        "files": 334,
+        "occurrences": 705
+      },
+      {
+        "token": "LOCATION_EXTRA",
+        "files": 75,
+        "occurrences": 75
+      },
+      {
+        "token": "LOCATION_REMOVED",
+        "files": 60,
+        "occurrences": 61
+      },
+      {
+        "token": "LOCATION_DECK",
+        "files": 33,
+        "occurrences": 33
+      },
+      {
+        "token": "LOCATION_EMZONE",
+        "files": 11,
+        "occurrences": 13
+      },
+      {
+        "token": "LOCATION_MMZONE",
+        "files": 6,
+        "occurrences": 6
+      },
+      {
+        "token": "LOCATION_STZONE",
+        "files": 3,
+        "occurrences": 8
+      },
+      {
+        "token": "LOCATION_ONFIELD",
+        "files": 3,
+        "occurrences": 4
+      },
+      {
+        "token": "LOCATION_ALL",
+        "files": 1,
+        "occurrences": 1
+      }
+    ],
+    "SetCountLimit": [
+      {
+        "token": "EFFECT_COUNT_CODE_OATH",
+        "files": 1122,
+        "occurrences": 1130
+      },
+      {
+        "token": "EFFECT_COUNT_CODE_DUEL",
+        "files": 60,
+        "occurrences": 64
+      },
+      {
+        "token": "EFFECT_COUNT_CODE_SINGLE",
+        "files": 57,
+        "occurrences": 75
+      },
+      {
+        "token": "EFFECT_COUNT_CODE_CHAIN",
+        "files": 46,
+        "occurrences": 47
+      }
+    ]
+  },
+  "effects_per_card": {
+    "files": 13541,
+    "total_effects": 34563,
+    "mean": 2.5525,
+    "max": 14,
+    "histogram": [
+      {
+        "effects": "0",
+        "files": 185
+      },
+      {
+        "effects": "1",
+        "files": 3252
+      },
+      {
+        "effects": "2",
+        "files": 3897
+      },
+      {
+        "effects": "3",
+        "files": 3191
+      },
+      {
+        "effects": "4",
+        "files": 1815
+      },
+      {
+        "effects": "5",
+        "files": 775
+      },
+      {
+        "effects": "6",
+        "files": 287
+      },
+      {
+        "effects": "7",
+        "files": 77
+      },
+      {
+        "effects": "8",
+        "files": 35
+      },
+      {
+        "effects": "9",
+        "files": 16
+      },
+      {
+        "effects": "10+",
+        "files": 11
+      }
+    ]
+  },
+  "duel_coverage": {
+    "files_total": 13541,
+    "files_with_zero_duel_calls": 597,
+    "files_with_duel_calls": 12944,
+    "distinct_duel_functions": 237,
+    "note": "pct_of_all_files counts files with zero Duel calls as covered (empty set is a subset of any top-N set); pct_of_files_with_duel_calls excludes them.",
+    "table": [
+      {
+        "N": 10,
+        "distinct_duel_functions_available": 10,
+        "covered_files": 1453,
+        "pct_of_all_files": 10.73,
+        "covered_files_with_duel_calls": 856,
+        "pct_of_files_with_duel_calls": 6.61
+      },
+      {
+        "N": 25,
+        "distinct_duel_functions_available": 25,
+        "covered_files": 3756,
+        "pct_of_all_files": 27.74,
+        "covered_files_with_duel_calls": 3159,
+        "pct_of_files_with_duel_calls": 24.41
+      },
+      {
+        "N": 50,
+        "distinct_duel_functions_available": 50,
+        "covered_files": 7476,
+        "pct_of_all_files": 55.21,
+        "covered_files_with_duel_calls": 6879,
+        "pct_of_files_with_duel_calls": 53.14
+      },
+      {
+        "N": 100,
+        "distinct_duel_functions_available": 100,
+        "covered_files": 11658,
+        "pct_of_all_files": 86.09,
+        "covered_files_with_duel_calls": 11061,
+        "pct_of_files_with_duel_calls": 85.45
+      },
+      {
+        "N": 150,
+        "distinct_duel_functions_available": 150,
+        "covered_files": 13067,
+        "pct_of_all_files": 96.5,
+        "covered_files_with_duel_calls": 12470,
+        "pct_of_files_with_duel_calls": 96.34
+      },
+      {
+        "N": 200,
+        "distinct_duel_functions_available": 200,
+        "covered_files": 13499,
+        "pct_of_all_files": 99.69,
+        "covered_files_with_duel_calls": 12902,
+        "pct_of_files_with_duel_calls": 99.68
+      },
+      {
+        "N": 300,
+        "distinct_duel_functions_available": 237,
+        "covered_files": 13541,
+        "pct_of_all_files": 100.0,
+        "covered_files_with_duel_calls": 12944,
+        "pct_of_files_with_duel_calls": 100.0
+      }
+    ]
+  }
+}
