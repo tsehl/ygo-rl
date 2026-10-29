@@ -18,11 +18,16 @@ W_QUICK = QuickEffect d'ygopro-core (priorité alternée, deux passes de suite f
 PhaseEvent (fenêtre de début/fin de phase). À la fermeture, s'il y a une chaîne elle se résout (du haut vers le
 bas), puis une nouvelle fenêtre s'ouvre pour le joueur du tour ; sinon on reprend selon `ret` (R_*).
 """
+import os
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 from jax import lax
+
+# cache de compilation persistant : on ne recompile pas à chaque lancement tant que le code ne change pas
+jax.config.update("jax_compilation_cache_dir", os.environ.get("YGO_JAX_CACHE", os.path.expanduser("~/.cache/ygo-jax")))
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
 
 # zones (= LOCATION_* d'ygopro-core)
 Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_GRAVE, Z_REMOVED, Z_EXTRA = 1, 2, 4, 8, 16, 32, 64
@@ -66,7 +71,9 @@ E = 2           # effets par carte
 P = 12          # instructions par programme
 R = 4           # registres ensembles
 NF = 4          # filtres par effet
-K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O = range(5)  # déclencheur obligatoire / optionnel
+KC = 24         # (carte, effet) candidats à l'activation testés par legal (main + terrain du joueur qui décide)
+K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK = range(6)  # déclencheur obligatoire / optionnel ;
+# K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng
 PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
@@ -107,10 +114,11 @@ class Bank(NamedTuple):
     filt: jnp.ndarray   # [C, E, NF, FW]
     etrig: jnp.ndarray  # [C, E] bits 1 << EV_* : activation seulement en réponse à ces événements (0 : libre)
     eopt: jnp.ndarray   # [C, E] une fois par tour et par nom (SetCountLimit(1, id))
+    erng: jnp.ndarray   # [C, E] zones d'où un effet rapide de monstre s'active (Z_HAND | Z_MZONE)
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
-              race=None):
+              race=None, erng=None):
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32),
@@ -118,7 +126,7 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 ctype=jnp.full(c, TYPE_MONSTER | TYPE_NORMAL, I32) if ctype is None else jnp.asarray(ctype, I32),
                 attr=i(attr, (c,)), race=i(race, (c,)),
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
-                etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)))
+                etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)))
 
 
 class State(NamedTuple):
@@ -358,20 +366,15 @@ def act_ok(bank, s, h, e, p):
             & ~((bank.eopt[cid, e] != 0) & name_in(s.opt_cid[p], cid)))
 
 
-def trig_cands(bank, s, stage):
-    """Déclencheurs activables à l'étape SEGOC `stage` (0/1 : obligatoires du joueur du tour / de l'adversaire,
-    2/3 : optionnels)."""
-    n = s.cid.shape[0]
-    p = jnp.where(stage % 2 == 0, s.tp, 1 - s.tp)
-    kind = jnp.where(stage < 2, K_TRIG_F, K_TRIG_O)
-    m = s.tg & (s.ctrl == p) & (bank.ekind[s.cid, s.tg_e] == kind)
-    return m & jax.vmap(lambda h: act_ok(bank, s, h, s.tg_e[h], p))(jnp.arange(n))
-
-
 def trig_next(bank, s):
     """Prochaine décision de mise en chaîne des déclencheurs (à partir de l'étape s.tst) ; s'il n'y en a plus,
     fenêtre de réponse (après la chaîne bâtie : l'adversaire du dernier maillon a la priorité)."""
-    avail = jnp.stack([trig_cands(bank, s, k).any() for k in range(4)]) & (jnp.arange(4) >= s.tst)
+    # étape SEGOC de chaque déclencheur en attente ; activabilité testée une seule fois pour les 4 étapes
+    stage = (s.ctrl != s.tp) + 2 * (bank.ekind[s.cid, s.tg_e] == K_TRIG_O)
+    hs = jnp.nonzero(s.tg, size=KC, fill_value=0)[0]
+    okc = jax.vmap(lambda h: act_ok(bank, s, h, s.tg_e[h], s.ctrl[h]))(hs) & (jnp.arange(KC) < s.tg.sum())
+    ok = s.tg & (jnp.zeros_like(s.seq).at[hs].add(okc.astype(I32)) > 0)
+    avail = (ok[None, :] & (stage[None, :] == jnp.arange(4)[:, None])).any(1) & (jnp.arange(4) >= s.tst)
     nxt = jnp.argmax(avail).astype(I32)
 
     def go(s):
@@ -520,11 +523,12 @@ def battle(bank, s, a, t):
 # ---------------------------------------------------------------- interpréteur d'effets
 
 def speed(bank, cid, e):
-    """Vitesse de sort : 1 (magie normale, ignition), 2 (jeu-rapide, piège), 3 (contre-piège)."""
+    """Vitesse de sort : 1 (magie normale, ignition), 2 (jeu-rapide, piège, effet rapide de monstre), 3 (contre-piège)."""
     ct = bank.ctype[cid]
     act = bank.ekind[cid, e] == K_ACTIVATE
     fast = ((ct & TYPE_TRAP) != 0) | ((ct & TYPE_QUICKPLAY) != 0)
-    return jnp.where(act & fast, jnp.where((ct & TYPE_COUNTER) != 0, 3, 2), 1).astype(I32)
+    quick = bank.ekind[cid, e] == K_QUICK
+    return jnp.where(act & fast, jnp.where((ct & TYPE_COUNTER) != 0, 3, 2), jnp.where(quick, 2, 1)).astype(I32)
 
 
 def filter_mask(bank, s, f, p, h):
@@ -563,10 +567,12 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
         return reg.at[ra].set(reg[rb] & (atk == atk.min())), ok
     branches[OP_MINATK] = minatk
     branches[OP_CHOOSE] = lambda: (reg.at[ra].set(reg[rb]), ok & (reg[rb].sum() >= (c & 15)))
-    branches[OP_COND_CHAIN] = lambda: (reg, ok & (k > 0) & (bank.ekind[lc, s.lk_eff[lk]] == K_ACTIVATE)
-                                       & ((bank.ctype[lc] & a) != 0))
-    branches[OP_CHAINCARD] = lambda: (reg.at[ra].set((jnp.arange(n) == s.lk_src[lk]) & (s.zone == Z_SZONE) & (k > 0)),
-                                      ok)
+    lkind = bank.ekind[lc, s.lk_eff[lk]]
+    lfield = (s.zone[jnp.maximum(s.lk_src[lk], 0)] & (Z_MZONE | Z_SZONE)) != 0
+    branches[OP_COND_CHAIN] = lambda: (reg, ok & (k > 0) & jnp.where(
+        b == 0, (lkind == K_ACTIVATE) & ((bank.ctype[lc] & a) != 0), lfield & (lkind != K_ACTIVATE)))
+    branches[OP_CHAINCARD] = lambda: (reg.at[ra].set((jnp.arange(n) == s.lk_src[lk]) & (k > 0)
+                                                     & ((s.zone & jnp.where(b == 0, Z_SZONE, b)) != 0)), ok)
     branches[OP_PAY_LP] = lambda: (reg, ok & (s.lp[p] >= a))
     evm = ((a >> jnp.arange(NEV)) & 1) != 0
     evb = ((b >> jnp.arange(NEV)) & 1) != 0
@@ -597,7 +603,6 @@ def begin_act(bank, s, c, e):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
     leave = bank.ekind[s.cid[c], e] == K_ACTIVATE
-    s = adjust(s)
     p = s.dec_player
     s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(bank.eopt[s.cid[c], e] != 0,
                                                           name_add(s.opt_cid[p], s.cid[c]), s.opt_cid[p])))
@@ -607,6 +612,7 @@ def begin_act(bank, s, c, e):
 
 
 def push_link(bank, s):
+    s = adjust(s)  # ygopro : break_effect après coût et cible (AddChain étape 8)
     k, src = s.n_chain, s.ch_src
     s = s._replace(lk_src=s.lk_src.at[k].set(s.ch_src), lk_eff=s.lk_eff.at[k].set(s.ch_eff),
                    lk_p=s.lk_p.at[k].set(s.ch_p), lk_reg=s.lk_reg.at[k].set(s.reg),
@@ -656,9 +662,11 @@ def exec_one(bank, s):
                         lambda s: s._replace(dec=_i(D_SELECT), dec_player=rel(p, (c >> 8) & 1), need=need, picks=_i(0)),
                         lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
-    def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer) ou la main du propriétaire
-        return adv(lax.cond(b == Z_HAND, lambda s: group_send(s, s.reg[ra], Z_HAND, P_HAND),
-                            lambda s: group_to_grave(s, s.reg[ra]), s))
+    def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer), la main du propriétaire ou les bannies
+        return adv(lax.switch(jnp.where(b == Z_HAND, 1, jnp.where(b == Z_REMOVED, 2, 0)),
+                              [lambda s: group_to_grave(s, s.reg[ra]),
+                               lambda s: group_send(s, s.reg[ra], Z_HAND, P_HAND),
+                               lambda s: group_send(s, s.reg[ra], Z_REMOVED, P_GRAVE)], s))
 
     def spsummon(s):
         return lax.cond(s.reg[ra].any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
@@ -735,20 +743,28 @@ def legal(bank, s):
     top_spd = jnp.where(s.n_chain > 0, speed(bank, s.cid[jnp.maximum(s.lk_src[top], 0)], s.lk_eff[top]), 0)
     evb = ev_bits(s)
     tkind = jnp.where(s.tst < 2, K_TRIG_F, K_TRIG_O)
+    cand = []
     for e in range(E):
         kind = bank.ekind[s.cid, e]
         trig = bank.etrig[s.cid, e]
         act = kind == K_ACTIVATE
+        rng = bank.erng[s.cid, e]
+        qm = (kind == K_QUICK) & ((in_hand & ((rng & Z_HAND) != 0)) | (faceup_mon & ((rng & Z_MZONE) != 0)))
         where = ((idle & spell & ~quick & act & (from_hand | set_st))
+                 | ((idle | fast) & qm)
                  | ((idle | fast) & quick & act & ((from_hand & (p == s.tp)) | ready))
                  | ((idle | fast) & trap & act & ready)
                  | (idle & faceup_mon & (kind == K_IGNITION)))
         where &= speed(bank, s.cid, e) >= top_spd
         where &= (trig == 0) | ((trig & evb) != 0)
         where |= trig_w & mine & s.tg & (s.tg_e == e) & (kind == tkind)  # déclencheurs de l'étape SEGOC en cours
-        ok = jax.vmap(lambda h: act_ok(bank, s, h, e, p))(jnp.arange(n))
-        verbs.append(where & ok)
-    verbs = jnp.stack(verbs)
+        cand.append(where)
+    # coût + cible testés seulement sur les KC premiers candidats (sinon N × programmes × N : quadratique sous vmap)
+    cand = jnp.stack(cand)
+    ce, ch = jnp.nonzero(cand, size=KC, fill_value=0)
+    okc = jax.vmap(lambda h, e: act_ok(bank, s, h, e, p))(ch, ce) & (jnp.arange(KC) < cand.sum())
+    ok = jnp.zeros((E, n), I32).at[ce, ch].add(okc.astype(I32)) > 0
+    verbs = jnp.concatenate([jnp.stack(verbs), cand & ok])
     sp = jnp.zeros(N_SPECIAL, bool)
     sp = sp.at[A_TO_BP].set(idle & (s.phase == PH_MAIN1) & (s.turn > 1))
     sp = sp.at[A_TO_M2].set(bat)
@@ -833,7 +849,8 @@ def apply(bank, s, a):
         s = s._replace(ch_eff=_i(e))
         from_hand = lambda s: s._replace(pend=c, zctx=_i(ZC_ACT), dec=_i(D_ZONE))
         flip = lambda s: begin_act(bank, s._replace(pos=s.pos.at[c].set(P_SFU)), c, e)
-        return lax.switch(jnp.where(s.zone[c] == Z_HAND, 0, jnp.where(s.zone[c] == Z_SZONE, 1, 2)),
+        card = bank.ekind[s.cid[c], e] == K_ACTIVATE  # activation de carte (pas un effet de monstre)
+        return lax.switch(jnp.where(card & (s.zone[c] == Z_HAND), 0, jnp.where(card & (s.zone[c] == Z_SZONE), 1, 2)),
                           [from_hand, flip, lambda s: begin_act(bank, s, c, e)], s)
 
     def zone(s):
@@ -891,19 +908,25 @@ def forced(bank, s):
     return jnp.where((k == 1) | (sel & (k > 0) & (k <= s.need)), jnp.argmax(m), -1).astype(I32)
 
 
-def step(bank, s, a):
-    """Applique a, puis exécute les effets et joue automatiquement les décisions à option unique."""
-    def cond(carry):
-        s, a, i = carry
-        return ((a >= 0) | (s.dec == D_RUN)) & ~s.done & (i < MAX_ITER)
+def run(bank, s):
+    """Exécute les effets (D_RUN) jusqu'au prochain choix."""
+    def body(carry):
+        s, i = carry
+        return exec_one(bank, s), i + 1
+    return lax.while_loop(lambda c: (c[0].dec == D_RUN) & ~c[0].done & (c[1] < MAX_ITER), body, (s, _i(0)))[0]
 
+
+def step(bank, s, a):
+    """Applique a, puis exécute les effets et joue automatiquement les décisions à option unique.
+    Deux boucles : sous vmap, un lax.cond calcule ses deux branches, donc legal (coûteux) n'est évalué qu'aux points
+    de décision, pas à chaque instruction exécutée."""
     def body(carry):
         s, a, i = carry
-        s = lax.cond(s.dec == D_RUN, lambda s: exec_one(bank, s), lambda s: apply(bank, s, a), s)
-        nxt = lax.cond(s.dec == D_RUN, lambda s: _i(-1), lambda s: forced(bank, s), s)
-        return s, nxt, i + 1
+        s = run(bank, apply(bank, s, a))
+        return s, forced(bank, s), i + 1
 
-    s, _, _ = lax.while_loop(cond, body, (s, _i(a), _i(0)))
+    s = run(bank, s)
+    s, _, _ = lax.while_loop(lambda c: (c[1] >= 0) & ~c[0].done & (c[2] < MAX_ITER), body, (s, _i(a), _i(0)))
     return s
 
 

@@ -19,7 +19,7 @@ from core import I32, NV
 
 T = 48
 ST_PUBLIC = core.ST_SUMMON_TURN | core.ST_ATTACKED | core.ST_FORM_CHANGED | core.ST_SET_TURN | core.ST_LEAVE
-ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, core.Z_REMOVED: 4}
+ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, core.Z_REMOVED: 4, core.Z_DECK: 5}
 
 
 class Obs(NamedTuple):
@@ -55,9 +55,6 @@ def observe(bank, s, p=None):
     faceup = (s.pos & (core.P_FU_ATK | core.P_FU_DEF)) != 0
     field = (s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)
     public = (s.zone == core.Z_GRAVE) | (s.zone == core.Z_REMOVED)
-    shown = (mine & (s.zone == core.Z_HAND)) | field | public
-    known = shown & ((mine & ((s.zone == core.Z_HAND) | field)) | (field & faceup) | public)
-
     m = core.legal(bank, s)
     act_slot = m[:NV * n].reshape(NV, n).T            # [N, NV]
     acted = act_slot.any(1)
@@ -65,11 +62,16 @@ def observe(bank, s, p=None):
     acted = acted & (s.dec_player == p)
     act_slot = act_slot & (s.dec_player == p)
 
+    # une carte que p peut choisir lui est montrée (recherche dans son deck), mais pas sa place dans le deck
+    deck = s.zone == core.Z_DECK
+    shown = (mine & (s.zone == core.Z_HAND)) | field | public | acted
+    known = shown & ((mine & ((s.zone == core.Z_HAND) | field | deck)) | (field & faceup) | public)
+
     zrank = jnp.zeros(n, I32)
     for z, r in ZONE_RANK.items():
         zrank = jnp.where(s.zone == z, r, zrank)
     cls = jnp.where(acted, 0, jnp.where(public, 2, 1))
-    seqkey = jnp.where(public, 999 - s.seq, s.seq)
+    seqkey = jnp.where(public, 999 - s.seq, jnp.where(deck, s.cid, s.seq))
     score = cls * 1_000_000 + (~mine) * 100_000 + zrank * 1_000 + seqkey
     score = jnp.where(shown, score, 10_000_000)
     _, idx = jax.lax.top_k(-score, T)                 # ordre fixé par des informations visibles uniquement
@@ -92,7 +94,7 @@ def observe(bank, s, p=None):
     ]).astype(I32)
     zero = lambda x: jnp.where(kn, x, 0)
     return Obs(valid=valid, known=kn, cid=jnp.where(kn, c, -1), atk=zero(bank.atk[c]), df=zero(bank.df[c]),
-               level=zero(bank.level[c]), zone=jnp.where(valid, s.zone[idx], 0), seq=jnp.where(valid, s.seq[idx], 0),
+               level=zero(bank.level[c]), zone=jnp.where(valid, s.zone[idx], 0), seq=jnp.where(valid & ~deck[idx], s.seq[idx], 0),
                mine=mine[idx] & valid, pos=jnp.where(valid, s.pos[idx], 0),
                st=jnp.where(valid, (s.st[idx] & ST_PUBLIC) | own_sel, 0), pending=pend,
                chain=jnp.where(valid, link[idx], 0), negated=neg[idx] & valid,

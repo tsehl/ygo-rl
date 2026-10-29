@@ -133,7 +133,7 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
   - CHOOSE avec min = max seulement ;
   - MOVE vers le cimetière seulement ;
   - pas de pièges ni d'effets déclenchés ;
-  - `legal` évalue `test_ok` sur toutes les cartes (vmap), ce qui coûte cher. Optimisation reportée.
+  - `legal` évaluait `test_ok` sur toutes les cartes (vmap), ce qui coûtait cher. Corrigé au jalon 3b (compaction en KC candidats, voir plus bas).
 
 **Jalon 3a : chaînes, pièges et jeux-rapides, fenêtres de priorité (2026-10-29).**
 - Cartes ajoutées : Jar of Greed et Just Desserts (pièges), Mystical Space Typhoon (jeu-rapide), Magic Jammer (contre-piège, coût : défausser 1) et Seven Tools of the Bandit (contre-piège, coût : 1000 LP). Les deux derniers nient l'activation d'une magie ou d'un piège et détruisent la carte.
@@ -154,3 +154,35 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
   - pas d'effets rapides de monstre ;
   - CHOOSE avec min = max seulement ;
   - les cibles des maillons ne sont pas dans l'observation.
+
+**Jalon 3b fait : effets déclenchés, SEGOC, effets rapides de monstre (2026-10-29).**
+- Volet 1, pièges sur événement : Trap Hole, Torrential Tribute, Sakuretsu Armor, Mirror Force. Les événements (invocation, déclaration d'attaque…) sont accumulés puis exposés au point d'événement suivant, où les pièges peuvent répondre. 10/10 parties « chain » identiques (graines 500-509), puis 60/60 avec le volet 2 en place (graines 1200-1259). Bug trouvé en route : OP_EVENT lisait le masque d'événement dans le mauvais champ de l'instruction.
+- Volet 2, effets déclenchés de monstre : Sangan, Witch of the Black Forest (envoyés au cimetière), Man-Eater Bug (retournement), Mystic Tomato (détruit au combat). Nouveaux genres d'effet : déclencheur obligatoire et déclencheur optionnel.
+  - Événements : envoi au cimetière, destruction au combat, retournement. Chaque carte garde sa zone précédente (`pzone`) pour les conditions du type « envoyée du terrain au cimetière ».
+  - Point d'événement (fin de chaîne, invocation, pose, changement de position, étapes du damage step) : les déclencheurs en attente sont collectés, puis mis en chaîne dans l'ordre SEGOC de l'OCG : obligatoires du joueur du tour, obligatoires de l'adversaire, optionnels du joueur du tour, optionnels de l'adversaire. La fenêtre rapide s'ouvre ensuite, ou se rouvre telle qu'elle était si personne n'a rien activé.
+  - Damage step découpé comme dans ygopro-core : calcul des dégâts, fenêtre avec les déclencheurs de retournement, puis envoi au cimetière des monstres détruits au combat et deuxième fenêtre avec les déclencheurs « détruit au combat ». Un monstre détruit au combat reste sur le terrain jusque-là mais ne peut plus être ciblé (`is_capable_be_effect_target`).
+  - Nouveaux opcodes : COND_SELF (condition sur la zone actuelle et précédente de la carte source), LOCK. Une fois par tour par nom (`opt`). CHOOSE accepte « jusqu'à n » (min < max), MOVE vers la main, filtres sur la DEF et l'attribut.
+  - Défaite par deck vide différée : elle tombe au `break_effect` qui suit le coût et la cible d'une activation, pas au début de l'activation.
+- Limites connues :
+  - « manquer le timing » n'est pas modélisé : ygopro efface les déclencheurs optionnels sans EFFECT_FLAG_DELAY quand l'événement n'est pas la dernière chose arrivée. Les quatre cartes du volet sont toutes sûres de ce point de vue ;
+  - pas de mélange du deck après une recherche (l'oracle tourne en DUEL_PSEUDO_SHUFFLE). Pour l'entraînement, il faudra une clé RNG dans l'état ;
+  - la condition d'un déclencheur n'est évaluée qu'au point d'événement ;
+  - verrous et « une fois par tour » remis à zéro au début de chaque tour ;
+  - pas de déclencheurs de terrain (EFFECT_TYPE_FIELD : « quand un monstre adverse… ») ;
+  - un monstre détruit au combat est exclu de toutes les sélections, alors que ygopro ne l'exclut que des sélections avec ciblage. La différence ne compte que pour un effet sans cible résolu pendant le damage step ;
+  - le harness suppose que l'effet déclenché d'une carte est son effet 0.
+- Volet 3, effets rapides de monstre : D.D. Crow (depuis la main, bannit une carte du cimetière adverse), Ghost Ogre & Snow Rabbit (depuis la main ou le terrain, détruit la carte dont l'effet est activé sur le terrain), Winged Rhynos (retourne en main en réponse à un piège).
+  - Nouveau genre d'effet K_QUICK (vitesse 2), avec ses zones d'activation (`erng` : main et/ou zone monstres recto). COND_CHAIN accepte « le maillon précédent est un effet d'une carte sur le terrain », CHAINCARD une zone quelconque, MOVE envoie aussi vers les bannies.
+  - Bug trouvé en route : toute activation depuis la main passait par le choix d'une case magie/piège. Seules les activations de carte y passent maintenant.
+- Comparaison avec l'oracle (code final) : trig 100/100 (graines 1000-1099), quick 80/80 (1600-1679 : 20 normaux, 9 effets rapides, 11 autres), chain 60/60, mixed 60/60, normal 40/40. Couverture du volet 3 : D.D. Crow activé 394 fois, Ghost Ogre 36 (main et terrain), Winged Rhynos 56. Les modes autres que quick excluent les effets rapides, pour que les anciennes graines rejouent les mêmes decks.
+
+**Moteur sous vmap : premières corrections de coût (2026-10-29).** `vmap_check` (16 parties en lot de 400 pas, CPU Colab, un cœur) prenait 420 s de compilation et plus d'une heure d'exécution.
+- `legal` testait coût et cible (`test_ok`) pour chaque carte et chaque effet. Sous vmap, chaque instruction calcule ses 22 branches, dont plusieurs en O(N) : le tout était quadratique en N. Désormais on compacte les (carte, effet) candidats en KC = 24 cases (`jnp.nonzero(size=KC)`) et on ne teste qu'elles. Même chose pour les déclencheurs, testés une seule fois pour les 4 étapes SEGOC au lieu de 4.
+- `step` est découpé en deux boucles : `run` exécute les effets sans évaluer `legal`, qui n'est calculé qu'aux points de décision. Avant, un lax.cond le recalculait à chaque instruction (sous vmap, un cond calcule ses deux branches).
+- Cache de compilation persistant de JAX (`~/.cache/ygo-jax`, ou la variable YGO_JAX_CACHE).
+- Résultat : compilation 241 s, exécution 700 s, lot identique aux parties jouées une par une. Ce sont des chiffres CPU. La vitesse réelle se mesurera sur GPU.
+- Fuite mémoire du harness, corrigée : `new_game` appelé hors jit recompilait `step` à chaque partie (lax.cond sur une lambda neuve), soit environ 1,1 Go de plus par partie. `compare.py` l'appelle maintenant via un `jax.jit` unique. Une partie passe de 25 s à 6 s sur Colab.
+- Observation : les recherches dans le deck rendaient légal le choix d'une carte que l'observation ne montrait pas (`obs_check` : 34 états sur 8347). Une carte que le joueur peut choisir lui est maintenant montrée, sans sa place dans le deck (tri par identifiant). Pendant une recherche, le test d'invariance considère tout le deck du joueur comme visible. `obs_check` passe : 8347 états, 800 observations invariantes.
+- Pistes suivantes, à décider après une mesure sur GPU :
+  - les exécutions d'effets (`exec_one`) calculent encore, sous vmap, toutes les branches de fin de chaîne et de déclencheurs ;
+  - la boucle de `step` attend la partie la plus lente du lot. L'alternative : une micro-étape par appel, l'enveloppe RL n'interrogeant le réseau qu'aux vraies décisions.

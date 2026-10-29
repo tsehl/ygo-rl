@@ -60,10 +60,16 @@ rng = np.random.default_rng(0)
 FIELDS = [f for f in O.Obs._fields if f != "slot"]
 
 
+legal_j = jax.jit(lambda s: core.legal(bank, s))
+
+
 def perturb(s, p):
     s = jax.tree.map(np.array, s)
     faceup = (s.pos & (core.P_FU_ATK | core.P_FU_DEF)) != 0
-    hidden = ((s.zone == core.Z_DECK)
+    # pendant une recherche dans son deck, p voit tout son deck
+    search = (int(s.dec_player) == p) & np.asarray(legal_j(core.State(*[jnp.asarray(x) for x in s]))[:core.NV * N]
+                                                    .reshape(core.NV, N).any(0) & (s.zone == core.Z_DECK)).any()
+    hidden = (((s.zone == core.Z_DECK) & ~(search & (s.ctrl == p)))
               | ((s.zone == core.Z_HAND) & (s.ctrl != p))
               | (((s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)) & (s.ctrl != p) & ~faceup))
     h = np.where(hidden)[0]

@@ -131,6 +131,8 @@ def resync_hand(s, so, players):
 
 BANK_CODE = None
 COVER = collections.Counter()  # options jouées (activations par carte, poses, mélanges…)
+# compilé une fois : appelé hors jit, le lax.cond final de new_game recompilerait step à chaque partie (fuite mémoire)
+NEW_GAME = jax.jit(core.new_game)
 
 
 def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None):
@@ -139,28 +141,37 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     rng = random.Random(seed)
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
+    # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
+    base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK]
     if mode == "chain":
         fast = list(cards.ST_TYPES)
-        decks = [[rng.choice(pool) for _ in range(22)] + [rng.choice(list(cards.CARDS)) for _ in range(6)]
+        decks = [[rng.choice(pool) for _ in range(22)] + [rng.choice(base) for _ in range(6)]
                  + [rng.choice(fast) for _ in range(12)] for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
     elif mode == "trig":
         trig = [c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O)]
-        other = [c for c in cards.CARDS if c not in trig]
+        other = [c for c in base if c not in trig]
         decks = [[rng.choice(pool) for _ in range(20)] + [rng.choice(trig) for _ in range(10)]
                  + [rng.choice(other) for _ in range(10)] for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
+    elif mode == "quick":
+        qk = [c for c, effs in cards.CARDS.items() if effs[0][0] == core.K_QUICK]
+        other = [c for c in cards.CARDS if c not in qk]
+        decks = [[rng.choice(pool) for _ in range(20)] + [rng.choice(qk) for _ in range(9)]
+                 + [rng.choice(other) for _ in range(11)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
     elif mode == "mixed":
-        decks = [[rng.choice(pool) for _ in range(28)] + [rng.choice(list(cards.CARDS)) for _ in range(12)]
+        decks = [[rng.choice(pool) for _ in range(28)] + [rng.choice(base) for _ in range(12)]
                  for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
     else:
         decks = [[rng.choice(pool) for _ in range(D)] for _ in range(2)]
     duel = driver.Duel(db, decks[0], decks[1], seed=seed)
-    s = core.new_game(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]))
+    s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]))
     ndec = 0
     try:
         while True:
@@ -185,7 +196,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             sj = jax_snapshot(bank, s)
             diff = [k for k in so if so[k] != sj[k]]
             if diff:
-                raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff))
+                raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff)
+                               + f" | jax légales {np.where(np.asarray(legal(bank, s)))[0].tolist()}")
             idx = filtered(dec)
             seqs = {i: translate(dec, dec.options[i], s) for i in idx}
             m = np.asarray(legal(bank, s))

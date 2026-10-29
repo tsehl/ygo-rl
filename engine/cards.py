@@ -11,7 +11,8 @@ from core import (BIG, E, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMO
                   K_IGNITION, NF, OP_CHAINCARD, OP_CHOOSE, OP_COND_CHAIN, OP_DAMAGE, OP_DRAW,
                   OP_FILTER, OP_MINATK, OP_MOVE, OP_NEGATE, OP_PAY_LP, OP_RECOVER, OP_REQ, OP_REQ_FREE, OP_SELF,
                   OP_SHUFFLE_HAND, OP_SPSUMMON, P, P_FACEUP, P_FU_ATK, P_FU_DEF, TYPE_COUNTER, TYPE_MONSTER,
-                  P_FD_ATK, TYPE_QUICKPLAY, TYPE_SPELL, TYPE_TRAP, Z_DECK, Z_GRAVE, Z_HAND, Z_MZONE, Z_SZONE)
+                  P_FD_ATK, TYPE_QUICKPLAY, TYPE_SPELL, TYPE_TRAP, Z_DECK, Z_GRAVE, Z_HAND, Z_MZONE, Z_SZONE,
+                  K_QUICK, Z_REMOVED)
 
 ME, OPP = 0, 1
 
@@ -34,7 +35,8 @@ def DAMAGE(who, n, per=None): return (OP_DAMAGE, who, n, 0 if per is None else p
 def RECOVER(who, n): return (OP_RECOVER, who, n, 0)
 def SHUFFLE_HAND(who): return (OP_SHUFFLE_HAND, who, 0, 0)
 def COND_CHAIN(typ): return (OP_COND_CHAIN, typ, 0, 0)  # le maillon précédent est une activation de carte typ
-def CHAINCARD(r): return (OP_CHAINCARD, r, 0, 0)       # sa carte, si elle est toujours sur le terrain
+def COND_CHAIN_FIELD(): return (OP_COND_CHAIN, 0, 1, 0)  # … est un effet (pas une activation de carte) d'une carte sur le terrain
+def CHAINCARD(r, zone=0): return (OP_CHAINCARD, r, zone, 0)  # sa carte, si elle est toujours dans zone (0 : magie/piège)
 def NEGATE(): return (OP_NEGATE, 0, 0, 0)               # nie son activation
 def PAY_LP(n): return (OP_PAY_LP, n, 0, 0)
 def EVENT(r, ev): return (OP_EVENT, r, ev, 0)            # cartes concernées par les événements ev (masque)
@@ -48,18 +50,24 @@ def ev(*codes):
     return sum(1 << c for c in codes)
 
 
+# effet = (genre, on, opt, rng, coût, cible, résolution)
 def act(cost=(), target=(), resolve=(), on=0):
     """on : masque d'événements (ev(...)) ; 0 = activation libre."""
-    return (K_ACTIVATE, on, 0, cost, target, resolve)
+    return (K_ACTIVATE, on, 0, 0, cost, target, resolve)
 
 
 def ignition(cost=(), target=(), resolve=()):
-    return (K_IGNITION, 0, 0, cost, target, resolve)
+    return (K_IGNITION, 0, 0, 0, cost, target, resolve)
 
 
 def trigger(on, cost=(), target=(), resolve=(), optional=False, opt=False):
     """Effet déclenché (SINGLE) par les événements `on` qui concernent la carte ; opt : une fois par tour (nom)."""
-    return (K_TRIG_O if optional else K_TRIG_F, on, int(opt), cost, target, resolve)
+    return (K_TRIG_O if optional else K_TRIG_F, on, int(opt), 0, cost, target, resolve)
+
+
+def quick(rng, cost=(), target=(), resolve=(), opt=False):
+    """Effet rapide de monstre (vitesse 2) activable depuis les zones rng (main, zone monstres recto)."""
+    return (K_QUICK, 0, int(opt), rng, cost, target, resolve)
 
 
 MY_DECK = F(me=Z_DECK)
@@ -125,6 +133,13 @@ CARDS = {
                        target=[COND_SELF(zone=Z_GRAVE), REQ_FREE(ME, Z_MZONE, 1), FILTER(0, DECK_DARK1500), REQ(0, 1)],
                        resolve=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, DECK_DARK1500), CHOOSE(1, 0, 1, upto=True),
                                 SPSUMMON(1, P_FU_ATK)])],
+    # jalon 3b, volet 3 : effets rapides de monstre
+    24508238: [quick(Z_HAND, cost=[SELF(0), MOVE(0)],                                                       # D.D. Crow
+                     target=[FILTER(1, F(op=Z_GRAVE)), CHOOSE(2, 1, 1)], resolve=[MOVE(2, Z_REMOVED)])],
+    59438930: [quick(Z_HAND | Z_MZONE, opt=True, cost=[COND_CHAIN_FIELD(), SELF(0), MOVE(0)],      # Ghost Ogre & Snow Rabbit
+                     target=[CHAINCARD(1, ONFIELD)], resolve=[MOVE(1)])],
+    18430390: [quick(Z_MZONE, cost=[COND_CHAIN(TYPE_TRAP)],                                                  # Winged Rhynos
+                     resolve=[SELF(0), FILTER(0, F(me=Z_MZONE, pos=P_FACEUP), within=0), MOVE(0, Z_HAND)])],
 }
 
 
@@ -136,11 +151,13 @@ def assemble(codes, cards=CARDS):
     filt = np.zeros((c, E, NF, FW), np.int32)
     etrig = np.zeros((c, E), np.int32)
     eopt = np.zeros((c, E), np.int32)
+    erng = np.zeros((c, E), np.int32)
     for i, code in enumerate(codes):
-        for e, (kind, on, opt, *progs) in enumerate(cards.get(code, ())):
+        for e, (kind, on, opt, rng, *progs) in enumerate(cards.get(code, ())):
             ekind[i, e] = kind
             etrig[i, e] = on
             eopt[i, e] = opt
+            erng[i, e] = rng
             fl = []
             for g, pr in enumerate(progs):
                 assert len(pr) < P, (code, g)  # toujours au moins un OP_END
@@ -153,7 +170,7 @@ def assemble(codes, cards=CARDS):
             assert len(fl) <= NF, code
             for j, f in enumerate(fl):
                 filt[i, e, j] = f
-    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt)
+    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng)
 
 
 # types / stats des cartes ci-dessus (pour les bancs de test sans base de données)
@@ -163,7 +180,9 @@ ST_TYPES = {5318639: TYPE_SPELL | TYPE_QUICKPLAY, 83968380: TYPE_TRAP, 24068492:
             4206964: TYPE_TRAP, 53582587: TYPE_TRAP, 56120475: TYPE_TRAP, 44095762: TYPE_TRAP}
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
-                   54652250: (450, 600, 2), 83011277: (1400, 1100, 4)}     # Man-Eater Bug, Mystic Tomato
+                   54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
+                   24508238: (100, 100, 1), 59438930: (0, 1800, 3),        # D.D. Crow, Ghost Ogre & Snow Rabbit
+                   18430390: (1800, 500, 4)}                               # Winged Rhynos
 
 
 def test_bank(key, c):
