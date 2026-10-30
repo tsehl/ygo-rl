@@ -2,12 +2,13 @@
 
 Decks : 40 monstres normaux, ou (mode « mixed ») 28 monstres normaux + 12 cartes à effet de `cards.CARDS`, ou
 (mode « chain ») 22 monstres normaux + 18 cartes à effet dont beaucoup de pièges / jeu-rapide (longues chaînes), ou
-(mode « trig ») 20 monstres normaux + 10 monstres à effet déclenché + 10 autres cartes à effet.
+(mode « trig ») 20 monstres normaux + 10 monstres à effet déclenché + 10 autres cartes à effet, ou (mode « cont »)
+les cartes du jalon 4 (archétypes, effets continus, modificateurs temporaires) avec des E-HERO et des Dark Magician.
 
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont]
 """
 import os
 import collections
@@ -41,13 +42,13 @@ def make_bank(db, codes):
     r = [db.rows[c] for c in codes]
     bank = core.make_bank(np.array(codes), [x[4] for x in r], [x[5] for x in r], [x[6] & 0xFF for x in r],
                           ctype=[x[3] for x in r], race=[x[7] for x in r], attr=[x[8] for x in r],
-                          **cards.assemble(codes))
+                          setcode=[cards.setcodes(x[2]) for x in r], **cards.assemble(codes))
     return bank, {c: i for i, c in enumerate(codes)}
 
 
 def jax_snapshot(bank, s):
     s = jax.tree.map(np.asarray, s)
-    code, atk, df = (np.asarray(x)[s.cid] for x in (bank.code, bank.atk, bank.df))
+    code, atk, df = np.asarray(bank.code)[s.cid], s.atk_c, s.df_c
     out = dict(lp=tuple(int(x) for x in s.lp), turn=int(s.turn), turn_player=int(s.tp), phase=int(s.phase))
     for p in (0, 1):
         for name, z in ZNAME.items():
@@ -142,7 +143,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK]
+    base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in cards.J4]
     if mode == "chain":
         fast = list(cards.ST_TYPES)
         decks = [[rng.choice(pool) for _ in range(22)] + [rng.choice(base) for _ in range(6)]
@@ -150,7 +151,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         for d in decks:
             rng.shuffle(d)
     elif mode == "trig":
-        trig = [c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O)]
+        trig = [c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O) and c not in cards.J4]
         other = [c for c in base if c not in trig]
         decks = [[rng.choice(pool) for _ in range(20)] + [rng.choice(trig) for _ in range(10)]
                  + [rng.choice(other) for _ in range(10)] for _ in range(2)]
@@ -158,9 +159,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             rng.shuffle(d)
     elif mode == "quick":
         qk = [c for c, effs in cards.CARDS.items() if effs[0][0] == core.K_QUICK]
-        other = [c for c in cards.CARDS if c not in qk]
+        other = [c for c in cards.CARDS if c not in qk and c not in cards.J4]
         decks = [[rng.choice(pool) for _ in range(20)] + [rng.choice(qk) for _ in range(9)]
                  + [rng.choice(other) for _ in range(11)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+    elif mode == "cont":
+        heroes = [c for c in pool if any(sc == cards.SET_ELEMENTAL_HERO for sc in cards.setcodes(db.rows[c][2]))]
+        j4 = sorted(cards.J4)
+        decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(heroes) for _ in range(5)]
+                 + [cards.DARK_MAGICIAN] * 2 + [rng.choice(j4) for _ in range(13)] + [rng.choice(base) for _ in range(6)]
+                 for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
     elif mode == "mixed":
@@ -193,6 +202,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             if shuffled:
                 COVER["shuffle_hand"] += 1
                 s = resync_hand(s, so, shuffled)
+            if int(s.ovf):
+                raise Mismatch(f"débordement des tables du moteur (ovf={int(s.ovf)})")
             sj = jax_snapshot(bank, s)
             diff = [k for k in so if so[k] != sj[k]]
             if diff:

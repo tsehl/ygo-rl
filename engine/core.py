@@ -1,4 +1,4 @@
-"""Moteur JAX, jalon 3a : monstres normaux, magies (normales, jeu-rapide), pièges (normaux, contre-pièges),
+"""Moteur JAX, jalons 1-4 : monstres normaux, magies (normales, jeu-rapide, continues), pièges (normaux, contre-pièges),
 effets d'ignition, chaînes et fenêtres de réponse (règles MR5).
 
 État en struct-of-arrays (une partie = N slots de cartes). `step(bank, s, a)` applique l'action puis avance
@@ -38,11 +38,12 @@ P_SFU, P_SFD = 5, 10  # magie/piège recto (POS_FACEUP) / verso (POS_FACEDOWN)
 P_FACEUP = P_FU_ATK | P_FU_DEF
 # types (= TYPE_*)
 TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL = 1, 2, 4, 0x10
-TYPE_QUICKPLAY, TYPE_COUNTER = 0x10000, 0x100000
+TYPE_QUICKPLAY, TYPE_CONTINUOUS, TYPE_COUNTER = 0x10000, 0x20000, 0x100000
 # statuts (bits)
 ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : choisie dans la sélection en cours
 ST_SET_TURN, ST_LEAVE = 16, 32  # posée ce tour (magie/piège) ; activée, ira au cimetière en fin de chaîne
 ST_BDES = 64  # détruite au combat, part au cimetière à la fin du damage step (si elle est encore sur le terrain)
+ST_ON = 128  # magie/piège continue résolue : ses effets continus s'appliquent (STATUS_EFFECT_ENABLED)
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN
 # phases (= PHASE_* d'ygopro-core, telles que vues aux décisions)
 PH_DRAW, PH_STANDBY, PH_MAIN1, PH_BATTLE, PH_MAIN2, PH_END = 0x1, 0x2, 0x4, 0x8, 0x100, 0x200
@@ -74,17 +75,28 @@ PT = 6          # instructions testées par programme de coût / cible (test_ok)
 R = 4           # registres ensembles
 NF = 4          # filtres par effet
 KC = 24         # (carte, effet) candidats à l'activation testés par legal (main + terrain du joueur qui décide)
-K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK = range(6)  # déclencheur obligatoire / optionnel ;
-# K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng
+K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK, K_CONT = range(7)  # déclencheur obligatoire / optionnel ;
+# K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng ; K_CONT : effet continu, appliqué
+# tant que sa carte est recto dans les zones erng (et résolue, pour une magie/piège)
 PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
- OP_COND_EVP, OP_COND_SELF, OP_LOCK) = range(22)
-N_OPS = 22
+ OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY) = range(23)
+N_OPS = 23
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
-F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR = range(10)
-FW = 10
+F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
+    F_CODE1, F_CODE2 = range(14)
+FW = 14
+NSET = 4  # archétypes (setcode 16 bits) par carte
+# modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
+MC_NONE, MC_ATK, MC_DEF, MC_BASE_ATK = range(4)  # UPDATE_ATTACK, UPDATE_DEFENSE, SET_BASE_ATTACK
+# champs de emod : code, la carte elle-même (SINGLE_RANGE) ou le filtre 0 (FIELD), valeur, × nombre de cartes du
+# filtre 1, condition : joueur du tour (1 : moi, 2 : adversaire), phases (masque PH_*, 0 : toutes)
+M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH = range(6)
+MW = 6
+KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
+TM = 16         # modificateurs temporaires par tour
 BIG = 1 << 20
 
 # actions : verbe × slot, puis actions spéciales
@@ -116,11 +128,13 @@ class Bank(NamedTuple):
     filt: jnp.ndarray   # [C, E, NF, FW]
     etrig: jnp.ndarray  # [C, E] bits 1 << EV_* : activation seulement en réponse à ces événements (0 : libre)
     eopt: jnp.ndarray   # [C, E] une fois par tour et par nom (SetCountLimit(1, id))
-    erng: jnp.ndarray   # [C, E] zones d'où un effet rapide de monstre s'active (Z_HAND | Z_MZONE)
+    erng: jnp.ndarray   # [C, E] zones d'où un effet rapide de monstre s'active (Z_HAND | Z_MZONE) ; zones d'un effet continu
+    setcode: jnp.ndarray  # [C, NSET] archétypes (0 : aucun)
+    emod: jnp.ndarray   # [C, E, MW] effet continu (K_CONT) : M_*
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
-              race=None, erng=None):
+              race=None, erng=None, setcode=None, emod=None):
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32),
@@ -128,7 +142,8 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 ctype=jnp.full(c, TYPE_MONSTER | TYPE_NORMAL, I32) if ctype is None else jnp.asarray(ctype, I32),
                 attr=i(attr, (c,)), race=i(race, (c,)),
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
-                etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)))
+                etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)), setcode=i(setcode, (c, NSET)),
+                emod=i(emod, (c, E, MW)))
 
 
 class State(NamedTuple):
@@ -196,6 +211,15 @@ class State(NamedTuple):
     dstep: jnp.ndarray   # damage step (aucune de nos cartes ne s'y active)
     opt_cid: jnp.ndarray   # [2, KO] cid + 1 des effets « une fois par tour » déjà utilisés
     lock_cid: jnp.ndarray  # [2, KO] cid + 1 des cartes dont le joueur ne peut plus activer les effets ce tour
+    # stats courantes (cache recalculé par refresh après chaque micro-pas) et modificateurs temporaires
+    atk_c: jnp.ndarray   # [N] ATK courante (hors zone monstres : ATK de base)
+    df_c: jnp.ndarray    # [N]
+    tm_code: jnp.ndarray  # [TM] MC_* (dans l'ordre de création ; table vidée en fin de tour)
+    tm_m: jnp.ndarray    # [TM, N] cartes concernées (une carte déplacée depuis tm_t en sort, RESETS_STANDARD)
+    tm_v: jnp.ndarray    # [TM, N] valeur par carte
+    tm_t: jnp.ndarray    # [TM] horloge de déplacement à la création
+    tm_n: jnp.ndarray
+    ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
 
 
 I32 = jnp.int32
@@ -449,7 +473,8 @@ def trig_point(bank, s):
 def start_turn(s):
     tp = jnp.where(s.turn == 0, 0, 1 - s.tp).astype(I32)
     s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
-                   tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
+                   tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid),
+                   tm_code=jnp.zeros_like(s.tm_code), tm_m=jnp.zeros_like(s.tm_m), tm_n=_i(0))
     # pioche (sauf au premier tour) puis fenêtre ; ensuite fenêtre de phase
     return _cond(s.turn > 1, lambda s: open_quick(rule_draw(s, tp), tp, R_DP, chained=False),
                         lambda s: open_phase(s, WP_DRAW, PH_DRAW), s)
@@ -474,7 +499,7 @@ def to_battle(s):
 def damage_step(bank, s):
     """Calcul des dommages, puis point d'événement (effets FLIP) ; les monstres détruits restent sur le terrain
     jusqu'à `dmg_send`."""
-    direct = lambda s: damage(s, 1 - s.tp, bank.atk[s.cid[s.atk]])
+    direct = lambda s: damage(s, 1 - s.tp, s.atk_c[s.atk])
 
     def fight(s):
         s = _cond(s.atk_tgt < 0, direct, lambda s: battle(bank, s, s.atk, s.atk_tgt), s._replace(dstep=jnp.bool_(True)))
@@ -552,8 +577,8 @@ def battle(bank, s, a, t):
     """Combat a contre t (t retourné face recto s'il était verso). Les détruits sont marqués ST_BDES."""
     idx = jnp.arange(s.cid.shape[0])
     s = raise_ev(s, EV_FLIP, (idx == t) & (s.pos[t] == P_FD_DEF), s.tp)
-    s = s._replace(pos=s.pos.at[t].set(jnp.where(s.pos[t] == P_FD_DEF, P_FU_DEF, s.pos[t])))
-    A, T, D = bank.atk[s.cid[a]], bank.atk[s.cid[t]], bank.df[s.cid[t]]
+    s = refresh(bank, s._replace(pos=s.pos.at[t].set(jnp.where(s.pos[t] == P_FD_DEF, P_FU_DEF, s.pos[t]))))
+    A, T, D = s.atk_c[a], s.atk_c[t], s.df_c[t]
     pa, pt = s.ctrl[a], s.ctrl[t]
     atk_pos = s.pos[t] == P_FU_ATK
     kill_t = jnp.where(atk_pos, (A > T) | ((A == T) & (A > 0)), A > D)
@@ -575,17 +600,75 @@ def speed(bank, cid, e):
     return jnp.where(act & fast, jnp.where((ct & TYPE_COUNTER) != 0, 3, 2), jnp.where(quick, 2, 1)).astype(I32)
 
 
-def filter_mask(bank, s, f, p, h):
-    """Évalue un filtre (enregistrement fixe) pour le joueur p, carte source h. O(N)."""
+def set_match(bank, cid, sc):
+    """La carte cid est de l'archétype sc (règle d'ygopro : même archétype, sc ⊂ sous-archétype de la carte)."""
+    cs = bank.setcode[cid]
+    return ((cs != 0) & ((cs & 0xFFF) == (sc & 0xFFF)) & ((cs & sc) == sc)).any(-1)
+
+
+def filter_mask(bank, s, f, p, h, bdes=True):
+    """Évalue un filtre (enregistrement fixe) pour le joueur p, carte source h. O(N).
+    bdes : exclut les monstres détruits au combat (sélections) ; False pour les cibles des effets continus."""
     n = s.cid.shape[0]
     loc = jnp.where(s.ctrl == p, f[F_LOC_ME], f[F_LOC_OP])
-    m = ((s.zone & loc) != 0) & ((s.st & ST_BDES) == 0)  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
+    m = (s.zone & loc) != 0
+    if bdes:
+        m &= (s.st & ST_BDES) == 0  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
     m &= (f[F_POS] == 0) | ((s.pos & f[F_POS]) != 0)
     m &= (f[F_TYPE] == 0) | ((bank.ctype[s.cid] & f[F_TYPE]) != 0)
     m &= ~((f[F_NOT_SELF] != 0) & (jnp.arange(n) == h))
-    atk, df = bank.atk[s.cid], bank.df[s.cid]
+    atk, df = s.atk_c, s.df_c
     m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
+    m &= (f[F_RACE] == 0) | ((bank.race[s.cid] & f[F_RACE]) != 0)
+    m &= (f[F_SET] == 0) | set_match(bank, s.cid, f[F_SET])
+    code = bank.code[s.cid]
+    m &= (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2])
     return m & (atk >= f[F_ATK_LO]) & (atk <= f[F_ATK_HI]) & (df >= f[F_DEF_LO]) & (df <= f[F_DEF_HI])
+
+
+def stats(bank, s):
+    """ATK / DEF courantes (card::get_attack d'ygopro, codes UPDATE_* et SET_BASE_ATTACK) : stats de base, puis les
+    modificateurs dans l'ordre des id d'effet d'ygopro (effets continus des cartes, créés au début du duel, puis
+    modificateurs temporaires dans l'ordre de création). Hors zone monstres : stats de base. O((KM + TM) × N)."""
+    n = s.cid.shape[0]
+    idx = jnp.arange(n)
+    onf = s.zone == Z_MZONE
+    faceup = (s.pos & P_FACEUP) != 0
+    # effets continus actifs : carte recto dans ses zones (magie/piège : résolue), condition remplie
+    k = bank.ekind[s.cid]                                          # [N, E]
+    md = bank.emod[s.cid]                                          # [N, E, MW]
+    srcok = faceup & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
+    tpok = (md[..., M_TP] == 0) | (s.tp == jnp.where(md[..., M_TP] == 1, s.ctrl[:, None], 1 - s.ctrl[:, None]))
+    phok = (md[..., M_PH] == 0) | ((md[..., M_PH] & s.phase) != 0)
+    act = (k == K_CONT) & ((bank.erng[s.cid] & s.zone[:, None]) != 0) & srcok[:, None] & tpok & phok
+    flat = jnp.nonzero(act.reshape(-1), size=KM, fill_value=0)[0]  # ordre carte puis effet
+    hs, es = flat // E, flat % E
+    live = jnp.arange(KM) < act.sum()
+
+    def one(h, e, ok):
+        f = bank.filt[s.cid[h], e]
+        m = bank.emod[s.cid[h], e]
+        p = s.ctrl[h]
+        tgt = jnp.where(m[M_SELF] != 0, idx == h, filter_mask(bank, s, f[0], p, h, bdes=False) & faceup)
+        val = m[M_VAL] * jnp.where(m[M_PER] != 0, filter_mask(bank, s, f[1], p, h).sum(), 1)
+        return tgt & onf & ok, jnp.where(ok, m[M_CODE], MC_NONE), val
+    ctgt, ccode, cval = jax.vmap(one)(hs, es, live)
+    ttgt = s.tm_m & (s.mv <= s.tm_t[:, None]) & onf
+    tgt = jnp.concatenate([ctgt, ttgt])                            # [KM + TM, N]
+    code = jnp.concatenate([ccode, s.tm_code])
+    val = jnp.concatenate([jnp.broadcast_to(cval[:, None], (KM, n)), s.tm_v])
+    upd = lambda c: (jnp.where(tgt & (code == c)[:, None], val, 0)).sum(0)
+    batk = jnp.maximum(bank.atk[s.cid], 0)
+    for j in range(KM + TM):                                       # le dernier SET_BASE_ATTACK l'emporte
+        batk = jnp.where(tgt[j] & (code[j] == MC_BASE_ATK), val[j], batk)
+    atk = jnp.where(onf, jnp.maximum(batk + upd(MC_ATK), 0), bank.atk[s.cid])
+    df = jnp.where(onf, jnp.maximum(jnp.maximum(bank.df[s.cid], 0) + upd(MC_DEF), 0), bank.df[s.cid])
+    return atk.astype(I32), df.astype(I32), act.sum() > KM
+
+
+def refresh(bank, s):
+    atk, df, over = stats(bank, s)
+    return s._replace(atk_c=atk, df_c=df, ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
 
 
 def _pure(bank, s, reg, ok, h, e, p, k, ins):
@@ -611,7 +694,7 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     branches[OP_REQ_FREE] = lambda: cond(free_main(s, rel(p, a), jnp.where(b == Z_SZONE, Z_SZONE, Z_MZONE)) >= c)
 
     def minatk():
-        atk = jnp.where(reg[rb], bank.atk[s.cid], BIG)
+        atk = jnp.where(reg[rb], s.atk_c, BIG)
         return put(reg[rb] & (atk == atk.min()))
     branches[OP_MINATK] = minatk
     branches[OP_CHOOSE] = lambda: (reg[rb], jnp.bool_(True), reg[rb].sum() >= (c & 15))
@@ -651,7 +734,7 @@ def current_ins(bank, s):
 def begin_act(bank, s, c, e):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
-    leave = bank.ekind[s.cid[c], e] == K_ACTIVATE
+    leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & TYPE_CONTINUOUS) == 0)
     p = s.dec_player
     s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(bank.eopt[s.cid[c], e] != 0,
                                                           name_add(s.opt_cid[p], s.cid[c]), s.opt_cid[p])))
@@ -695,6 +778,8 @@ def exec_one(bank, s):
     adv = lambda s: s._replace(pc=s.pc + 1)
 
     def next_link(s):
+        # maillon résolu (non nié) : les effets continus de sa carte s'appliquent (enable_field_effect)
+        s = s._replace(st=s.st.at[h].set(jnp.where(s.lk_neg[s.ch_k], s.st[h], s.st[h] | ST_ON)))
         return _cond(s.ch_k > 0, lambda s: load_link(s, s.ch_k - 1), lambda s: chain_end(bank, s), s)
 
     def end(s):
@@ -731,6 +816,13 @@ def exec_one(bank, s):
         nb = jnp.where(op == OP_DRAW, jnp.clip(b, 0, s.cid.shape[0]), 0)
         return adv(lax.fori_loop(0, nb, lambda i, s: draw(s, q), s))
 
+    def modify(s):  # modificateur temporaire (jusqu'à la fin du tour) : MC_* b, valeur c, sur les cartes du registre a
+        j = jnp.minimum(s.tm_n, TM - 1)
+        m = s.reg[ra] & (s.zone == Z_MZONE)
+        return adv(s._replace(tm_code=s.tm_code.at[j].set(b), tm_m=s.tm_m.at[j].set(m),
+                              tm_v=s.tm_v.at[j].set(jnp.where(m, c, 0)), tm_t=s.tm_t.at[j].set(s.clk),
+                              tm_n=jnp.minimum(s.tm_n + 1, TM), ovf=s.ovf | jnp.where(s.tm_n >= TM, 2, 0).astype(I32)))
+
     def damage_(s):
         mul = jnp.where(c > 0, s.reg[jnp.clip(c - 1, 0, R - 1)].sum(), 1)
         return adv(damage(s, rel(p, a), b * mul))
@@ -742,6 +834,7 @@ def exec_one(bank, s):
         branches[o] = pure
     branches[OP_CHOOSE] = choose
     branches[OP_LOCK] = lock
+    branches[OP_MODIFY] = modify
     branches[OP_MOVE] = move_
     branches[OP_SPSUMMON] = spsummon
     branches[OP_DRAW] = draw_n
@@ -987,7 +1080,7 @@ def run(bank, s):
     """Exécute les effets (D_RUN) jusqu'au prochain choix."""
     def body(carry):
         s, i = carry
-        return exec_one(bank, s), i + 1
+        return refresh(bank, exec_one(bank, s)), i + 1
     return lax.while_loop(lambda c: (c[0].dec == D_RUN) & ~c[0].done & (c[1] < MAX_ITER), body, (s, _i(0)))[0]
 
 
@@ -997,7 +1090,7 @@ def settle(bank, s):
         s, i = carry
         s = run(bank, s)
         s = lax.cond(s.dec == D_TRIG, lambda s: trig_eval(bank, s), lambda s: s, s)
-        return lax.cond(auto_pass(bank, s), lambda s: pass_priority(bank, s), lambda s: s, s), i + 1
+        return refresh(bank, lax.cond(auto_pass(bank, s), lambda s: pass_priority(bank, s), lambda s: s, s)), i + 1
     more = lambda c: (((c[0].dec == D_RUN) | (c[0].dec == D_TRIG) | auto_pass(bank, c[0])) & ~c[0].done
                       & (c[1] < MAX_ITER))
     return lax.while_loop(more, body, (s, _i(0)))[0]
@@ -1009,7 +1102,7 @@ def step(bank, s, a):
     de décision, pas à chaque instruction exécutée."""
     def body(carry):
         s, a, i = carry
-        s = settle(bank, apply(bank, s, a))
+        s = settle(bank, refresh(bank, apply(bank, s, a)))
         return s, forced(bank, s), i + 1
 
     s = settle(bank, s)
@@ -1042,7 +1135,7 @@ def step_batch(bank, s, a, frac=0.0):
         ap = jax.vmap(lambda s: auto_pass(bank, s))(s)
         s = lax.cond(ap.any(), lambda s: _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s),
                      lambda s: s, s)
-        return s, i + 1
+        return jax.vmap(lambda s: refresh(bank, s))(s), i + 1
 
     def settle_b(s):
         return lax.while_loop(lambda c: todo(c[0]).any() & (c[1] < MAX_ITER), settle_body, (s, _i(0)))[0]
@@ -1050,7 +1143,7 @@ def step_batch(bank, s, a, frac=0.0):
     def body(carry):
         s, m, a, i = carry
         act = (a >= 0) & ~s.done
-        s = _where(act, settle_b(jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))), s)
+        s = _where(act, settle_b(jax.vmap(lambda s, a: refresh(bank, apply(bank, s, a)))(s, jnp.maximum(a, 0))), s)
         m = jnp.where(act[:, None], jax.vmap(lambda s: legal(bank, s))(s), m)
         return s, m, jnp.where(act, jax.vmap(forced_m)(s, m), -1), i + 1
 
@@ -1095,7 +1188,9 @@ def new_game(bank, deck0, deck1, key=None):
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=jnp.full(n, Z_DECK, I32), tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=f, opt_cid=jnp.zeros((2, KO), I32),
-              lock_cid=jnp.zeros((2, KO), I32))
+              lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], tm_code=jnp.zeros(TM, I32),
+              tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_n=_i(0),
+              ovf=_i(0))
     for p in (0, 1):
         for _ in range(5):
             s = draw(s, p)

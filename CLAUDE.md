@@ -14,11 +14,13 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 ## État (2026-10-30)
 - Jalons 1, 2, 3a et 3b faits : 20 vraies cartes, chaînes, déclencheurs, SEGOC, effets rapides. Le moteur rejoue à l'identique les parties de l'oracle ygopro-core dans tous les modes de `engine/compare.py` (normal, mixed, chain, trig, quick).
 - Débit GPU : ~15k décisions/s sur L4 avec `step_batch` (frac=0.05). Le moteur est maintenant limité par le GPU. Détails à la fin de `ETAPE2.md`.
-- Prochaine étape : jalon 4 (effets continus, champ setcode, filtre d'archétype), puis ETAPE3 (générateur procédural).
+- Jalon 4, volet 1 fait (2026-10-30) : setcode et filtres archétype / race / nom, effets continus de stats (K_CONT), modificateurs temporaires, cache ATK/DEF. Mode `cont` de `compare.py`.
+- Prochaine étape : jalon 4, volet 2 (fenêtres du damage step, SET_ATTACK*, interdictions), puis ETAPE3 (générateur procédural).
+- Session cloud : 4 cœurs, 15 Go. Les tests CPU se font ici (`engine/regress.sh` lance toute la non-régression, ~25 min). Colab ne sert qu'au GPU.
 
 ## Règles
 - **Vérifier contre l'oracle** avant tout commit qui touche le moteur. L'oracle est ygopro-core compilé localement par `setup.sh`, voir `oracle/BUILD.md`. Il faut lancer :
-  - `compare.py` dans tous les modes, avec les graines de `ETAPE2.md` ;
+  - `compare.py` dans tous les modes, avec les graines de `ETAPE2.md` (`engine/regress.sh` fait tout) ;
   - `obs_check.py` ;
   - `vmap_check.py`.
 - Pas d'algorithme en O(N²) dans le moteur. Sous vmap, `switch` et `cond` calculent toutes leurs branches. Il faut donc masquer les bornes de boucle par l'opcode (voir le bug `draw_n` dans `ETAPE2.md`).
