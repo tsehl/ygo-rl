@@ -9,6 +9,7 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - Primitives tirées des scripts EDOPro : `ETAPE1.md`.
 - Générateur procédural et données d'entraînement : `ETAPE3.md`.
 - Benchmarks de faisabilité GPU : `bench/RESULTATS.md`.
+- Historique complet de la session de conception (2026-10-28 → 30) : `notes/session-2026-10-28_30.md`. Les 14 sections « RÉSUMÉ (compaction) » en donnent l'essentiel ; grep pour retrouver une décision.
 
 ## État (2026-10-30)
 - Jalons 1, 2, 3a et 3b faits : 20 vraies cartes, chaînes, déclencheurs, SEGOC, effets rapides. Le moteur rejoue à l'identique les parties de l'oracle ygopro-core dans tous les modes de `engine/compare.py` (normal, mixed, chain, trig, quick).
