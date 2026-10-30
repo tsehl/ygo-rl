@@ -284,3 +284,9 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 - Cartes : Skill Drain (piège continu, coût 1000 LP), Forbidden Chalice (jeu-rapide, damage step, +400 et annulation), Effect Veiler (effet rapide depuis la main pendant la Main Phase adverse). Mode `neg` de `compare.py` : 14 normaux, 10 cartes du volet 3b, 12 monstres à effet des autres volets, 4 autres.
 - Couverture sur 20 parties `neg` (états comparés) : 3 945 avec un monstre annulé sur le terrain, dont 731 Wildheart, 745 Dark Magician Girl, 884 Command Knight. Skill Drain activé 78 fois, Forbidden Chalice 104, Effect Veiler 22.
 - Comparaison avec l'oracle : neg 100/100 (graines 7000-7099), toute la non-régression inchangée (trig, quick, cont, dmg, ds, flag, chain, mixed, normal). `obs_check` et `vmap_check` passent.
+
+**Coût du jalon 4 (mesures CPU, 2026-10-30).** Banc `bench/engine_bench.py` (step_batch, frac = 0,05, politique aléatoire, parties finies remplacées).
+- CPU, B = 64, mêmes cartes (celles d'avant le jalon 4) : moteur `9e6349a` 482 décisions/s ; moteur actuel 119 décisions/s, soit environ ×4 plus lent.
+- Cause : `refresh` (stats, drapeaux, annulations) coûte ~13,5 ms pour 256 parties, contre 3,8 ms pour `exec_one`, et il tourne après chaque instruction exécutée. Le coût croît avec KM (environ 1,4 ms par case à B = 256) ; les filtres n'en sont qu'environ un tiers, le reste est une centaine de petites opérations [K, N].
+- Déjà fait : pli des stats sous forme close (dernier index et sommes masquées sur [K, N], plus de `lax.scan` séquentiel, qui sur GPU lançait 32 étapes de petits kernels à chaque instruction) ; un filtre de moins par effet continu (compte et condition fusionnés dans le filtre 1). Aucun gain sur CPU, gain attendu sur GPU, à mesurer.
+- Mesure L4 en attente : le réseau de l'environnement cloud bloque colab.research.google.com.

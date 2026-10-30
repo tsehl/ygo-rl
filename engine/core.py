@@ -127,7 +127,7 @@ MV_CONST, MV_HALF_BASE_ATK, MV_HALF_ATK = range(3)
 TD_TURN, TD_DCAL = range(2)
 # champs de emod : code, la carte elle-même (SINGLE_RANGE) ou le filtre 0 (FIELD), valeur, × nombre de cartes du
 # filtre 1, condition : joueur du tour (1 : moi, 2 : adversaire), phases (masque PH_*, 0 : toutes), nombre de cartes
-# du filtre 2 dans [M_CMIN, M_CMAX] (si M_CNT)
+# du filtre 1 dans [M_CMIN, M_CMAX] (si M_CNT ; M_PER et M_CNT s'excluent)
 M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX = range(9)
 MW = 9
 KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
@@ -780,14 +780,14 @@ def stats(bank, s):
         f = bank.filt[s.cid[h], e]
         m = bank.emod[s.cid[h], e]
         p = s.ctrl[h]
-        cnt = filter_mask(bank, s, f[2], p, h, bdes=False).sum()
+        cnt = filter_mask(bank, s, f[1], p, h, bdes=False).sum()  # filtre 1 : compte (M_PER) ou condition (M_CNT)
         cond = (((m[M_TP] == 0) | (s.tp == jnp.where(m[M_TP] == 1, p, 1 - p)))
                 & ((m[M_PH] == 0) | ((m[M_PH] & s.phase) != 0))
                 & ((m[M_CNT] == 0) | ((cnt >= m[M_CMIN]) & (cnt <= m[M_CMAX]))))
         ok &= cond
         raw = jnp.where(m[M_SELF] != 0, idx == h, filter_mask(bank, s, f[0], p, h, bdes=False))
         tgt = raw & (faceup | (m[M_SELF] != 0))
-        val = m[M_VAL] * jnp.where(m[M_PER] != 0, filter_mask(bank, s, f[1], p, h, bdes=False).sum(), 1)
+        val = m[M_VAL] * jnp.where(m[M_PER] != 0, cnt, 1)
         return (tgt & onf & ok, jnp.where(ok, m[M_CODE], MC_NONE), val, m[M_SELF] != 0, cond, raw & ok, p,
                 is_trap(bank, s, h))
     ctgt, ccode, cval, cself, ccond, craw, cp, ctrap = jax.vmap(one)(hs, es, live)
@@ -834,39 +834,41 @@ def stats(bank, s):
     sgl = jnp.concatenate([jnp.zeros(KM, bool), jnp.ones(TM, bool)])[o]
     K = KM + TM
 
-    def first_base(base, sbase):  # SET_BASE des effets continus : avant tout le reste, le dernier l'emporte
-        m = tgt & (code == sbase)[:, None] & ~sgl[:, None]
-        last = K - 1 - jnp.argmax(m[::-1], axis=0)
-        return jnp.where(m.any(0), val[last, idx], jnp.maximum(base, 0))
+    jj = jnp.arange(K)[:, None]
+    sg2 = sgl[:, None]
 
-    def step(carry, ent):  # une entrée, pour l'ATK et la DEF (lax.scan : graphe indépendant de K)
-        t, c, v, single, sg = ent
-        out = []
-        for (b, x, up, upc, late, has_late), (upd, set_, fin, sbase) in zip(carry, (
-                (MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK), (MC_DEF, MC_SET_DEF, MC_FINAL_DEF, MC_BASE_DEF))):
-            u = t & (c == upd)
-            up, upc = jnp.where(u & sg, up + v, up), jnp.where(u & ~sg, upc + v, upc)
-            u = t & (c == set_)
-            x, up = jnp.where(u, v, x), jnp.where(u & ~single, 0, up)
-            u = t & (c == fin)
-            x, up, upc = jnp.where(u & sg, v, x), jnp.where(u & sg, 0, up), jnp.where(u & sg, 0, upc)
-            late, has_late = jnp.where(u & ~sg, v, late), has_late | (u & ~sg)  # appliqués à la fin (effects_atk)
-            u = t & (c == sbase) & sg
-            b, x = jnp.where(u, v, b), jnp.where(u, -1, x)
-            out.append((b, x, up, upc, late, has_late))
-        return tuple(out), None
+    def last(m):  # [K, N] -> [N] : index de la dernière entrée vraie (-1 : aucune)
+        return jnp.where(m.any(0), K - 1 - jnp.argmax(m[::-1], axis=0), -1)
 
-    z0 = jnp.zeros(n, I32)
-    init = tuple((first_base(base, sb), jnp.full(n, -1, I32), z0, z0, z0, jnp.zeros(n, bool))
-                 for base, sb in ((bank.atk[s.cid], MC_BASE_ATK), (bank.df[s.cid], MC_BASE_DEF)))
-    res, _ = lax.scan(step, init, (tgt, code, val, single, sgl))
+    def at(i):  # valeur de l'entrée i pour chaque carte
+        return val[jnp.maximum(i, 0), idx]
 
-    def final(r, base):
-        b, x, up, upc, late, has_late = r
+    def fold(base, upd, set_, fin, sbase):
+        """Pli de card::get_attack sous forme close (parallèle sur les entrées, pas de boucle séquentielle) :
+        SET / SET_FINAL temporaire / SET_BASE temporaire fixent la valeur (SET_BASE : la base) ; un SET FIELD remet
+        les UPDATE temporaires à zéro, un SET_FINAL temporaire tous les UPDATE ; SET_FINAL continus appliqués à la fin ;
+        SET_BASE continus avant tout."""
+        t = tgt
+        is_ = lambda c: t & (code == c)[:, None]
+        sb_s, sb_c = is_(sbase) & sg2, is_(sbase) & ~sg2
+        fin_s, fin_c = is_(fin) & sg2, is_(fin) & ~sg2
+        set_m = is_(set_)
+        lc = last(sb_c)
+        b0 = jnp.where(lc >= 0, at(lc), jnp.maximum(base, 0))
+        lb = last(sb_s)
+        b = jnp.where(lb >= 0, at(lb), b0)
+        lx = last(set_m | fin_s | sb_s)
+        x = jnp.where((lx < 0) | sb_s[jnp.maximum(lx, 0), idx], -1, at(lx))
+        r_up = last((set_m & ~single[:, None]) | fin_s)
+        r_upc = last(fin_s)
+        u = is_(upd)
+        up = jnp.where(u & sg2 & (jj > r_up), val, 0).sum(0)
+        upc = jnp.where(u & ~sg2 & (jj > r_upc), val, 0).sum(0)
+        ll = last(fin_c)
         cur = jnp.maximum(jnp.where(x < 0, b, x) + up + upc, 0)
-        return jnp.where(onf, jnp.maximum(jnp.where(has_late, late, cur), 0), base), jnp.where(onf, b, base)
-    atk, batk = final(res[0], bank.atk[s.cid])
-    df, _ = final(res[1], bank.df[s.cid])
+        return jnp.where(onf, jnp.maximum(jnp.where(ll >= 0, at(ll), cur), 0), base), jnp.where(onf, b, base)
+    atk, batk = fold(bank.atk[s.cid], MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK)
+    df, _ = fold(bank.df[s.cid], MC_DEF, MC_SET_DEF, MC_FINAL_DEF, MC_BASE_DEF)
     return (atk.astype(I32), df.astype(I32), batk.astype(I32), fl, ib.astype(I32), pf.astype(I32), cav, cav_t, clk,
             tm_m, act.sum() > KM)
 

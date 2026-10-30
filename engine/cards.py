@@ -94,10 +94,11 @@ def cont(rng, code, val, tgt=None, per=None, tp=0, ph=0, cnt=None):
     cartes du filtre per), sur les monstres recto du filtre tgt (EFFECT_TYPE_FIELD, zones relatives au contrôleur de
     la carte) ou sur la carte elle-même (tgt=None : SINGLE_RANGE). Conditions : tour de tp (ME + 1 / OPP + 1),
     phases ph, cnt = (filtre, min, max) sur le nombre de cartes du filtre."""
+    assert per is None or cnt is None  # un seul filtre de compte (filtre 1)
     mod = {M_CODE: code, M_SELF: int(tgt is None), M_VAL: val, M_PER: int(per is not None), M_TP: tp, M_PH: ph}
     if cnt is not None:
         mod.update({M_CNT: 1, M_CMIN: cnt[1], M_CMAX: cnt[2]})
-    filters = [tgt or F(), per or F(), cnt[0] if cnt else F()]
+    filters = [tgt or F(), per or (cnt[0] if cnt else F())]
     return (K_CONT, 0, 0, rng, (), (), (), dict(mod=mod, filters=filters))
 
 
@@ -251,7 +252,7 @@ def assemble(codes, cards=CARDS):
             extra = progs[3] if len(progs) > 3 else {}
             progs = progs[:3]
             edmg[i, e] = extra.get("dmg", 0)
-            fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte), 2 (condition)
+            fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte ou condition)
             for k, v in extra.get("mod", {}).items():
                 emod[i, e, k] = v
             for g, pr in enumerate(progs):
