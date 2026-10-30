@@ -17,9 +17,10 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - Jalon 4, volet 1 fait (2026-10-30) : setcode et filtres archétype / race / nom, effets continus de stats (K_CONT), modificateurs temporaires, cache ATK/DEF. Mode `cont` de `compare.py`.
 - Jalon 4, volet 2 fait (2026-10-30) : fenêtres du damage step, couches ATK/DEF complètes (SET, SET_FINAL, SET_BASE, ordre des id d'effet), limites par carte. Modes `dmg` et `ds` de `compare.py`.
 - Jalon 4, volet 3a fait (2026-10-30) : interdictions et protections (ne peut pas attaquer / être cible d'attaque / être ciblé, immunité aux pièges, indestructible au combat, pas d'invocation spéciale, pas d'activation de pièges). Mode `flag` de `compare.py`.
-- Prochaine étape : jalon 4, volet 3b (négation d'effets : Skill Drain, Forbidden Chalice, Effect Veiler), puis ETAPE3 (générateur procédural).
+- Jalon 4, volet 3b fait (2026-10-30) : annulation d'effets (EFFECT_DISABLE, DISABLE_EFFECT, RESET_DISABLE, immunité dépendante de l'historique). Mode `neg` de `compare.py`.
+- Prochaine étape : à décider avec Thomas. Pistes : mesurer le coût GPU des volets du jalon 4 sur L4, le jalon 5 (Extra Deck), ou ETAPE3 (générateur procédural) avec les briques actuelles.
 - Mémoire : ~1,75 Go par processus `compare.py`. Ne pas dérouler en Python de boucles sur les entrées de `stats` (l'OOM killer est passé à 3,8 Go par processus).
-- Session cloud : 4 cœurs, 15 Go. Les tests CPU se font ici (`engine/regress.sh` lance toute la non-régression, ~25 min). Colab ne sert qu'au GPU.
+- Session cloud : 4 cœurs, 15 Go. Les tests CPU se font ici (`engine/regress.sh` lance toute la non-régression, ~45 min). Colab ne sert qu'au GPU.
 
 ## Règles
 - **Vérifier contre l'oracle** avant tout commit qui touche le moteur. L'oracle est ygopro-core compilé localement par `setup.sh`, voir `oracle/BUILD.md`. Il faut lancer :

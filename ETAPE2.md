@@ -262,3 +262,25 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
   - 167 décisions d'un joueur privé de pièges ;
   - Gravity Bind activé 70 fois.
 - Comparaison avec l'oracle : flag 100/100 (graines 6000-6099), toute la non-régression inchangée (trig, quick, cont, dmg, ds, chain, mixed, normal). `obs_check` et `vmap_check` passent.
+
+**Jalon 4, volet 3b : annulation d'effets (2026-10-30).**
+- **Statut « effets annulés »** : bit FL_DISABLED de `fl_c` (EFFECT_DISABLE, STATUS_DISABLED). Il vient :
+  - des modificateurs temporaires MC_DISABLE (jusqu'à la fin du tour : Forbidden Chalice, Effect Veiler) ;
+  - des effets continus MC_DISABLE (Skill Drain : les monstres à effet recto), d'une carte elle-même non annulée.
+- **Conséquences** :
+  - les effets continus d'une carte annulée ne s'appliquent plus (stats, interdictions, protections, immunité) ;
+  - à la résolution, le maillon d'un monstre annulé encore lié au maillon (sur le terrain, pas déplacé depuis l'activation) est annulé (`solve_chain` : STATUS_DISABLED et `is_has_relation`). Cela couvre aussi `NegateRelatedChain`.
+- **Une carte annulée peut toujours activer ses effets** : `is_activateable` ne teste pas STATUS_DISABLED. Le coût est payé et l'effet annulé à la résolution. Un premier essai qui interdisait l'activation a été corrigé grâce à l'oracle. Vérifié sur 30 parties `neg` : 54 activations par des monstres annulés (Cannon Soldier, Little Swordsman of Aile, Kazejin, Exiled Force), toutes identiques à l'oracle.
+- **Ordre de calcul dans `stats`** :
+  1. annulations temporaires ;
+  2. immunité des cartes non annulées ;
+  3. annulations continues, qu'un monstre immunisé aux pièges ignore ;
+  4. reste des effets, sans ceux des cartes annulées ;
+  5. immunité finale.
+- **Historique** : l'immunité (SINGLE_RANGE) d'une carte ne compte que si cette carte était déjà recto sur le terrain et non annulée au calcul précédent (bit FL_ONF). Dans ygopro, `refresh_disable_status` passe avant STATUS_EFFECT_ENABLED dans `enable_field_effect`, et `is_available` exclut une carte annulée. Un Elemental HERO Wildheart qui arrive sur le terrain sous Skill Drain est donc annulé et le reste ; un Skill Drain activé après Wildheart ne le touche pas. Cas trouvé par l'oracle.
+- **EFFECT_DISABLE_EFFECT** (Forbidden Chalice, Effect Veiler ; pas Skill Drain, qui n'a qu'EFFECT_DISABLE) : quand une carte du terrain qui en est affectée active un effet, `AddChain` annule son maillon avant le coût (EFFECT_DISABLE_CHAIN). Le maillon reste annulé même si la carte quitte le terrain, par exemple libérée en coût (`ch_dis`, puis `lk_neg`). Cas trouvé par l'oracle : un Cannon Soldier sous Forbidden Chalice qui se libère lui-même.
+- **RESET_DISABLE** : un modificateur temporaire posé par une carte sur elle-même avec ce drapeau (`MODIFY(..., rd=True)`, le +700 de Little Swordsman of Aile) disparaît quand la carte est annulée.
+- **Encodage d'OP_MODIFY** : b = code (5 bits) | mode << 5 | durée << 9 | rd << 13. Nouvel opcode COND_PHASE, nouveau champ de filtre F_NODIS (not IsDisabled).
+- Cartes : Skill Drain (piège continu, coût 1000 LP), Forbidden Chalice (jeu-rapide, damage step, +400 et annulation), Effect Veiler (effet rapide depuis la main pendant la Main Phase adverse). Mode `neg` de `compare.py` : 14 normaux, 10 cartes du volet 3b, 12 monstres à effet des autres volets, 4 autres.
+- Couverture sur 20 parties `neg` (états comparés) : 3 945 avec un monstre annulé sur le terrain, dont 731 Wildheart, 745 Dark Magician Girl, 884 Command Knight. Skill Drain activé 78 fois, Forbidden Chalice 104, Effect Veiler 22.
+- Comparaison avec l'oracle : neg 100/100 (graines 7000-7099), toute la non-régression inchangée (trig, quick, cont, dmg, ds, flag, chain, mixed, normal). `obs_check` et `vmap_check` passent.

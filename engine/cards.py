@@ -16,18 +16,19 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   NSET, PH_BATTLE, TYPE_CONTINUOUS, MV_CONST, MV_HALF_BASE_ATK, MV_HALF_ATK, TD_TURN, TD_DCAL,
                   OP_COND_ATK, OP_ATTACKER, DMG_STEP, DMG_CAL, DMG_STAT, MC_BASE_ATK, MC_SET_ATK, MC_SET_DEF,
                   MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
-                  MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA)
+                  MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA, MC_DISABLE, OP_COND_PHASE,
+                  PH_MAIN1, PH_MAIN2)
 
 ME, OPP = 0, 1
 
 
 def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
-      st=0, lv=(-BIG, BIG), spsum=0):
+      st=0, lv=(-BIG, BIG), spsum=0, nodis=0):
     """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
-    statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned)."""
+    statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés."""
     code = (code, code) if isinstance(code, int) else code
     return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
-            spsum)
+            spsum, nodis)
 
 
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
@@ -54,8 +55,11 @@ def COND_TURN(who): return (OP_COND_TURN, who, 0, 0)     # c'est le tour de who
 def COND_EVP(ev, who): return (OP_COND_EVP, ev, who, 0)  # l'un des événements ev vient de who
 def COND_SELF(zone=0, prev=0): return (OP_COND_SELF, zone, prev, 0)  # la carte est dans zone / venait de prev
 def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des cartes de ce nom ce tour
-def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN):  # MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut)
-    return (OP_MODIFY, r, code | (mode << 4) | (dur << 8), val)
+def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False):
+    """MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut) ; rd : RESET_DISABLE (effet de la carte sur
+    elle-même, effacé si ses effets sont annulés)."""
+    return (OP_MODIFY, r, code | (mode << 5) | (dur << 9) | (int(rd) << 13), val)
+def COND_PHASE(ph): return (OP_COND_PHASE, ph, 0, 0)      # pendant l'une des phases ph (masque PH_*)
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
 def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
 
@@ -120,6 +124,7 @@ RACE_INSECT = 0x800
 STAT_DS = DMG_STEP | DMG_STAT  # EFFECT_FLAG_DAMAGE_STEP + aux.StatChangeDamageStepCondition
 RACE_WARRIOR, RACE_DRAGON, LIGHT = 0x1, 0x2000, 0x10
 ALL_ZONES = Z_DECK | Z_HAND | Z_MZONE | Z_SZONE | Z_GRAVE | Z_REMOVED | Z_EXTRA
+TYPE_EFFECT = 0x20
 
 CARDS = {
     55144522: [act(target=[FILTER(0, MY_DECK), REQ(0, 2)], resolve=[DRAW(ME, 2)])],            # Pot of Greed
@@ -190,7 +195,7 @@ CARDS = {
     13314457: [trigger(ev(EV_TO_GRAVE), target=[COND_SELF(prev=ONFIELD)],                                 # Deepsea Macrotrema
                        resolve=[FILTER(0, F(me=Z_MZONE, pos=P_FACEUP, attr=WATER)), MODIFY(0, MC_ATK, 500)])],
     25109950: [ignition(cost=[FILTER(0, F(me=Z_MZONE, not_self=1)), CHOOSE(1, 0, 1), MOVE(1)],         # Little Swordsman of Aile
-                        target=[SELF(2)], resolve=[FILTER(3, F(me=Z_MZONE, pos=P_FACEUP), within=2), MODIFY(3, MC_ATK, 700)])],
+                        target=[SELF(2)], resolve=[FILTER(3, F(me=Z_MZONE, pos=P_FACEUP), within=2), MODIFY(3, MC_ATK, 700, rd=True)])],
     # jalon 4, volet 2 : damage step, SET_ATTACK / SET_ATTACK_FINAL / SET_BASE_ATTACK
     70046172: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Rush Recklessly
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 700)])],
@@ -212,6 +217,15 @@ CARDS = {
     86188410: [cont(Z_MZONE, MC_IMM_TRAP, 0)],                                                         # Elemental HERO Wildheart
     72845813: [cont(Z_MZONE, MC_NO_SS, 0, tgt=F(me=ALL_ZONES, op=ALL_ZONES, attr=LIGHT))],                # Ally of Justice Quarantine
     15960641: [cont(Z_MZONE, MC_P_NO_TRAP, 2, ph=PH_BATTLE)],                                           # Mirage Dragon
+    # jalon 4, volet 3b : annulation d'effets
+    82732705: [act(cost=[PAY_LP(1000)]),                                                                   # Skill Drain
+               cont(Z_SZONE, MC_DISABLE, 0, tgt=F(me=Z_MZONE, op=Z_MZONE, typ=TYPE_EFFECT))],
+    25789292: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                 # Forbidden Chalice
+                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 400), MODIFY(2, MC_DISABLE)])],
+    97268402: [quick(Z_HAND, cost=[COND_TURN(OPP), COND_PHASE(PH_MAIN1 | PH_MAIN2), SELF(0), MOVE(0)],         # Effect Veiler
+                     target=[FILTER(1, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_EFFECT, nodis=1), tgt=True), CHOOSE(2, 1, 1)],
+                     resolve=[FILTER(3, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_MONSTER, nodis=1), within=2),
+                              MODIFY(3, MC_DISABLE)])],
     42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
                cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
 }
@@ -278,6 +292,10 @@ J4B = set(J4B_SPELLS) | set(J4B_MONSTERS)
 J4C_SPELLS = {85742772: TYPE_TRAP | TYPE_CONTINUOUS}
 J4C_MONSTERS = [59380081, 10375182, 52077741, 17985575, 86188410, 72845813, 15960641]
 J4C = set(J4C_SPELLS) | set(J4C_MONSTERS)
+# volet 3b (mode neg de compare.py)
+J4D_SPELLS = {82732705: TYPE_TRAP | TYPE_CONTINUOUS, 25789292: TYPE_SPELL | TYPE_QUICKPLAY}
+J4D_MONSTERS = [97268402]
+J4D = set(J4D_SPELLS) | set(J4D_MONSTERS)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -289,14 +307,14 @@ EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exil
                    59380081: (2000, 1000, 5), 10375182: (1200, 1900, 4),   # Big-Tusked Mammoth, Command Knight
                    52077741: (1400, 1200, 4), 17985575: (1200, 1100, 4),   # Obnoxious Celtic Guard, Lord of D.
                    86188410: (1500, 1600, 4), 72845813: (1700, 1200, 4),   # Wildheart, Ally of Justice Quarantine
-                   15960641: (1600, 600, 4)}                               # Mirage Dragon
+                   15960641: (1600, 600, 4), 97268402: (0, 0, 1)}          # Mirage Dragon, Effect Veiler
 
 
 def test_bank(key, c):
     """c monstres normaux aléatoires (codes 0..c-1) + les cartes de CARDS (indices c..)."""
     import jax
     import core
-    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS)
+    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS)
     codes = list(range(c)) + st + list(EFFECT_MONSTERS)
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()]])
@@ -305,7 +323,7 @@ def test_bank(key, c):
     lv = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 2), (c,), 1, 13)),
                          np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()]])
     ctype = [core.TYPE_MONSTER | core.TYPE_NORMAL] * c + [core.TYPE_SPELL] * len(SPELL_CODES) \
-        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
+        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
                            np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS]])

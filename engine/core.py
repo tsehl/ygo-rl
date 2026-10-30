@@ -96,12 +96,13 @@ PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
- OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER) = range(25)
-N_OPS = 25
+ OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE) = range(26)
+N_OPS = 26
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
-    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM = range(18)
-FW = 18  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS)
+    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS = range(19)
+FW = 19  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+# F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
 # UPDATE_*, SET_*, SET_*_FINAL, SET_BASE_* pour l'ATK puis la DEF
@@ -110,11 +111,13 @@ MC_NONE, MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK, MC_DEF, MC_SET_DEF, MC_F
 # IMMUNE_EFFECT (effets de piège), CANNOT_SPECIAL_SUMMON (cartes visées, toutes zones), INDESTRUCTABLE_BATTLE (valeur :
 # ATK minimale du monstre adverse, 0 = toujours), CANNOT_ACTIVATE (cartes piège, joueurs M_VAL : 1 = moi, 2 = adversaire)
 MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP, MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP = range(9, 16)
-FL_NO_ATTACK, FL_NO_BTARGET, FL_NO_ETARGET, FL_IMM_TRAP, FL_NO_SS = 1, 2, 4, 8, 16  # bits de fl_c
+MC_DISABLE = 16  # EFFECT_DISABLE : effets de la carte annulés (continus inactifs, pas d'activation, maillons annulés)
+FL_NO_ATTACK, FL_NO_BTARGET, FL_NO_ETARGET, FL_IMM_TRAP, FL_NO_SS, FL_DISABLED = 1, 2, 4, 8, 16, 32  # bits de fl_c
+FL_ONF = 64  # recto sur le terrain, effets actifs (STATUS_EFFECT_ENABLED) au calcul précédent
 PF_NO_TRAP = 1  # bits de pf_c
 # card::add_effect : un modificateur temporaire de ce code efface ceux de ces codes déjà sur la carte (masque de bits)
 _b = lambda *cs: sum(1 << c for c in cs)
-MC_KILL = [0] * 16
+MC_KILL = [0] * 32
 for _set, _fin, _upd, _base in ((MC_SET_ATK, MC_FINAL_ATK, MC_ATK, MC_BASE_ATK), (MC_SET_DEF, MC_FINAL_DEF, MC_DEF, MC_BASE_DEF)):
     MC_KILL[_set] = MC_KILL[_base] = _b(_set, _fin, _base)
     MC_KILL[_fin] = _b(_upd, _set, _fin)
@@ -204,6 +207,7 @@ class State(NamedTuple):
     ch_eff: jnp.ndarray  # index d'effet
     ch_p: jnp.ndarray    # joueur qui active
     ch_k: jnp.ndarray    # index de son maillon (= n_chain pendant l'activation)
+    ch_dis: jnp.ndarray  # activé par une carte sous EFFECT_DISABLE_EFFECT : le maillon sera annulé (DISABLE_CHAIN)
     pg: jnp.ndarray      # programme en cours (PG_*)
     pc: jnp.ndarray      # instruction en cours
     reg: jnp.ndarray     # [R, N] registres ensembles
@@ -259,6 +263,7 @@ class State(NamedTuple):
     tm_v: jnp.ndarray    # [TM, N] valeur par carte
     tm_t: jnp.ndarray    # [TM] horloge de déplacement à la création
     tm_dur: jnp.ndarray  # [TM] TD_*
+    tm_rd: jnp.ndarray   # [TM] RESET_DISABLE (effet de la carte sur elle-même) : effacé quand la carte est annulée
     tm_n: jnp.ndarray
     fl_c: jnp.ndarray    # [N] interdictions / protections courantes (FL_*), calculées par refresh
     ib_c: jnp.ndarray    # [N] indestructible au combat contre un monstre d'ATK >= ib_c (BIG : non)
@@ -476,6 +481,8 @@ def open_phase(s, wph, phase):
 def act_ok(bank, s, h, e, p):
     """L'effet e de h est activable par p : coût + cible exécutables, pas d'interdiction ni de limite par nom."""
     cid = s.cid[h]
+    # une carte aux effets annulés peut encore les activer (is_activateable ne teste pas STATUS_DISABLED) : ils sont
+    # annulés à la résolution (load_link)
     return (test_ok(bank, s, h, e, p) & ~name_in(s.lock_cid[p], cid)
             & ~((bank.eopt[cid, e] == OPT_NAME) & name_in(s.opt_cid[p], cid))
             & ~((bank.eopt[cid, e] >= OPT_CARD) & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
@@ -732,6 +739,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     lv = bank.level[s.cid]
     m &= (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI])
     m &= (f[F_SPSUM] == 0) | ((s.fl_c & FL_NO_SS) == 0)
+    m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
     if targ:
         m &= ~untargetable(bank, s, h)
     return m & (atk >= f[F_ATK_LO]) & (atk <= f[F_ATK_HI]) & (df >= f[F_DEF_LO]) & (df <= f[F_DEF_HI])
@@ -783,11 +791,26 @@ def stats(bank, s):
         return (tgt & onf & ok, jnp.where(ok, m[M_CODE], MC_NONE), val, m[M_SELF] != 0, cond, raw & ok, p,
                 is_trap(bank, s, h))
     ctgt, ccode, cval, cself, ccond, craw, cp, ctrap = jax.vmap(one)(hs, es, live)
-    # immunité d'abord : les effets continus de piège ne s'appliquent pas aux monstres immunisés
+    ttgt = s.tm_m & (s.mv <= s.tm_t[:, None]) & onf
+    # annulations d'abord (EFFECT_DISABLE) : temporaires, puis continues (Skill Drain) des cartes non annulées, qui ne
+    # touchent pas un monstre immunisé ; une carte annulée n'applique plus ses effets continus
+    dis_t = (ttgt & (s.tm_code == MC_DISABLE)[:, None]).any(0)
+    # l'immunité (SINGLE_RANGE) d'une carte qui vient d'arriver ou qui était annulée ne compte pas encore
+    # (refresh_disable_status avant STATUS_EFFECT_ENABLED, et is_available exclut une carte annulée) : historique
+    prev_ok = ((s.fl_c & FL_ONF) != 0) & ((s.fl_c & FL_DISABLED) == 0)
+    imm0 = (ctgt & ((ccode == MC_IMM_TRAP) & ~dis_t[hs] & prev_ok[hs])[:, None]).any(0)
+    dis = dis_t | (ctgt & ((ccode == MC_DISABLE) & ~dis_t[hs])[:, None] & ~(ctrap[:, None] & imm0[None, :])).any(0)
+    off = dis[hs] & (ccode != MC_DISABLE)
+    ctgt &= ~off[:, None]
+    craw &= ~off[:, None]
+    ccode = jnp.where(off, MC_NONE, ccode)
+    tm_m = s.tm_m & ~(s.tm_rd[:, None] & dis[None, :])  # RESET_DISABLE
+    ttgt &= tm_m
+    # immunité : les effets continus de piège ne s'appliquent pas aux monstres immunisés
     imm = (ctgt & (ccode == MC_IMM_TRAP)[:, None]).any(0)
-    ctgt &= ~(ctrap[:, None] & imm[None, :] & (ccode != MC_IMM_TRAP)[:, None])
+    ctgt &= ~(ctrap[:, None] & imm[None, :] & (ccode != MC_IMM_TRAP)[:, None] & (ccode != MC_DISABLE)[:, None])
     craw &= ~(ctrap[:, None] & imm[None, :] & onf[None, :])
-    fl = jnp.zeros(n, I32)
+    fl = (jnp.where(dis, FL_DISABLED, 0) | jnp.where(onf & faceup, FL_ONF, 0)).astype(I32)
     for c, b in ((MC_NO_ATTACK, FL_NO_ATTACK), (MC_NO_BTARGET, FL_NO_BTARGET), (MC_NO_ETARGET, FL_NO_ETARGET),
                  (MC_IMM_TRAP, FL_IMM_TRAP)):
         fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0), b, 0)
@@ -801,7 +824,6 @@ def stats(bank, s):
     clk = s.clk + new.any()
     cav = s.cav.at[hw, es].set(ccond, mode="drop")
     cav_t = s.cav_t.at[jnp.where(new, hs, n), es].set(clk, mode="drop")
-    ttgt = s.tm_m & (s.mv <= s.tm_t[:, None]) & onf
     # entrées triées comme les id d'effet : (cibles, code, valeur [N], type SINGLE, SINGLE sans SINGLE_RANGE)
     key = jnp.concatenate([jnp.maximum(s.en_t[hs], cav_t[hs, es]) * 4 + es, s.tm_t * 4 + 3])
     o = jnp.argsort(key)
@@ -846,12 +868,12 @@ def stats(bank, s):
     atk, batk = final(res[0], bank.atk[s.cid])
     df, _ = final(res[1], bank.df[s.cid])
     return (atk.astype(I32), df.astype(I32), batk.astype(I32), fl, ib.astype(I32), pf.astype(I32), cav, cav_t, clk,
-            act.sum() > KM)
+            tm_m, act.sum() > KM)
 
 
 def refresh(bank, s):
-    atk, df, batk, fl, ib, pf, cav, cav_t, clk, over = stats(bank, s)
-    return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk,
+    atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
+    return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
 
 
@@ -897,6 +919,7 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     branches[OP_COND_TURN] = lambda: cond(s.tp == rel(p, a))
     branches[OP_COND_EVP] = lambda: cond((evm & s.ev_g.any(axis=1) & (s.ev_p == rel(p, b))).any())
     branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0)))
+    branches[OP_COND_PHASE] = lambda: cond((s.phase & a) != 0)
     branches[OP_COND_ATK] = lambda: cond(jnp.where(a == 0, s.atk, s.atk_tgt) == h)  # la carte attaque / est attaquée
     branches[OP_ATTACKER] = lambda: put((jnp.arange(n) == s.atk) & (s.atk >= 0) & ((s.st & ST_BDES) == 0)
                                         & ~((b != 0) & untargetable(bank, s, h)))  # b : ciblage
@@ -928,7 +951,10 @@ def begin_act(bank, s, c, e):
     opt = bank.eopt[s.cid[c], e]
     s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(opt == OPT_NAME, name_add(s.opt_cid[p], s.cid[c]), s.opt_cid[p])),
                    st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
-    return s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])),
+    # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
+    # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
+    tdis = (s.tm_m[:, c] & (s.mv[c] <= s.tm_t) & (s.tm_code == MC_DISABLE)).any() & (s.zone[c] == Z_MZONE)
+    return s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])), ch_dis=tdis,
                       ch_src=_i(c), ch_eff=_i(e), ch_p=s.dec_player, ch_k=s.n_chain, pg=_i(PG_COST), pc=_i(0),
                       reg=jnp.zeros((R, n), bool), dec=_i(D_RUN), pend=_i(-1))
 
@@ -938,15 +964,18 @@ def push_link(bank, s):
     k, src = s.n_chain, s.ch_src
     s = s._replace(lk_src=s.lk_src.at[k].set(s.ch_src), lk_eff=s.lk_eff.at[k].set(s.ch_eff),
                    lk_p=s.lk_p.at[k].set(s.ch_p), lk_reg=s.lk_reg.at[k].set(s.reg),
-                   lk_neg=s.lk_neg.at[k].set(False), lk_t=s.lk_t.at[k].set(s.clk), n_chain=k + 1, ch_src=_i(-1))
+                   lk_neg=s.lk_neg.at[k].set(s.ch_dis), lk_t=s.lk_t.at[k].set(s.clk), n_chain=k + 1, ch_src=_i(-1))
     return _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tg=s.tg.at[src].set(False))),
                     lambda s: open_quick(s, 1 - s.ch_p), s)
 
 
 def load_link(s, k):
-    """Résolution du maillon k ; un maillon nié saute directement à la fin de son programme."""
+    """Résolution du maillon k ; un maillon nié saute directement à la fin de son programme, comme celui d'un
+    monstre dont les effets sont annulés et qui est encore lié au maillon (solve_chain : STATUS_DISABLED)."""
+    c = jnp.maximum(s.lk_src[k], 0)
+    dis = ((s.fl_c[c] & FL_DISABLED) != 0) & (s.zone[c] == Z_MZONE) & (s.mv[c] <= s.lk_t[k])
     return s._replace(ch_k=k, ch_src=s.lk_src[k], ch_eff=s.lk_eff[k], ch_p=s.lk_p[k], reg=s.lk_reg[k] & (s.mv <= s.lk_t[k]),
-                      pg=_i(PG_RESOLVE), pc=jnp.where(s.lk_neg[k], P - 1, 0).astype(I32), dec=_i(D_RUN),
+                      pg=_i(PG_RESOLVE), pc=jnp.where(s.lk_neg[k] | dis, P - 1, 0).astype(I32), dec=_i(D_RUN),
                       ev_g=jnp.zeros_like(s.ev_g))
 
 
@@ -1011,17 +1040,18 @@ def exec_one(bank, s):
         nb = jnp.where(op == OP_DRAW, jnp.clip(b, 0, s.cid.shape[0]), 0)
         return adv(lax.fori_loop(0, nb, lambda i, s: draw(s, q), s))
 
-    def modify(s):  # modificateur temporaire sur les cartes du registre a : b = MC_* | MV_* << 4 | TD_* << 8, valeur c
+    def modify(s):  # modificateur temporaire sur les cartes du registre a : b = MC_* | MV_* << 5 | TD_* << 9 | RD << 13
         j = jnp.minimum(s.tm_n, TM - 1)
         m = target(s) & (s.zone == Z_MZONE)
-        kill = ((jnp.asarray(MC_KILL, I32)[b & 15] >> s.tm_code) & 1) != 0
+        kill = ((jnp.asarray(MC_KILL, I32)[b & 31] >> s.tm_code) & 1) != 0
         s = s._replace(tm_m=s.tm_m & ~(kill[:, None] & m[None, :]))
-        mode = (b >> 4) & 15
+        mode = (b >> 5) & 15
         # Lua x/2 est un flottant, arrondi par std::round dans effect::get_value : moitié supérieure
         v = jnp.where(mode == MV_HALF_BASE_ATK, (s.batk_c + 1) // 2, jnp.where(mode == MV_HALF_ATK, (s.atk_c + 1) // 2, c))
-        return adv(s._replace(tm_code=s.tm_code.at[j].set(b & 15), tm_m=s.tm_m.at[j].set(m),
+        return adv(s._replace(tm_code=s.tm_code.at[j].set(b & 31), tm_m=s.tm_m.at[j].set(m),
+                              tm_rd=s.tm_rd.at[j].set(((b >> 13) & 1) != 0),
                               tm_v=s.tm_v.at[j].set(jnp.where(m, v, 0)), tm_t=s.tm_t.at[j].set(s.clk + 1), clk=s.clk + 1,
-                              tm_dur=s.tm_dur.at[j].set((b >> 8) & 15),
+                              tm_dur=s.tm_dur.at[j].set((b >> 9) & 15),
                               tm_n=jnp.minimum(s.tm_n + 1, TM), ovf=s.ovf | jnp.where(s.tm_n >= TM, 2, 0).astype(I32)))
 
     def damage_(s):
@@ -1031,7 +1061,7 @@ def exec_one(bank, s):
     branches = [lambda s: s] * N_OPS
     branches[OP_END] = end
     for o in (OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_COND_CHAIN, OP_CHAINCARD, OP_EVENT, OP_COND_TURN,
-              OP_COND_EVP, OP_COND_SELF, OP_COND_ATK, OP_ATTACKER):
+              OP_COND_EVP, OP_COND_SELF, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE):
         branches[o] = pure
     branches[OP_CHOOSE] = choose
     branches[OP_LOCK] = lock
@@ -1395,7 +1425,7 @@ def new_game(bank, deck0, deck1, key=None):
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0),
-              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), pg=_i(0),
+              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, pg=_i(0),
               pc=_i(0), reg=jnp.zeros((R, n), bool), done=f, odraw=f, winner=_i(-1),
               lk_src=jnp.full(CH, -1, I32), lk_eff=jnp.zeros(CH, I32), lk_p=jnp.zeros(CH, I32),
               lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
@@ -1404,7 +1434,7 @@ def new_game(bank, deck0, deck1, key=None):
               pzone=jnp.full(n, Z_DECK, I32), tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, opt_cid=jnp.zeros((2, KO), I32),
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
-              tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_n=_i(0),
+              tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32))
     for p in (0, 1):
         for _ in range(5):
