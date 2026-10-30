@@ -15,7 +15,8 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - Jalons 1, 2, 3a et 3b faits : 20 vraies cartes, chaînes, déclencheurs, SEGOC, effets rapides. Le moteur rejoue à l'identique les parties de l'oracle ygopro-core dans tous les modes de `engine/compare.py` (normal, mixed, chain, trig, quick).
 - Débit GPU : ~15k décisions/s sur L4 avec `step_batch` (frac=0.05). Le moteur est maintenant limité par le GPU. Détails à la fin de `ETAPE2.md`.
 - Jalon 4, volet 1 fait (2026-10-30) : setcode et filtres archétype / race / nom, effets continus de stats (K_CONT), modificateurs temporaires, cache ATK/DEF. Mode `cont` de `compare.py`.
-- Prochaine étape : jalon 4, volet 2 (fenêtres du damage step, SET_ATTACK*, interdictions), puis ETAPE3 (générateur procédural).
+- Jalon 4, volet 2 fait (2026-10-30) : fenêtres du damage step, couches ATK/DEF complètes (SET, SET_FINAL, SET_BASE, ordre des id d'effet), limites par carte. Modes `dmg` et `ds` de `compare.py`.
+- Prochaine étape : jalon 4, volet 3 (interdictions, protections, négation d'effets), puis ETAPE3 (générateur procédural).
 - Session cloud : 4 cœurs, 15 Go. Les tests CPU se font ici (`engine/regress.sh` lance toute la non-régression, ~25 min). Colab ne sert qu'au GPU.
 
 ## Règles

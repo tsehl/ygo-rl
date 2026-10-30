@@ -12,8 +12,10 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   OP_FILTER, OP_MINATK, OP_MOVE, OP_NEGATE, OP_PAY_LP, OP_RECOVER, OP_REQ, OP_REQ_FREE, OP_SELF,
                   OP_SHUFFLE_HAND, OP_SPSUMMON, P, P_FACEUP, P_FU_ATK, P_FU_DEF, TYPE_COUNTER, TYPE_MONSTER,
                   P_FD_ATK, TYPE_QUICKPLAY, TYPE_SPELL, TYPE_TRAP, Z_DECK, Z_GRAVE, Z_HAND, Z_MZONE, Z_SZONE,
-                  K_QUICK, Z_REMOVED, K_CONT, MW, M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, MC_ATK, MC_DEF, OP_MODIFY,
-                  NSET, PH_BATTLE, TYPE_CONTINUOUS)
+                  K_QUICK, Z_REMOVED, K_CONT, MW, M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX, MC_ATK, MC_DEF, OP_MODIFY,
+                  NSET, PH_BATTLE, TYPE_CONTINUOUS, MV_CONST, MV_HALF_BASE_ATK, MV_HALF_ATK, TD_TURN, TD_DCAL,
+                  OP_COND_ATK, OP_ATTACKER, DMG_STEP, DMG_CAL, DMG_STAT, MC_BASE_ATK, MC_SET_ATK, MC_SET_DEF,
+                  MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR)
 
 ME, OPP = 0, 1
 
@@ -47,7 +49,10 @@ def COND_TURN(who): return (OP_COND_TURN, who, 0, 0)     # c'est le tour de who
 def COND_EVP(ev, who): return (OP_COND_EVP, ev, who, 0)  # l'un des événements ev vient de who
 def COND_SELF(zone=0, prev=0): return (OP_COND_SELF, zone, prev, 0)  # la carte est dans zone / venait de prev
 def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des cartes de ce nom ce tour
-def MODIFY(r, code, val): return (OP_MODIFY, r, code, val)  # MC_* jusqu'à la fin du tour (RESETS_STANDARD_PHASE_END)
+def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN):  # MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut)
+    return (OP_MODIFY, r, code | (mode << 4) | (dur << 8), val)
+def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
+def ATTACKER(r): return (OP_ATTACKER, r, 0, 0)            # le monstre attaquant (s'il peut être ciblé)
 
 
 def ev(*codes):
@@ -55,9 +60,9 @@ def ev(*codes):
 
 
 # effet = (genre, on, opt, rng, coût, cible, résolution)
-def act(cost=(), target=(), resolve=(), on=0):
-    """on : masque d'événements (ev(...)) ; 0 = activation libre."""
-    return (K_ACTIVATE, on, 0, 0, cost, target, resolve)
+def act(cost=(), target=(), resolve=(), on=0, dmg=0):
+    """on : masque d'événements (ev(...)) ; 0 = activation libre. dmg : bits DMG_* (activation au damage step)."""
+    return (K_ACTIVATE, on, 0, 0, cost, target, resolve, dict(dmg=dmg))
 
 
 def ignition(cost=(), target=(), resolve=()):
@@ -69,18 +74,22 @@ def trigger(on, cost=(), target=(), resolve=(), optional=False, opt=False):
     return (K_TRIG_O if optional else K_TRIG_F, on, int(opt), 0, cost, target, resolve)
 
 
-def quick(rng, cost=(), target=(), resolve=(), opt=False):
-    """Effet rapide de monstre (vitesse 2) activable depuis les zones rng (main, zone monstres recto)."""
-    return (K_QUICK, 0, int(opt), rng, cost, target, resolve)
+def quick(rng, cost=(), target=(), resolve=(), opt=False, on=0, dmg=0):
+    """Effet rapide de monstre (vitesse 2) activable depuis les zones rng (main, zone monstres recto) ; on : seulement
+    en réponse à ces événements ; opt : True (une fois par tour par nom) ou OPT_*."""
+    return (K_QUICK, on, int(opt), rng, cost, target, resolve, dict(dmg=dmg))
 
 
-def cont(rng, code, val, tgt=None, per=None, tp=0, ph=0):
+def cont(rng, code, val, tgt=None, per=None, tp=0, ph=0, cnt=None):
     """Effet continu appliqué tant que la carte est recto dans les zones rng : code MC_*, valeur val (× nombre de
     cartes du filtre per), sur les monstres recto du filtre tgt (EFFECT_TYPE_FIELD, zones relatives au contrôleur de
-    la carte) ou sur la carte elle-même (tgt=None : SINGLE_RANGE). Condition : tour de tp (ME + 1 / OPP + 1), phases ph."""
+    la carte) ou sur la carte elle-même (tgt=None : SINGLE_RANGE). Conditions : tour de tp (ME + 1 / OPP + 1),
+    phases ph, cnt = (filtre, min, max) sur le nombre de cartes du filtre."""
     mod = {M_CODE: code, M_SELF: int(tgt is None), M_VAL: val, M_PER: int(per is not None), M_TP: tp, M_PH: ph}
-    filters = [tgt or F(), per or F()]
-    return (K_CONT, 0, 0, rng, (), (), (), mod, filters)
+    if cnt is not None:
+        mod.update({M_CNT: 1, M_CMIN: cnt[1], M_CMAX: cnt[2]})
+    filters = [tgt or F(), per or F(), cnt[0] if cnt else F()]
+    return (K_CONT, 0, 0, rng, (), (), (), dict(mod=mod, filters=filters))
 
 
 MY_DECK = F(me=Z_DECK)
@@ -101,6 +110,8 @@ EARTH, WATER, WIND = 0x1, 0x2, 0x8
 SET_ELEMENTAL_HERO = 0x3008
 DARK_MAGICIAN, MAGICIAN_OF_BLACK_CHAOS = 46986414, 30208479
 FACEUP_MON = F(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP)
+RACE_INSECT = 0x800
+STAT_DS = DMG_STEP | DMG_STAT  # EFFECT_FLAG_DAMAGE_STEP + aux.StatChangeDamageStepCondition
 
 CARDS = {
     55144522: [act(target=[FILTER(0, MY_DECK), REQ(0, 2)], resolve=[DRAW(ME, 2)])],            # Pot of Greed
@@ -172,6 +183,19 @@ CARDS = {
                        resolve=[FILTER(0, F(me=Z_MZONE, pos=P_FACEUP, attr=WATER)), MODIFY(0, MC_ATK, 500)])],
     25109950: [ignition(cost=[FILTER(0, F(me=Z_MZONE, not_self=1)), CHOOSE(1, 0, 1), MOVE(1)],         # Little Swordsman of Aile
                         target=[SELF(2)], resolve=[FILTER(3, F(me=Z_MZONE, pos=P_FACEUP), within=2), MODIFY(3, MC_ATK, 700)])],
+    # jalon 4, volet 2 : damage step, SET_ATTACK / SET_ATTACK_FINAL / SET_BASE_ATTACK
+    70046172: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Rush Recklessly
+                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 700)])],
+    55713623: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Shrink
+                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_BASE_ATK, mode=MV_HALF_BASE_ATK)])],
+    44209392: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Castle Walls
+                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_DEF, 500)])],
+    94156050: [act(target=[FILTER(0, FACEUP_MON), REQ(0, 1)], dmg=STAT_DS,                               # Reverse Glasses
+                   resolve=[FILTER(0, FACEUP_MON), MODIFY(0, MC_FINAL_ATK, mode=MV_HALF_ATK)])],
+    62340868: [quick(Z_MZONE, opt=OPT_CARD_NR, on=ev(EV_PRE_DMG), cost=[COND_TURN(OPP), COND_ATK(target=True)],  # Kazejin
+                     target=[ATTACKER(0), REQ(0, 1)], resolve=[MODIFY(0, MC_FINAL_ATK, 0, dur=TD_DCAL)])],
+    42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
+               cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
 }
 
 
@@ -185,18 +209,19 @@ def assemble(codes, cards=CARDS):
     eopt = np.zeros((c, E), np.int32)
     erng = np.zeros((c, E), np.int32)
     emod = np.zeros((c, E, MW), np.int32)
+    edmg = np.zeros((c, E), np.int32)
     for i, code in enumerate(codes):
         for e, (kind, on, opt, rng, *progs) in enumerate(cards.get(code, ())):
             ekind[i, e] = kind
             etrig[i, e] = on
             eopt[i, e] = opt
             erng[i, e] = rng
-            fl = []
-            if kind == K_CONT:  # filtres 0 (cibles) et 1 (compte)
-                mod, fl = progs[3], list(progs[4])
-                progs = progs[:3]
-                for k, v in mod.items():
-                    emod[i, e, k] = v
+            extra = progs[3] if len(progs) > 3 else {}
+            progs = progs[:3]
+            edmg[i, e] = extra.get("dmg", 0)
+            fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte), 2 (condition)
+            for k, v in extra.get("mod", {}).items():
+                emod[i, e, k] = v
             for g, pr in enumerate(progs):
                 assert len(pr) < P, (code, g)  # toujours au moins un OP_END
                 assert g == PG_RESOLVE or len(pr) <= PT, (code, g)  # test_ok ne lit que PT instructions
@@ -209,7 +234,7 @@ def assemble(codes, cards=CARDS):
             assert len(fl) <= NF, code
             for j, f in enumerate(fl):
                 filt[i, e, j] = f
-    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod)
+    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg)
 
 
 def setcodes(sc):
@@ -226,20 +251,26 @@ ST_TYPES = {5318639: TYPE_SPELL | TYPE_QUICKPLAY, 83968380: TYPE_TRAP, 24068492:
 J4_SPELLS = {213326: TYPE_SPELL, 10012614: TYPE_SPELL | TYPE_CONTINUOUS, 68833958: TYPE_SPELL}
 J4_MONSTERS = [28470714, 38033121, 13314457, 25109950]
 J4 = set(J4_SPELLS) | set(J4_MONSTERS)
+# volet 2 (mode dmg de compare.py ; hors J4 pour que les graines du mode cont rejouent les mêmes decks)
+J4B_SPELLS = {70046172: TYPE_SPELL | TYPE_QUICKPLAY, 55713623: TYPE_SPELL | TYPE_QUICKPLAY, 44209392: TYPE_TRAP,
+              94156050: TYPE_TRAP}
+J4B_MONSTERS = [62340868, 42364374]
+J4B = set(J4B_SPELLS) | set(J4B_MONSTERS)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
                    24508238: (100, 100, 1), 59438930: (0, 1800, 3),        # D.D. Crow, Ghost Ogre & Snow Rabbit
                    18430390: (1800, 500, 4),                               # Winged Rhynos
                    28470714: (600, 700, 2), 38033121: (2000, 1700, 6),     # Bladefly, Dark Magician Girl
-                   13314457: (600, 100, 1), 25109950: (800, 1300, 3)}      # Deepsea Macrotrema, Little Swordsman of Aile
+                   13314457: (600, 100, 1), 25109950: (800, 1300, 3),      # Deepsea Macrotrema, Little Swordsman of Aile
+                   62340868: (2400, 2200, 7), 42364374: (2000, 2000, 3)}   # Kazejin, Arsenal Bug
 
 
 def test_bank(key, c):
     """c monstres normaux aléatoires (codes 0..c-1) + les cartes de CARDS (indices c..)."""
     import jax
     import core
-    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS)
+    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS)
     codes = list(range(c)) + st + list(EFFECT_MONSTERS)
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()]])
@@ -248,8 +279,8 @@ def test_bank(key, c):
     lv = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 2), (c,), 1, 13)),
                          np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()]])
     ctype = [core.TYPE_MONSTER | core.TYPE_NORMAL] * c + [core.TYPE_SPELL] * len(SPELL_CODES) \
-        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
+        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
-                           np.zeros(len(st), int), [WIND if k == 28470714 else WATER for k in EFFECT_MONSTERS]])
+                           np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS]])
     return core.make_bank(np.array(codes), atk, df, lv, ctype=ctype, attr=attr, **assemble(codes))
