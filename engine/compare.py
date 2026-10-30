@@ -5,12 +5,13 @@ Decks : 40 monstres normaux, ou (mode « mixed ») 28 monstres normaux + 12 cart
 (mode « trig ») 20 monstres normaux + 10 monstres à effet déclenché + 10 autres cartes à effet, ou (mode « cont »)
 les cartes du jalon 4 (archétypes, effets continus, modificateurs temporaires) avec des E-HERO et des Dark Magician,
 ou (mode « dmg ») les cartes du volet 2 (damage step, SET_ATTACK*) avec quelques cartes du volet 1 ; le mode « ds »
-reprend ces decks mais garde le plus souvent les cartes du volet 2 pour les fenêtres du damage step.
+reprend ces decks mais garde le plus souvent les cartes du volet 2 pour les fenêtres du damage step, ou (mode « flag »)
+les cartes du volet 3a (interdictions, protections) avec des cartes des autres volets et des anciens modes.
 
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag]
 """
 import os
 import collections
@@ -145,7 +146,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B  # cartes du jalon 4 : seulement dans les modes cont et dmg
+    new = cards.J4 | cards.J4B | cards.J4C  # cartes du jalon 4 : seulement dans les modes cont, dmg, ds et flag
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
         fast = list(cards.ST_TYPES)
@@ -173,6 +174,12 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(heroes) for _ in range(5)]
                  + [cards.DARK_MAGICIAN] * 2 + [rng.choice(j4) for _ in range(13)] + [rng.choice(base) for _ in range(6)]
                  for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+    elif mode == "flag":
+        j4c, j4 = sorted(cards.J4C), sorted(cards.J4 | cards.J4B)
+        decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(j4c) for _ in range(14)]
+                 + [rng.choice(j4) for _ in range(4)] + [rng.choice(base) for _ in range(8)] for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
     elif mode in ("dmg", "ds"):

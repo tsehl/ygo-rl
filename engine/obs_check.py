@@ -84,7 +84,7 @@ def perturb(s, p):
     inv = np.argsort(perm)
     sl = lambda x: np.where(x >= 0, inv[x], -1)
     s = s._replace(**{f: getattr(s, f)[perm] for f in ("cid", "zone", "seq", "ctrl", "owner", "pos", "st", "pzone", "tg", "tg_e",
-                                                  "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t")}, tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
+                                                  "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t", "fl_c", "ib_c")}, tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
                    pend=sl(s.pend), ch_src=sl(s.ch_src), atk=sl(s.atk), atk_tgt=sl(s.atk_tgt), lk_src=sl(s.lk_src),
                    reg=s.reg[:, perm], lk_reg=s.lk_reg[:, :, perm], mv=s.mv[perm], ev_g=s.ev_g[:, perm], tev=s.tev[:, perm])
     return core.State(*[jnp.asarray(x) for x in s]), len(h)

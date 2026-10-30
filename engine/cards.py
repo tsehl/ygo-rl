@@ -15,18 +15,23 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   K_QUICK, Z_REMOVED, K_CONT, MW, M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX, MC_ATK, MC_DEF, OP_MODIFY,
                   NSET, PH_BATTLE, TYPE_CONTINUOUS, MV_CONST, MV_HALF_BASE_ATK, MV_HALF_ATK, TD_TURN, TD_DCAL,
                   OP_COND_ATK, OP_ATTACKER, DMG_STEP, DMG_CAL, DMG_STAT, MC_BASE_ATK, MC_SET_ATK, MC_SET_DEF,
-                  MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR)
+                  MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
+                  MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA)
 
 ME, OPP = 0, 1
 
 
-def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0)):
-    """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro)."""
+def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
+      st=0, lv=(-BIG, BIG), spsum=0):
+    """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
+    statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned)."""
     code = (code, code) if isinstance(code, int) else code
-    return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1])
+    return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
+            spsum)
 
 
-def FILTER(r, f, within=None): return (OP_FILTER, r, f, 0 if within is None else within + 1)  # ∩ registre within
+def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
+    return (OP_FILTER, r, f, (0 if within is None else within + 1) | (8 if tgt else 0))
 def SELF(r): return (OP_SELF, r, 0, 0)
 def REQ(r, n): return (OP_REQ, r, n, 0)
 def REQ_FREE(who, zone, n): return (OP_REQ_FREE, who, zone, n)
@@ -52,7 +57,7 @@ def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des
 def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN):  # MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut)
     return (OP_MODIFY, r, code | (mode << 4) | (dur << 8), val)
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
-def ATTACKER(r): return (OP_ATTACKER, r, 0, 0)            # le monstre attaquant (s'il peut être ciblé)
+def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
 
 
 def ev(*codes):
@@ -98,13 +103,14 @@ ALL_MON = F(me=Z_MZONE, op=Z_MZONE)
 OPP_FACEUP_MON = F(op=Z_MZONE, pos=P_FACEUP)
 OPP_ST = F(op=Z_MZONE | Z_SZONE, typ=TYPE_SPELL | TYPE_TRAP, not_self=1)
 GRAVE_MON = F(me=Z_GRAVE, op=Z_GRAVE, typ=TYPE_MONSTER)
+GRAVE_MON_SS = F(me=Z_GRAVE, op=Z_GRAVE, typ=TYPE_MONSTER, spsum=1)
 BIG_FACEUP = F(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP, atk=(1000, BIG))
 OPP_ATK_MON = F(op=Z_MZONE, pos=P_FU_ATK | P_FD_ATK)
 ONFIELD = Z_MZONE | Z_SZONE
 DARK = 0x20
 SEARCH_ATK1500 = F(me=Z_DECK, typ=TYPE_MONSTER, atk=(-BIG, 1500))
 SEARCH_DEF1500 = F(me=Z_DECK, typ=TYPE_MONSTER, df=(-BIG, 1500))
-DECK_DARK1500 = F(me=Z_DECK, typ=TYPE_MONSTER, atk=(-BIG, 1500), attr=DARK)
+DECK_DARK1500 = F(me=Z_DECK, typ=TYPE_MONSTER, atk=(-BIG, 1500), attr=DARK, spsum=1)
 FIELD_ST = F(me=Z_MZONE | Z_SZONE, op=Z_MZONE | Z_SZONE, typ=TYPE_SPELL | TYPE_TRAP, not_self=1)
 EARTH, WATER, WIND = 0x1, 0x2, 0x8
 SET_ELEMENTAL_HERO = 0x3008
@@ -112,6 +118,8 @@ DARK_MAGICIAN, MAGICIAN_OF_BLACK_CHAOS = 46986414, 30208479
 FACEUP_MON = F(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP)
 RACE_INSECT = 0x800
 STAT_DS = DMG_STEP | DMG_STAT  # EFFECT_FLAG_DAMAGE_STEP + aux.StatChangeDamageStepCondition
+RACE_WARRIOR, RACE_DRAGON, LIGHT = 0x1, 0x2000, 0x10
+ALL_ZONES = Z_DECK | Z_HAND | Z_MZONE | Z_SZONE | Z_GRAVE | Z_REMOVED | Z_EXTRA
 
 CARDS = {
     55144522: [act(target=[FILTER(0, MY_DECK), REQ(0, 2)], resolve=[DRAW(ME, 2)])],            # Pot of Greed
@@ -122,13 +130,13 @@ CARDS = {
     70368879: [act(target=[FILTER(0, MY_DECK), REQ(0, 1)], resolve=[DRAW(ME, 1), RECOVER(OPP, 1000)])],  # Upstart
     66788016: [act(target=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1)],                               # Fissure
                    resolve=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1), MOVE(2)])],
-    83764718: [act(target=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, GRAVE_MON), CHOOSE(1, 0, 1)],    # Monster Reborn
+    83764718: [act(target=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, GRAVE_MON_SS, tgt=True), CHOOSE(1, 0, 1)],  # Monster Reborn
                    resolve=[SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
     79571449: [act(target=[FILTER(0, MY_DECK), REQ(0, 3)],                                      # Graceful Charity
                    resolve=[DRAW(ME, 3), SHUFFLE_HAND(ME), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 2), MOVE(1)])],
     18144506: [act(target=[FILTER(0, OPP_ST), REQ(0, 1)], resolve=[FILTER(0, OPP_ST), MOVE(0)])],  # Feather Duster
     74131780: [ignition(cost=[SELF(0), MOVE(0)],                                                # Exiled Force
-                        target=[FILTER(1, F(me=Z_MZONE, op=Z_MZONE, not_self=1)), CHOOSE(2, 1, 1)],
+                        target=[FILTER(1, F(me=Z_MZONE, op=Z_MZONE, not_self=1), tgt=True), CHOOSE(2, 1, 1)],
                         resolve=[MOVE(2)])],
     11384280: [ignition(cost=[FILTER(0, F(me=Z_MZONE)), CHOOSE(1, 0, 1), MOVE(1)],              # Cannon Soldier
                         resolve=[DAMAGE(OPP, 500)])],
@@ -136,26 +144,26 @@ CARDS = {
     83968380: [act(target=[FILTER(0, MY_DECK), REQ(0, 1)], resolve=[DRAW(ME, 1)])],               # Jar of Greed
     24068492: [act(target=[FILTER(0, OPP_MON), REQ(0, 1)],                                       # Just Desserts
                    resolve=[FILTER(0, OPP_MON), DAMAGE(OPP, 500, per=0)])],
-    5318639: [act(target=[FILTER(0, FIELD_ST), CHOOSE(1, 0, 1)], resolve=[MOVE(1)])],            # Mystical Space Typhoon
+    5318639: [act(target=[FILTER(0, FIELD_ST, tgt=True), CHOOSE(1, 0, 1)], resolve=[MOVE(1)])],            # Mystical Space Typhoon
     77414722: [act(cost=[COND_CHAIN(TYPE_SPELL), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1)],  # Magic Jammer
                    resolve=[NEGATE(), CHAINCARD(0), MOVE(0)])],
     3819470: [act(cost=[COND_CHAIN(TYPE_TRAP), PAY_LP(1000)], resolve=[NEGATE(), CHAINCARD(0), MOVE(0)])],  # Seven Tools
     # jalon 3b : pièges sur événement
     4206964: [act(on=ev(EV_SUMMON, EV_FLIP_SUMMON),                                              # Trap Hole
                   target=[COND_EVP(ev(EV_SUMMON, EV_FLIP_SUMMON), OPP), EVENT(0, ev(EV_SUMMON, EV_FLIP_SUMMON)),
-                          FILTER(1, BIG_FACEUP, within=0), REQ(1, 1)],
+                          FILTER(1, BIG_FACEUP, within=0, tgt=True), REQ(1, 1)],
                   resolve=[FILTER(1, BIG_FACEUP, within=1), MOVE(1)])],
     53582587: [act(on=ev(EV_SUMMON, EV_FLIP_SUMMON, EV_SPSUMMON),                                # Torrential Tribute
                    target=[FILTER(0, ALL_MON), REQ(0, 1)], resolve=[FILTER(0, ALL_MON), MOVE(0)])],
     56120475: [act(on=ev(EV_ATTACK), target=[COND_TURN(OPP), EVENT(0, ev(EV_ATTACK)),            # Sakuretsu Armor
-                                             FILTER(0, ALL_MON, within=0), REQ(0, 1)], resolve=[MOVE(0)])],
+                                             FILTER(0, ALL_MON, within=0, tgt=True), REQ(0, 1)], resolve=[MOVE(0)])],
     44095762: [act(on=ev(EV_ATTACK), target=[COND_TURN(OPP), FILTER(0, OPP_ATK_MON), REQ(0, 1)],  # Mirror Force
                    resolve=[FILTER(0, OPP_ATK_MON), MOVE(0)])],
     26202165: [trigger(ev(EV_TO_GRAVE), opt=True, target=[COND_SELF(prev=ONFIELD)],                       # Sangan
                        resolve=[FILTER(0, SEARCH_ATK1500), CHOOSE(1, 0, 1, upto=True), MOVE(1, Z_HAND), LOCK(1)])],
     78010363: [trigger(ev(EV_TO_GRAVE), opt=True, target=[COND_SELF(prev=ONFIELD)],         # Witch of the Black Forest
                        resolve=[FILTER(0, SEARCH_DEF1500), CHOOSE(1, 0, 1, upto=True), MOVE(1, Z_HAND), LOCK(1)])],
-    54652250: [trigger(ev(EV_FLIP), target=[FILTER(0, ALL_MON), CHOOSE(1, 0, 1, upto=True)],              # Man-Eater Bug
+    54652250: [trigger(ev(EV_FLIP), target=[FILTER(0, ALL_MON, tgt=True), CHOOSE(1, 0, 1, upto=True)],              # Man-Eater Bug
                        resolve=[MOVE(1)])],
     83011277: [trigger(ev(EV_BATTLE_DESTROYED), optional=True,                                               # Mystic Tomato
                        target=[COND_SELF(zone=Z_GRAVE), REQ_FREE(ME, Z_MZONE, 1), FILTER(0, DECK_DARK1500), REQ(0, 1)],
@@ -163,7 +171,7 @@ CARDS = {
                                 SPSUMMON(1, P_FU_ATK)])],
     # jalon 3b, volet 3 : effets rapides de monstre
     24508238: [quick(Z_HAND, cost=[SELF(0), MOVE(0)],                                                       # D.D. Crow
-                     target=[FILTER(1, F(op=Z_GRAVE)), CHOOSE(2, 1, 1)], resolve=[MOVE(2, Z_REMOVED)])],
+                     target=[FILTER(1, F(op=Z_GRAVE), tgt=True), CHOOSE(2, 1, 1)], resolve=[MOVE(2, Z_REMOVED)])],
     59438930: [quick(Z_HAND | Z_MZONE, opt=True, cost=[COND_CHAIN_FIELD(), SELF(0), MOVE(0)],      # Ghost Ogre & Snow Rabbit
                      target=[CHAINCARD(1, ONFIELD)], resolve=[MOVE(1)])],
     18430390: [quick(Z_MZONE, cost=[COND_CHAIN(TYPE_TRAP)],                                                  # Winged Rhynos
@@ -177,23 +185,33 @@ CARDS = {
     10012614: [act(), cont(Z_SZONE, MC_ATK, 200, tgt=F(me=Z_MZONE), tp=ME + 1, ph=PH_BATTLE)],              # Banner of Courage
     38033121: [cont(Z_MZONE, MC_ATK, 300, per=F(me=Z_GRAVE, op=Z_GRAVE,                                    # Dark Magician Girl
                                               code=(MAGICIAN_OF_BLACK_CHAOS, DARK_MAGICIAN)))],
-    68833958: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)],                                       # Back-Up Rider
+    68833958: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)],                                       # Back-Up Rider
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 1500)])],
     13314457: [trigger(ev(EV_TO_GRAVE), target=[COND_SELF(prev=ONFIELD)],                                 # Deepsea Macrotrema
                        resolve=[FILTER(0, F(me=Z_MZONE, pos=P_FACEUP, attr=WATER)), MODIFY(0, MC_ATK, 500)])],
     25109950: [ignition(cost=[FILTER(0, F(me=Z_MZONE, not_self=1)), CHOOSE(1, 0, 1), MOVE(1)],         # Little Swordsman of Aile
                         target=[SELF(2)], resolve=[FILTER(3, F(me=Z_MZONE, pos=P_FACEUP), within=2), MODIFY(3, MC_ATK, 700)])],
     # jalon 4, volet 2 : damage step, SET_ATTACK / SET_ATTACK_FINAL / SET_BASE_ATTACK
-    70046172: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Rush Recklessly
+    70046172: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Rush Recklessly
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 700)])],
-    55713623: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Shrink
+    55713623: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Shrink
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_BASE_ATK, mode=MV_HALF_BASE_ATK)])],
-    44209392: [act(target=[FILTER(0, FACEUP_MON), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Castle Walls
+    44209392: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Castle Walls
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_DEF, 500)])],
     94156050: [act(target=[FILTER(0, FACEUP_MON), REQ(0, 1)], dmg=STAT_DS,                               # Reverse Glasses
                    resolve=[FILTER(0, FACEUP_MON), MODIFY(0, MC_FINAL_ATK, mode=MV_HALF_ATK)])],
     62340868: [quick(Z_MZONE, opt=OPT_CARD_NR, on=ev(EV_PRE_DMG), cost=[COND_TURN(OPP), COND_ATK(target=True)],  # Kazejin
-                     target=[ATTACKER(0), REQ(0, 1)], resolve=[MODIFY(0, MC_FINAL_ATK, 0, dur=TD_DCAL)])],
+                     target=[ATTACKER(0, tgt=True), REQ(0, 1)], resolve=[MODIFY(0, MC_FINAL_ATK, 0, dur=TD_DCAL)])],
+    # jalon 4, volet 3a : interdictions et protections
+    85742772: [act(), cont(Z_SZONE, MC_NO_ATTACK, 0, tgt=F(me=Z_MZONE, op=Z_MZONE, lv=(4, BIG)))],         # Gravity Bind
+    59380081: [cont(Z_MZONE, MC_NO_ATTACK, 0, tgt=F(op=Z_MZONE, st=ST_SUMMON_TURN | ST_FLIP_TURN))],      # Big-Tusked Mammoth
+    10375182: [cont(Z_MZONE, MC_NO_BTARGET, 0, cnt=(F(me=Z_MZONE), 2, BIG)),                              # Command Knight
+               cont(Z_MZONE, MC_ATK, 400, tgt=F(me=Z_MZONE, race=RACE_WARRIOR))],
+    52077741: [cont(Z_MZONE, MC_INDES_BATTLE, 1900)],                                                   # Obnoxious Celtic Guard
+    17985575: [cont(Z_MZONE, MC_NO_ETARGET, 0, tgt=F(me=Z_MZONE, op=Z_MZONE, race=RACE_DRAGON))],         # Lord of D.
+    86188410: [cont(Z_MZONE, MC_IMM_TRAP, 0)],                                                         # Elemental HERO Wildheart
+    72845813: [cont(Z_MZONE, MC_NO_SS, 0, tgt=F(me=ALL_ZONES, op=ALL_ZONES, attr=LIGHT))],                # Ally of Justice Quarantine
+    15960641: [cont(Z_MZONE, MC_P_NO_TRAP, 2, ph=PH_BATTLE)],                                           # Mirage Dragon
     42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
                cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
 }
@@ -256,6 +274,10 @@ J4B_SPELLS = {70046172: TYPE_SPELL | TYPE_QUICKPLAY, 55713623: TYPE_SPELL | TYPE
               94156050: TYPE_TRAP}
 J4B_MONSTERS = [62340868, 42364374]
 J4B = set(J4B_SPELLS) | set(J4B_MONSTERS)
+# volet 3a (mode flag de compare.py)
+J4C_SPELLS = {85742772: TYPE_TRAP | TYPE_CONTINUOUS}
+J4C_MONSTERS = [59380081, 10375182, 52077741, 17985575, 86188410, 72845813, 15960641]
+J4C = set(J4C_SPELLS) | set(J4C_MONSTERS)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -263,14 +285,18 @@ EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exil
                    18430390: (1800, 500, 4),                               # Winged Rhynos
                    28470714: (600, 700, 2), 38033121: (2000, 1700, 6),     # Bladefly, Dark Magician Girl
                    13314457: (600, 100, 1), 25109950: (800, 1300, 3),      # Deepsea Macrotrema, Little Swordsman of Aile
-                   62340868: (2400, 2200, 7), 42364374: (2000, 2000, 3)}   # Kazejin, Arsenal Bug
+                   62340868: (2400, 2200, 7), 42364374: (2000, 2000, 3),   # Kazejin, Arsenal Bug
+                   59380081: (2000, 1000, 5), 10375182: (1200, 1900, 4),   # Big-Tusked Mammoth, Command Knight
+                   52077741: (1400, 1200, 4), 17985575: (1200, 1100, 4),   # Obnoxious Celtic Guard, Lord of D.
+                   86188410: (1500, 1600, 4), 72845813: (1700, 1200, 4),   # Wildheart, Ally of Justice Quarantine
+                   15960641: (1600, 600, 4)}                               # Mirage Dragon
 
 
 def test_bank(key, c):
     """c monstres normaux aléatoires (codes 0..c-1) + les cartes de CARDS (indices c..)."""
     import jax
     import core
-    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS)
+    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS)
     codes = list(range(c)) + st + list(EFFECT_MONSTERS)
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()]])
@@ -279,7 +305,7 @@ def test_bank(key, c):
     lv = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 2), (c,), 1, 13)),
                          np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()]])
     ctype = [core.TYPE_MONSTER | core.TYPE_NORMAL] * c + [core.TYPE_SPELL] * len(SPELL_CODES) \
-        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
+        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
                            np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS]])
