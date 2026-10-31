@@ -21,7 +21,8 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - Jalon 4, volet 3b fait (2026-10-30) : annulation d'effets (EFFECT_DISABLE, DISABLE_EFFECT, RESET_DISABLE, immunité dépendante de l'historique). Mode `neg` de `compare.py`.
 - Jalon 5, volet a fait (2026-10-31) : Extra Deck, fusion (Polymerization, recettes par filtres, choix des matériaux, zones extra MR5). Mode `fus` de `compare.py`.
 - Jalon 5, volet b fait (2026-10-31) : rituel (Greater / Equal, MSG_SELECT_SUM dans `driver.py`). Mode `rit` de `compare.py`.
-- Prochaine étape (décidée avec Thomas : finir le jeu avant le générateur procédural) : jalon 5, volets c-f (synchro, xyz, link, pendule). Débit GPU mesuré seulement à la fin de l'Extra Deck.
+- Jalon 5, volet c fait (2026-10-31) : synchro (procédure de l'Extra Deck par V_SUMMON, Syntoniseur puis non-Syntoniseurs). Mode `syn` de `compare.py`.
+- Prochaine étape (décidée avec Thomas : finir le jeu avant le générateur procédural) : jalon 5, volets d-f (xyz, link, pendule). Débit GPU mesuré seulement à la fin de l'Extra Deck.
 - Mémoire : ~1,75 Go par processus `compare.py`. Ne pas dérouler en Python de boucles sur les entrées de `stats` (l'OOM killer est passé à 3,8 Go par processus).
 - Session cloud : 4 cœurs, 15 Go. Les tests CPU se font ici (`engine/regress.sh` lance toute la non-régression, ~45 min). Colab ne sert qu'au GPU.
 

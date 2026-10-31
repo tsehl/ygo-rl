@@ -9,13 +9,13 @@ mkdir -p "$out"
 jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
 run="uv run --quiet --with jax python"
 
-printf '%s\n' "trig 100 1000" "quick 80 1600" "cont 100 3000" "dmg 100 4000" "ds 100 5000" "flag 100 6000" "neg 100 7000" "fus 100 8000" "rit 100 9000" "chain 60 1200" "mixed 60 1300" "normal 40 1" \
+printf '%s\n' "trig 100 1000" "quick 80 1600" "cont 100 3000" "dmg 100 4000" "ds 100 5000" "flag 100 6000" "neg 100 7000" "fus 100 8000" "rit 100 9000" "syn 100 10000" "chain 60 1200" "mixed 60 1300" "normal 40 1" \
   | xargs -P "$jobs" -L 1 sh -c "$run compare.py \$1 \$2 \$0 > $out/\$0.log 2>&1"
 $run obs_check.py > "$out/obs.log" 2>&1
 $run vmap_check.py > "$out/vmap.log" 2>&1
 $run sb_check.py > "$out/sb.log" 2>&1
 
-for m in trig quick cont dmg ds flag neg fus rit chain mixed normal; do
+for m in trig quick cont dmg ds flag neg fus rit syn chain mixed normal; do
   printf '%-7s %s\n' "$m" "$(grep -h 'parties identiques' "$out/$m.log" || echo 'ÉCHEC (voir le log)')"
 done
 printf '%-7s %s\n' obs "$(tail -n 1 "$out/obs.log")"

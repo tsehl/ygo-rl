@@ -41,6 +41,7 @@ TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL = 1, 2, 4, 0x10
 TYPE_QUICKPLAY, TYPE_CONTINUOUS, TYPE_COUNTER = 0x10000, 0x20000, 0x100000
 TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK = 0x40, 0x80, 0x2000, 0x800000, 0x4000000
 TYPE_EXTRA = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK  # monstres de l'Extra Deck
+TYPE_TUNER = 0x1000
 # statuts (bits)
 ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : choisie dans la sélection en cours
 ST_SET_TURN, ST_LEAVE = 16, 32  # posée ce tour (magie/piège) ; activée, ira au cimetière en fin de chaîne
@@ -56,7 +57,7 @@ PH_DRAW, PH_STANDBY, PH_MAIN1, PH_BATTLE, PH_MAIN2, PH_END = 0x1, 0x2, 0x4, 0x8,
 D_NONE, D_IDLE, D_BATTLE, D_TRIBUTE, D_ZONE, D_TARGET, D_DISCARD, D_SELECT, D_POS, D_RUN, D_CHAIN, D_TRIG = range(12)
 # D_TRIG (interne) : déclencheurs en attente à tester, traité par settle hors de la boucle d'exécution
 # à quoi sert le choix de case en cours
-ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM = range(4)
+ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC = range(5)  # ZC_PROC : invocation par procédure (synchro)
 # fenêtres de réponse ; W_TRIG : mise en chaîne des effets déclenchés (SEGOC)
 W_QUICK, W_PHASE, W_TRIG = range(3)
 # événements (EVENT_* d'ygopro-core) : disponibles pendant la fenêtre qui suit et la chaîne bâtie dessus ;
@@ -179,10 +180,13 @@ class Bank(NamedTuple):
     fmat: jnp.ndarray   # [C, FK, FW] matériaux de fusion (un filtre par matériau, sur la main et le terrain)
     fmn: jnp.ndarray    # [C] nombre de matériaux (0 : pas de recette)
     erl: jnp.ndarray    # [C] EnableReviveLimit : invocable spécialement seulement si correctement invoquée avant
+    smat: jnp.ndarray   # [C, 2, FW] synchro : filtres du Syntoniseur (un seul) et des non-Syntoniseurs (1 ou plus)
+    syn: jnp.ndarray    # [C] monstre synchro (procédure d'invocation synchro)
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
-              race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None):
+              race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None,
+              smat=None, syn=None):
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32), tprog=test_prog(prog, c),
@@ -192,7 +196,7 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
                 etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)), setcode=i(setcode, (c, NSET)),
                 emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)), fmat=i(fmat, (c, FK, FW)), fmn=i(fmn, (c,)),
-                erl=i(erl, (c,)))
+                erl=i(erl, (c,)), smat=i(smat, (c, 2, FW)), syn=i(syn, (c,)))
 
 
 def test_prog(prog, c):
@@ -300,6 +304,8 @@ class State(NamedTuple):
     fsel: jnp.ndarray    # sélection de matériaux en cours (OP_FUSMAT) : jamais jouée d'office s'il reste un choix
     rz_c: jnp.ndarray    # [N] monstre rituel en main invocable : bit 0 en mode Greater, bit 1 en mode Equal
     rsel: jnp.ndarray    # sélection de libérations rituelles en cours (OP_RITMAT) : mode RIT_*, 0 sinon
+    sz_c: jnp.ndarray    # [N] monstre synchro de l'Extra Deck invocable maintenant (matériaux sur le terrain)
+    ssel: jnp.ndarray    # sélection de matériaux synchro en cours (D_TRIBUTE, carte pend)
     ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
 
 
@@ -967,6 +973,8 @@ def refresh_b(bank, prev, s, frac=8):
         s = lax.cond(fus, lambda s: jax.vmap(lambda x: refresh_fus(bank, x))(s), lambda s: s, s)
         rit = jax.vmap(lambda x: has_ritual(bank, x))(s).any()
         s = lax.cond(rit, lambda s: jax.vmap(lambda x: refresh_rit(bank, x))(s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
+        syn = jax.vmap(lambda x: has_synchro(bank, x))(s).any()
+        s = lax.cond(syn, lambda s: jax.vmap(lambda x: refresh_syn(bank, x))(s), lambda s: s._replace(sz_c=s.sz_c & False), s)
         return jax.vmap(lambda x: refresh(bank, x, fus=False))(s)
 
     def sub(s):  # tout l'état est réécrit : ne réécrire que les champs de refresh est plus lent (mesuré sur CPU)
@@ -1210,12 +1218,95 @@ def has_ritual(bank, s):
     return ((s.zone == Z_HAND) & ((bank.ctype[s.cid] & RIT_MON) == RIT_MON)).any()
 
 
+def syn_mats(bank, s, c):
+    """[N], [N] : Syntoniseurs et non-Syntoniseurs utilisables pour le monstre synchro c (monstres face recto du terrain
+    de son propriétaire, de niveau >= 1, pas Xyz ni Link ; filtres de la banque)."""
+    ct, lv = bank.ctype[s.cid], bank.level[s.cid]
+    base = ((s.zone == Z_MZONE) & (s.ctrl == s.owner[c]) & ((s.pos & P_FACEUP) != 0) & ((ct & TYPE_MONSTER) != 0)
+            & ((ct & (TYPE_XYZ | TYPE_LINK)) == 0) & (lv >= 1) & ((s.st & ST_BDES) == 0))
+    tun = (ct & TYPE_TUNER) != 0
+    f = bank.smat[s.cid[c]]
+    return base & tun & mat_mask(bank, s, f[0]), base & ~tun & mat_mask(bank, s, f[1])
+
+
+def reach(h, lo=0):
+    """Masque de bits des sommes atteignables (< SMAX) avec au moins lo (0 ou 1) cartes de l'histogramme de niveaux h
+    [LVMAX + 1]. Effectifs pris par paquets 1, 2, 4... O(LVMAX × log SMAX)."""
+    full = (1 << SMAX) - 1
+    A, B = jnp.int32(1), jnp.int32(0)  # A : aucune carte ; B : au moins une
+    for L in range(LVMAX, 0, -1):
+        cmax = SMAX // L
+        c = jnp.minimum(h[L], cmax)
+        for i in range(cmax.bit_length()):
+            k = jnp.clip(c - (2 ** i - 1), 0, 2 ** i)
+            B = jnp.where(k > 0, B | (((A | B) << (k * L)) & full), B)
+    return jnp.where(lo > 0, B, A | B)
+
+
+def bit(x, i):
+    return ((x >> jnp.clip(i, 0, 31)) & 1).astype(bool) & (i >= 0) & (i < SMAX)
+
+
+def synchro_ok(bank, s):
+    """[N] sz_c : monstres synchro de l'Extra Deck invocables maintenant : un Syntoniseur de niveau t et des
+    non-Syntoniseurs (au moins un) de niveaux de somme exactement L - t. Les matériaux étant sur le terrain, une case
+    se libère toujours. O(EXK × (N + LVMAX log SMAX))."""
+    n = s.cid.shape[0]
+    want = (s.zone == Z_EXTRA) & (bank.syn[s.cid] != 0)
+    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
+    live = jnp.arange(EXK) < want.sum()
+    lvs = jnp.arange(LVMAX + 1)
+    lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
+
+    def one(c, ok):
+        t, nt = syn_mats(bank, s, c)
+        oh = lv[None, :] == lvs[:, None]
+        tl = (oh & t[None, :]).any(1)                              # [LVMAX + 1] niveaux de Syntoniseurs présents
+        b = reach((oh & nt[None, :]).sum(1, dtype=I32), 1)
+        L = bank.level[s.cid[c]]
+        return ok & (tl & jax.vmap(lambda l: bit(b, L - l))(lvs)).any()
+    oks = jax.vmap(one)(idx, live)
+    return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(oks, mode="drop")
+
+
+def syn_picks(bank, s, c):
+    """[N] : matériaux qu'on peut encore choisir pour le monstre synchro c : d'abord le Syntoniseur (il reste des
+    non-Syntoniseurs qui complètent la somme), puis les non-Syntoniseurs (le reste de la somme reste atteignable)."""
+    t, nt = syn_mats(bank, s, c)
+    sel = (s.st & ST_SEL) != 0
+    lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
+    lvs = jnp.arange(LVMAX + 1)
+    oh = lv[None, :] == lvs[:, None]
+    h = (oh & (nt & ~sel)[None, :]).sum(1, dtype=I32)
+    L = bank.level[s.cid[c]]
+    u = jnp.where(sel, lv, 0).sum()
+    has_t = (sel & t).any()
+    b1 = reach(h, 1)
+    tun = jax.vmap(lambda l: bit(b1, L - l))(lvs)                  # Syntoniseur de niveau l
+    ntv = jax.vmap(lambda l: bit(reach(h - (lvs == l), 0), L - u - l))(lvs)  # non-Syntoniseur de niveau l
+    return jnp.where(has_t, nt & ~sel & ntv[lv], t & ~sel & tun[lv])
+
+
+def syn_done(bank, s):
+    sel = (s.st & ST_SEL) != 0
+    return jnp.where(sel, jnp.clip(bank.level[s.cid], 0, LVMAX), 0).sum() >= bank.level[s.cid[s.pend]]
+
+
+def has_synchro(bank, s):
+    return ((s.zone == Z_EXTRA) & (bank.syn[s.cid] != 0)).any()
+
+
+def refresh_syn(bank, s):
+    return s._replace(sz_c=synchro_ok(bank, s))
+
+
 def refresh(bank, s, fus=True):
     """Recalcule les caches (stats, drapeaux, fusions réalisables). fus=False : sans fz_c (refresh_b le fait au
     niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
     if fus:
         s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
         s = lax.cond(has_ritual(bank, s), lambda s: refresh_rit(bank, s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
+        s = lax.cond(has_synchro(bank, s), lambda s: refresh_syn(bank, s), lambda s: s._replace(sz_c=s.sz_c & False), s)
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
@@ -1520,18 +1611,23 @@ def legal(bank, s, fus=True):
         src = jnp.argmax(eff_cand)
         eff_cand = jnp.where(s.fsel, fus_picks(bank, s, src),
                              jnp.where(s.rsel > 0, rit_picks(bank, s, src, s.rsel), eff_cand))
+        syn_c = syn_picks(bank, s, jnp.maximum(s.pend, 0))
+    else:
+        syn_c = jnp.zeros(n, bool)
 
     # libérations : sans case principale libre, l'une d'elles doit libérer une case principale (pas une zone extra)
     mainz = my_mon & (s.seq < N_MAIN_ZONES)
     trib_ok = ((free_m > 0) | mainz | (mainz & ~unsel).any()
                | ((s.need >= 2) & (mainz & unsel).any()))
     idle, bat, chn = s.dec == D_IDLE, s.dec == D_BATTLE, s.dec == D_CHAIN
+    # invocation synchro : V_SUMMON sur le monstre synchro de l'Extra Deck
+    can_syn = (s.zone == Z_EXTRA) & (s.ctrl == p) & s.sz_c
     verbs = [
-        idle & can_ns,
+        idle & (can_ns | can_syn),
         idle & can_ns,
         idle & can_repos,
         bat & can_atk,
-        ((s.dec == D_TRIBUTE) & my_mon & unsel & trib_ok) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
+        ((s.dec == D_TRIBUTE) & jnp.where(s.ssel, syn_c, my_mon & unsel & trib_ok)) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
         | ((s.dec == D_DISCARD) & in_hand & unsel) | ((s.dec == D_SELECT) & eff_cand & unsel),
         idle & in_hand & (spell | trap) & (free_s > 0),
     ]
@@ -1549,7 +1645,7 @@ def legal(bank, s, fus=True):
     mz = (s.zctx == ZC_SUMMON) | (s.zctx == ZC_SPSUM)
     used = jnp.where(mz, zone_used(s, p, Z_MZONE), zone_used(s, p, Z_SZONE))[:7]
     spc = jnp.argmax(s.reg[jnp.clip(ins[1], 0, R - 1)])             # carte invoquée spécialement (ZC_SPSUM)
-    fromex = (s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)
+    fromex = ((s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)) | (s.zctx == ZC_PROC)
     zok = jnp.where(fromex, ex_zones(s, p), ~used & (jnp.arange(7) < N_MAIN_ZONES))
     sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises
@@ -1571,7 +1667,10 @@ def apply(bank, s, a):
     def summon(s, is_set):
         need = tributes_needed(bank, s, c)
         s = s._replace(pend=c, pend_set=jnp.bool_(is_set), need=need, picks=_i(0), zctx=_i(ZC_SUMMON))
-        return s._replace(dec=jnp.where(need > 0, D_TRIBUTE, D_ZONE).astype(I32))
+        s = s._replace(dec=jnp.where(need > 0, D_TRIBUTE, D_ZONE).astype(I32))
+        # depuis l'Extra Deck : invocation synchro (matériaux choisis un par un en D_TRIBUTE, puis case et position)
+        return _cond(s.zone[c] == Z_EXTRA, lambda s: s._replace(ssel=jnp.bool_(True), need=_i(99), zctx=_i(ZC_PROC),
+                                                                 dec=_i(D_TRIBUTE)), lambda s: s, s)
 
     def repos(s):
         new = jnp.where(s.pos[c] == P_FU_ATK, P_FU_DEF, P_FU_ATK)
@@ -1597,7 +1696,8 @@ def apply(bank, s, a):
 
         def tribute(s):
             s = pick(s)
-            return _cond(s.need == 0, lambda s: selected_to_grave(s)._replace(dec=_i(D_ZONE)),
+            fin = jnp.where(s.ssel, syn_done(bank, s), s.need == 0)
+            return _cond(fin, lambda s: selected_to_grave(s)._replace(dec=_i(D_ZONE), ssel=jnp.bool_(False)),
                                 lambda s: s, s)
 
         def target(s):
@@ -1655,9 +1755,22 @@ def apply(bank, s, a):
             set_done,
             lambda s: begin_act(bank, to_szone(s, P_SFU), s.pend, s.ch_eff),
             lambda s: s._replace(zsel=z, dec=_i(D_POS)),
+            lambda s: s._replace(zsel=z, dec=_i(D_POS)),
         ], s)
 
+    def proc_place(s):  # fin d'une invocation par procédure (synchro) : pas de chaîne, fenêtre comme une invocation
+        c = s.pend
+        pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
+        s = compact(s, jnp.arange(n) == c)
+        s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
+        s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.tp)
+        s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN), pend=_i(-1))
+        return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
+
     def position(s):
+        return _cond(s.zctx == ZC_PROC, proc_place, eff_position, s)
+
+    def eff_position(s):
         c = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[1], 0, R - 1)])
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
         # invocation fusion (depuis l'Extra Deck) ou rituelle (SPSUMMON avec proc) : correctement invoquée
@@ -1696,7 +1809,7 @@ def forced(bank, s):
 
 def forced_m(bank, s, m):
     k = m.sum()
-    sel = (s.dec == D_TRIBUTE) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0))
+    sel = ((s.dec == D_TRIBUTE) & ~s.ssel) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0))
     # libérations rituelles : jouées d'office si l'union des choix possibles est elle-même le seul ensemble valide
     # (l'oracle n'a alors qu'une option) : elle atteint la somme sans carte superflue (Greater) ou exactement (Equal)
     n = s.cid.shape[0]
@@ -1791,7 +1904,7 @@ def step_batch(bank, s, a, frac=0.0):
         act = (a >= 0) & ~s.done
         s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))
         s = _where(act, settle_b(refresh_b(bank, s, _where(act, s1, s))), s)
-        lg = lax.cond((s.fsel | (s.rsel > 0)).any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
+        lg = lax.cond((s.fsel | (s.rsel > 0) | s.ssel).any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
                       lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
         m = jnp.where(act[:, None], lg, m)
         return s, m, jnp.where(act, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m), -1), i + 1
@@ -1845,7 +1958,8 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
-              proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0))
+              proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
+              ssel=f)
     s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):
