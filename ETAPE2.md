@@ -310,3 +310,14 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 
   Une itération de la boucle d'exécution (`exec_one` + `refresh`) passe de 0,88 à 2,2 ms. `legal` et `trig_eval` prennent 26 à 36 % de plus (filtres plus larges, damage step).
 - Coût de la mesure : 0,64 CU.
+
+**Optimisation du coût du jalon 4 (2026-10-31).** Compteurs d'itérations sur CPU (B = 256, par appel de step_batch) : 34 pas de `settle` (presque tous avec `pass_priority`), 18 pas d'exécution d'effets, 4 `legal`. Mais seules 3,4 % des parties changent réellement d'état après un `pass_priority`, et 0,6 % après une instruction.
+- **`refresh` retiré de `ds_damage`** (et donc de `battle`). Sous vmap, cette branche de `quick_end` était calculée à chaque `pass_priority` et à chaque `apply`, soit deux `refresh` de plus à chaque fois. L'état est déjà à jour en entrant, et `settle` recalcule après.
+- **Recalcul seulement si l'état a changé** :
+  - `changed(prev, s)` compare les entrées de `stats` qui bougent (zones, positions, statuts, contrôleurs, phase, joueur du tour, tour, horloge, modificateurs temporaires). `refresh` est idempotent sur un état inchangé, y compris l'historique de l'immunité.
+  - Chemin d'une partie (`step`) : `refresh_if`, avec un `lax.cond`.
+  - Chemin du lot (`step_batch`) : `refresh_b` ne recalcule que les parties modifiées, compactées dans un sous-lot de B/8 (tout le lot s'il y en a plus). La boucle d'exécution des effets passe au niveau du lot (`run_b`). Réécrire seulement les champs produits par `refresh` dans le sous-lot s'est révélé plus lent (330 contre 482 décisions/s sur CPU) : tout l'état est réécrit.
+- **Programmes de test compacts** (`bank.tprog`) : coût puis cible sans les OP_END de remplissage, sur la longueur du plus long de la banque (6 instructions aujourd'hui, au lieu de 2 × PT = 12). `test_ok`, appelé par `legal` et `trig_eval` sur KC candidats, coûte deux fois moins.
+- **`engine/sb_check.py`** (ajouté à `regress.sh`) : `step_batch` (frac = 0) donne les mêmes états et masques que `vmap(step)`, champ par champ, sur 32 parties × 150 décisions. `compare.py` ne passe que par `step`.
+- Résultats (CPU, B = 64, cartes d'avant le jalon 4) : 119 → 180 (sans les refresh de `ds_damage`) → 381 (recalcul des seules parties modifiées) → 482 (programmes de test compacts), comme le moteur `9e6349a`.
+- Résultats L4 (`engine_bench.py`, frac = 0,05, toutes les cartes) : **13 497 décisions/s à B = 1024, 12 801 à B = 4096**, contre 7 012 / 4 921 avant et 15 782 / 14 918 avant le jalon 4. Il reste environ 15 % de surcoût pour tout le jalon 4. Coût des deux mesures : 0,31 CU.

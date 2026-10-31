@@ -13,7 +13,7 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 
 ## État (2026-10-30)
 - Jalons 1, 2, 3a et 3b faits : 20 vraies cartes, chaînes, déclencheurs, SEGOC, effets rapides. Le moteur rejoue à l'identique les parties de l'oracle ygopro-core dans tous les modes de `engine/compare.py` (normal, mixed, chain, trig, quick).
-- Débit GPU (L4, `step_batch`, frac=0.05, `bench/engine_bench.py`) : ~15,8k décisions/s avant le jalon 4, **7,0k (B=1024) et 4,9k (B=4096) après** (2026-10-31). Cause principale : `refresh` après chaque instruction. Détails à la fin de `ETAPE2.md`.
+- Débit GPU (L4, `step_batch`, frac=0.05, `bench/engine_bench.py`) : 15,8k décisions/s avant le jalon 4, 7,0k après, **13,5k (B=1024) et 12,8k (B=4096) après optimisation** (2026-10-31 : refresh seulement des parties modifiées, programmes de test compacts). Détails à la fin de `ETAPE2.md`. Mesurer le débit après chaque gros ajout au moteur.
 - Colab depuis la VM cloud : `uv tool install google-colab-cli`, authentification par code (jeton dans ~/.config/colab-cli/token.json), domaine colab.research.google.com autorisé dans le réseau de l'environnement. `colab exec` ne répond plus quand la machine compile (CPU saturés) : prévoir des délais de 4-5 min.
 - Jalon 4, volet 1 fait (2026-10-30) : setcode et filtres archétype / race / nom, effets continus de stats (K_CONT), modificateurs temporaires, cache ATK/DEF. Mode `cont` de `compare.py`.
 - Jalon 4, volet 2 fait (2026-10-30) : fenêtres du damage step, couches ATK/DEF complètes (SET, SET_FINAL, SET_BASE, ordre des id d'effet), limites par carte. Modes `dmg` et `ds` de `compare.py`.
@@ -27,7 +27,8 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - **Vérifier contre l'oracle** avant tout commit qui touche le moteur. L'oracle est ygopro-core compilé localement par `setup.sh`, voir `oracle/BUILD.md`. Il faut lancer :
   - `compare.py` dans tous les modes, avec les graines de `ETAPE2.md` (`engine/regress.sh` fait tout) ;
   - `obs_check.py` ;
-  - `vmap_check.py`.
+  - `vmap_check.py` ;
+  - `sb_check.py` (step_batch == vmap(step)).
 - Pas d'algorithme en O(N²) dans le moteur. Sous vmap, `switch` et `cond` calculent toutes leurs branches. Il faut donc masquer les bornes de boucle par l'opcode (voir le bug `draw_n` dans `ETAPE2.md`).
 - `compare.py` doit appeler `new_game` via `jax.jit`. Sinon `step` est recompilé à chaque partie, ce qui fait une fuite mémoire.
 - GPU :

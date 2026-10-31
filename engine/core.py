@@ -160,6 +160,7 @@ class Bank(NamedTuple):
     race: jnp.ndarray   # [C] bits RACE_*
     ekind: jnp.ndarray  # [C, E] K_*
     prog: jnp.ndarray   # [C, E, 3, P, 4] (op, a, b, c)
+    tprog: jnp.ndarray  # [C, E, PT2, 4] coût puis cible sans les OP_END (mode test) ; PT2 = le plus long de la banque
     filt: jnp.ndarray   # [C, E, NF, FW]
     etrig: jnp.ndarray  # [C, E] bits 1 << EV_* : activation seulement en réponse à ces événements (0 : libre)
     eopt: jnp.ndarray   # [C, E] une fois par tour et par nom (SetCountLimit(1, id))
@@ -173,13 +174,27 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
               race=None, erng=None, setcode=None, emod=None, edmg=None):
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
-    return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32),
+    return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32), tprog=test_prog(prog, c),
                 level=jnp.asarray(level, I32),
                 ctype=jnp.full(c, TYPE_MONSTER | TYPE_NORMAL, I32) if ctype is None else jnp.asarray(ctype, I32),
                 attr=i(attr, (c,)), race=i(race, (c,)),
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
                 etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)), setcode=i(setcode, (c, NSET)),
                 emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)))
+
+
+def test_prog(prog, c):
+    """Programmes de test compacts (numpy, à la construction de la banque) : coût puis cible, sans les OP_END de
+    remplissage (sans effet en mode test). test_ok ne parcourt que la longueur du plus long, pas 2 × PT."""
+    import numpy as np
+    pr = np.zeros((c, E, 3, P, 4), np.int32) if prog is None else np.asarray(prog, np.int32)
+    ins = pr[:, :, :PG_RESOLVE, :PT].reshape(c, E, 2 * PT, 4)
+    keep = ins[..., 0] != OP_END
+    n = max(1, int(keep.sum(-1).max()))
+    order = np.argsort(~keep, axis=-1, kind="stable")[..., :n]  # instructions gardées d'abord, dans l'ordre
+    out = np.take_along_axis(ins, order[..., None], axis=2)
+    out[~np.take_along_axis(keep, order, axis=-1)] = 0
+    return jnp.asarray(out)
 
 
 class State(NamedTuple):
@@ -607,10 +622,13 @@ def ds_cal(bank, s):
 def ds_damage(bank, s):
     """Étapes 26-32 : calcul des dommages, puis point d'événement (effets FLIP) ; les monstres détruits restent sur
     le terrain jusqu'à `dmg_send`."""
+    # pas de refresh ici : l'état est à jour en entrant (chaque pas de settle et chaque instruction finissent par un
+    # refresh), et settle en refait un après. Sous vmap, cette branche de quick_end est calculée à chaque
+    # pass_priority et à chaque apply : un refresh ici doublait presque le coût du moteur.
     direct = lambda s: damage(s, 1 - s.tp, s.atk_c[s.atk])
-    s = refresh(bank, s._replace(dstep=_i(DS_AFTER)))
+    s = s._replace(dstep=_i(DS_AFTER))
     s = _cond(s.atk_tgt < 0, direct, lambda s: battle(bank, s, s.atk, s.atk_tgt), s)
-    return trig_point(bank, open_quick(refresh(bank, end_dcal(s)), s.tp, R_DMG1, chained=False))
+    return trig_point(bank, open_quick(end_dcal(s), s.tp, R_DMG1, chained=False))
 
 
 def dmg_send(bank, s):
@@ -873,6 +891,41 @@ def stats(bank, s):
             tm_m, act.sum() > KM)
 
 
+def stats_key(s):
+    """Entrées de stats() qui changent pendant la partie (hors ses propres sorties) : si elles n'ont pas bougé, refresh
+    est inutile (il est idempotent sur un état inchangé)."""
+    return (s.zone, s.pos, s.st, s.ctrl, s.phase, s.tp, s.turn, s.clk, s.tm_n, s.tm_m)
+
+
+def changed(prev, s):
+    """[...] : les entrées de stats() ont changé entre prev et s (par partie si les états sont en lot)."""
+    nb = s.done.shape
+    d = jnp.zeros(nb, bool)
+    for x, y in zip(stats_key(prev), stats_key(s)):
+        d |= (x != y).reshape(nb + (-1,)).any(-1)
+    return d
+
+
+def refresh_if(bank, prev, s):
+    """refresh seulement si l'état a changé depuis prev (une partie ; sous vmap, le cond calcule les deux branches)."""
+    return lax.cond(changed(prev, s), lambda s: refresh(bank, s), lambda s: s, s)
+
+
+def refresh_b(bank, prev, s, frac=8):
+    """Version lot : seules les parties dont l'état a changé sont recalculées, regroupées dans un sous-lot de B/frac
+    (en pratique quelques % des parties changent à chaque pas) ; s'il y en a plus, tout le lot est recalculé."""
+    nb = s.done.shape[0]
+    d = changed(prev, s)
+    k = max(1, nb // frac)
+
+    def sub(s):  # tout l'état est réécrit : ne réécrire que les champs de refresh est plus lent (mesuré sur CPU)
+        idx = jnp.nonzero(d, size=k, fill_value=nb)[0]
+        part = jax.vmap(lambda x: refresh(bank, x))(jax.tree.map(lambda x: x[jnp.minimum(idx, nb - 1)], s))
+        return jax.tree.map(lambda x, y: x.at[idx].set(y, mode="drop"), s, part)
+    return lax.cond(d.sum() > k, lambda s: jax.vmap(lambda x: refresh(bank, x))(s),
+                    lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
+
+
 def refresh(bank, s):
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
@@ -932,7 +985,7 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
 def test_ok(bank, s, h, e, p):
     """Mode test (chk==0 des scripts) : coût + cible exécutables par p avec la carte h, effet e ?"""
     n = s.cid.shape[0]
-    progs = bank.prog[s.cid[h], e, :PG_RESOLVE, :PT].reshape(-1, 4)
+    progs = bank.tprog[s.cid[h], e]
 
     def body(carry, ins):
         reg, ok = carry
@@ -1327,7 +1380,7 @@ def run(bank, s):
     """Exécute les effets (D_RUN) jusqu'au prochain choix."""
     def body(carry):
         s, i = carry
-        return refresh(bank, exec_one(bank, s)), i + 1
+        return refresh_if(bank, s, exec_one(bank, s)), i + 1
     return lax.while_loop(lambda c: (c[0].dec == D_RUN) & ~c[0].done & (c[1] < MAX_ITER), body, (s, _i(0)))[0]
 
 
@@ -1337,7 +1390,7 @@ def settle(bank, s):
         s, i = carry
         s = run(bank, s)
         s = lax.cond(s.dec == D_TRIG, lambda s: trig_eval(bank, s), lambda s: s, s)
-        return refresh(bank, lax.cond(auto_pass(bank, s), lambda s: pass_priority(bank, s), lambda s: s, s)), i + 1
+        return refresh_if(bank, s, lax.cond(auto_pass(bank, s), lambda s: pass_priority(bank, s), lambda s: s, s)), i + 1
     more = lambda c: (((c[0].dec == D_RUN) | (c[0].dec == D_TRIG) | auto_pass(bank, c[0])) & ~c[0].done
                       & (c[1] < MAX_ITER))
     return lax.while_loop(more, body, (s, _i(0)))[0]
@@ -1349,7 +1402,7 @@ def step(bank, s, a):
     de décision, pas à chaque instruction exécutée."""
     def body(carry):
         s, a, i = carry
-        s = settle(bank, refresh(bank, apply(bank, s, a)))
+        s = settle(bank, refresh_if(bank, s, apply(bank, s, a)))
         return s, forced(bank, s), i + 1
 
     s = settle(bank, s)
@@ -1373,16 +1426,24 @@ def step_batch(bank, s, a, frac=0.0):
     def todo(s):
         return ((s.dec == D_RUN) | (s.dec == D_TRIG) | jax.vmap(lambda s: auto_pass(bank, s))(s)) & ~s.done
 
+    def run_b(s):  # boucle d'exécution au niveau du lot : refresh seulement pour les parties modifiées
+        def body(c):
+            s, i = c
+            r = (s.dec == D_RUN) & ~s.done
+            return refresh_b(bank, s, _where(r, jax.vmap(lambda s: exec_one(bank, s))(s), s)), i + 1
+        return lax.while_loop(lambda c: ((c[0].dec == D_RUN) & ~c[0].done).any() & (c[1] < MAX_ITER), body,
+                              (s, _i(0)))[0]
+
     def settle_body(c):
         s, i = c
-        s = jax.vmap(lambda s: run(bank, s))(s)
+        s = run_b(s)
         need = s.dec == D_TRIG
         s = lax.cond(need.any(), lambda s: _where(need, jax.vmap(lambda s: trig_eval(bank, s))(s), s),
                      lambda s: s, s)
         ap = jax.vmap(lambda s: auto_pass(bank, s))(s)
-        s = lax.cond(ap.any(), lambda s: _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s),
+        s = lax.cond(ap.any(), lambda s: refresh_b(bank, s, _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s)),
                      lambda s: s, s)
-        return jax.vmap(lambda s: refresh(bank, s))(s), i + 1
+        return s, i + 1
 
     def settle_b(s):
         return lax.while_loop(lambda c: todo(c[0]).any() & (c[1] < MAX_ITER), settle_body, (s, _i(0)))[0]
@@ -1390,7 +1451,8 @@ def step_batch(bank, s, a, frac=0.0):
     def body(carry):
         s, m, a, i = carry
         act = (a >= 0) & ~s.done
-        s = _where(act, settle_b(jax.vmap(lambda s, a: refresh(bank, apply(bank, s, a)))(s, jnp.maximum(a, 0))), s)
+        s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))
+        s = _where(act, settle_b(refresh_b(bank, s, _where(act, s1, s))), s)
         m = jnp.where(act[:, None], jax.vmap(lambda s: legal(bank, s))(s), m)
         return s, m, jnp.where(act, jax.vmap(forced_m)(s, m), -1), i + 1
 
