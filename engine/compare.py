@@ -12,7 +12,7 @@ les cartes du volet 3a (interdictions, protections) avec des cartes des autres v
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit]
 """
 import os
 import collections
@@ -112,6 +112,10 @@ def translate(dec, opt, s):
     raise Mismatch(f"option non gérée {opt}")
 
 
+def N_(s):
+    return s.cid.shape[0]
+
+
 def filtered(dec):
     """Indices des options retenues (sans annuler / retirer ; « terminer » seul dès qu'il est possible)."""
     idx = [i for i, o in enumerate(dec.options) if o[0] not in ("cancel", "unpick")]
@@ -148,7 +152,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A  # cartes des jalons 4-5 : seulement dans leurs modes
+    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B  # cartes des jalons 4-5 : seulement dans leurs modes
     extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
@@ -186,10 +190,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         for d in decks:
             rng.shuffle(d)
         extra = [[45231177, 45231177, 66889139, 66889139, 23995346, 23995346] for _ in range(2)]
+    elif mode == "rit":
+        rit = [55761792] * 3 + [5405694] * 3 + [8198712] * 3 + [72426662] * 3
+        decks = [[rng.choice(pool) for _ in range(22)] + rit + [83764718] * 2 + [rng.choice(base) for _ in range(4)]
+                 for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
-                      | {c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O, core.K_IGNITION)})
+                      | {c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O, core.K_IGNITION)
+                    and c not in cards.J5B})
         decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(j4d) for _ in range(10)]
                  + [rng.choice(mons) for _ in range(12)] + [rng.choice(base) for _ in range(4)] for _ in range(2)]
         for d in decks:
@@ -266,6 +277,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
             duel.respond(dec, i)
             for a in seqs[i]:
+                if dec.msg == K["MSG_SELECT_SUM"] and (int(s.rsel) == 0 or int(s.st[a % N_(s)]) & core.ST_SEL):
+                    continue  # sélection par somme : cartes déjà choisies d'office (forced_m), ou sélection terminée
                 if not bool(legal(bank, s)[a]):
                     raise Mismatch(f"action {a} illégale côté JAX en cours de sélection {dec.options[i]}")
                 s = step(bank, s, a)
@@ -281,7 +294,7 @@ if __name__ == "__main__":
     seed0 = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
     db = driver.CardDB()
-    bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS) + list(cards.FUSION))  # une seule banque
+    bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS) + list(cards.FUSION) + list(cards.RITUAL))  # une seule banque
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     nok = 0
     for sd in range(seed0, seed0 + n):

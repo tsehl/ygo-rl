@@ -19,19 +19,21 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   OP_COND_ATK, OP_ATTACKER, DMG_STEP, DMG_CAL, DMG_STAT, MC_BASE_ATK, MC_SET_ATK, MC_SET_DEF,
                   MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA, MC_DISABLE, OP_COND_PHASE,
-                  PH_MAIN1, PH_MAIN2, OP_FUSMAT, FK, TYPE_FUSION)
+                  PH_MAIN1, PH_MAIN2, OP_FUSMAT, FK, TYPE_FUSION, OP_RITMAT, RIT_GREATER, RIT_EQUAL,
+                  TYPE_RITUAL)
 
 ME, OPP = 0, 1
 
 
 def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
-      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0):
+      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0, rit=0):
     """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
     statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés ;
-    fus : monstre fusion invocable maintenant avec la main et le terrain (recette réalisable)."""
+    fus : monstre fusion invocable maintenant avec la main et le terrain (recette réalisable) ; rit : monstre rituel
+    invocable maintenant par rituel en mode RIT_GREATER / RIT_EQUAL."""
     code = (code, code) if isinstance(code, int) else code
     return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
-            spsum, nodis, fus)
+            spsum, nodis, fus, rit)
 
 
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
@@ -43,7 +45,7 @@ def MINATK(dst, src): return (OP_MINATK, dst, src, 0)
 def CHOOSE(dst, src, n, who=ME, upto=False):  # exactement n cartes (upto : au plus n, éventuellement aucune)
     return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
 def MOVE(r, zone=Z_GRAVE): return (OP_MOVE, r, zone, 0)
-def SPSUMMON(r, pos): return (OP_SPSUMMON, r, pos, 0)
+def SPSUMMON(r, pos, proc=False): return (OP_SPSUMMON, r, pos, int(proc))  # proc : invocation correcte (rituel)
 def DRAW(who, n): return (OP_DRAW, who, n, 0)
 def DAMAGE(who, n, per=None): return (OP_DAMAGE, who, n, 0 if per is None else per + 1)  # n × |registre per|
 def RECOVER(who, n): return (OP_RECOVER, who, n, 0)
@@ -64,8 +66,16 @@ def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False):
     return (OP_MODIFY, r, code | (mode << 5) | (dur << 9) | (int(rd) << 13), val)
 def COND_PHASE(ph): return (OP_COND_PHASE, ph, 0, 0)      # pendant l'une des phases ph (masque PH_*)
 def FUSMAT(dst, src): return (OP_FUSMAT, dst, src, 0)     # matériaux du monstre fusion de src, choisis un par un
+def RITMAT(dst, src, mode): return (OP_RITMAT, dst, src, mode)  # libérations du monstre rituel de src (RIT_*), une par une
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
 def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
+
+
+def ritual_spell(code, mode):
+    """Sort rituel (Ritual.AddProcGreaterCode / AddProcEqualCode) pour le monstre rituel code, depuis la main."""
+    f = F(me=Z_HAND, code=code, rit=mode)
+    return [act(target=[FILTER(0, f), REQ(0, 1)],
+                resolve=[FILTER(0, f), CHOOSE(1, 0, 1), RITMAT(2, 1, mode), MOVE(2), SPSUMMON(1, P_FU_ATK | P_FU_DEF, True)])]
 
 
 def ev(*codes):
@@ -235,6 +245,11 @@ CARDS = {
     24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
                    resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2),
                             SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
+    # jalon 5, volet b : rituel (sorts rituels : choisir le monstre en main, libérations, invocation correcte)
+    55761792: ritual_spell(5405694, RIT_GREATER),                                                          # Black Luster Ritual
+    8198712: ritual_spell(72426662, RIT_EQUAL),                                                            # End of the World
+    72426662: [ignition(cost=[PAY_LP(2000)], target=[FILTER(0, F(me=ONFIELD, op=ONFIELD, not_self=1)), REQ(0, 1)],  # Demise
+                        resolve=[FILTER(0, F(me=ONFIELD, op=ONFIELD, not_self=1)), MOVE(0)])],
     42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
                cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
 }
@@ -285,7 +300,7 @@ def assemble(codes, cards=CARDS):
             assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             fmat[i, j] = f
         fmn[i] = len(FUSION.get(code, ()))
-        erl[i] = int(code in FUSION)
+        erl[i] = int(code in FUSION or code in RITUAL)
     return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
                 fmat=fmat, fmn=fmn, erl=erl)
 
@@ -332,6 +347,11 @@ MATERIAL_STATS = {34460851: (900, 1000, 3), 44287299: (1100, 1100, 4), 6368038: 
                   89631139: (3000, 2500, 8)}  # matériaux (monstres normaux) : banque de test
 J5A_SPELLS = {24094653: TYPE_SPELL}
 J5A = set(J5A_SPELLS)  # cartes du volet 5a (mode fus de compare.py)
+# volet 5b : monstres rituels (EnableReviveLimit) et leurs sorts
+RITUAL = {5405694: (3000, 2500, 8), 72426662: (2400, 2000, 8)}  # Black Luster Soldier, Demise, King of Armageddon
+RITUAL_TYPES = {5405694: TYPE_MONSTER | TYPE_RITUAL, 72426662: TYPE_MONSTER | TYPE_RITUAL | TYPE_EFFECT}
+J5B_SPELLS = {55761792: TYPE_SPELL | TYPE_RITUAL, 8198712: TYPE_SPELL | TYPE_RITUAL}
+J5B = set(J5B_SPELLS) | set(RITUAL)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -350,9 +370,10 @@ def test_bank(key, c):
     """c monstres normaux aléatoires (codes 0..c-1) + les cartes de CARDS (indices c..)."""
     import jax
     import core
-    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS) + list(J5A_SPELLS)
-    codes = list(range(c)) + st + list(EFFECT_MONSTERS) + list(MATERIAL_STATS) + list(FUSION)
-    xs = list(MATERIAL_STATS.values()) + [FUSION_STATS[k] for k in FUSION]
+    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS) + list(J5A_SPELLS) \
+        + list(J5B_SPELLS)
+    codes = list(range(c)) + st + list(EFFECT_MONSTERS) + list(MATERIAL_STATS) + list(FUSION) + list(RITUAL)
+    xs = list(MATERIAL_STATS.values()) + [FUSION_STATS[k] for k in FUSION] + list(RITUAL.values())
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()], [v[0] for v in xs]])
     df = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 1), (c,), 0, 30)) * 100,
@@ -360,8 +381,9 @@ def test_bank(key, c):
     lv = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 2), (c,), 1, 13)),
                          np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()], [v[2] for v in xs]])
     ctype = [core.TYPE_MONSTER | core.TYPE_NORMAL] * c + [core.TYPE_SPELL] * len(SPELL_CODES) \
-        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + list(J5A_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS) \
-        + [core.TYPE_MONSTER | core.TYPE_NORMAL] * len(MATERIAL_STATS) + [core.TYPE_MONSTER | core.TYPE_FUSION] * len(FUSION)
+        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + list(J5A_SPELLS.values()) + list(J5B_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS) \
+        + [core.TYPE_MONSTER | core.TYPE_NORMAL] * len(MATERIAL_STATS) + [core.TYPE_MONSTER | core.TYPE_FUSION] * len(FUSION) \
+        + list(RITUAL_TYPES.values())
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
                            np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS],

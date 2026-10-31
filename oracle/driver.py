@@ -402,6 +402,45 @@ def _p_select_card(t, r):
     return Decision(t, pl, opts, resp, dict(cards=cards, min=mn, max=mx))
 
 
+def _p_select_sum(t, r):
+    """Sélection par somme (rituel, synchro...) : une seule réponse, le sous-ensemble entier. Mode « supérieur » (max
+    nul dans ygopro) : somme >= acc et sans carte superflue (somme - plus petite < acc) ; sinon somme exacte
+    (select_sum_check1). On énumère les sous-ensembles valides des cartes proposées (les cartes imposées sont en plus)."""
+    pl, greater = r.take("BB")
+    acc, mn, mx = r.take("III")
+
+    def lst():
+        out = []
+        for _ in range(r.take("I")):
+            code = r.take("I")
+            con, loc, seq, pos = r.loc_info()
+            out.append(((code, con, LOCS.get(loc, loc), seq), r.take("I")))
+        return out
+    must, cards = lst(), lst()
+    if mx < mn:
+        mx = mn
+
+    def ok(params):
+        if greater:
+            lo = [min(o & 0xFFFF, o >> 16) if (o >> 16) else o & 0xFFFF for o in params]
+            hi = [max(o & 0xFFFF, o >> 16) for o in params]
+            return sum(hi) >= acc and sum(lo) - min(lo) < acc
+
+        def rec(i, a):
+            if i == len(params):
+                return a == 0
+            o1, o2 = params[i] & 0xFFFF, params[i] >> 16
+            return (a >= o1 and rec(i + 1, a - o1)) or (o2 > 0 and a >= o2 and rec(i + 1, a - o2))
+        return rec(0, acc)
+    opts, resp = [], []
+    for k in range(0 if greater else mn, (len(cards) if greater else mx) + 1):
+        for comb in itertools.combinations(range(len(cards)), k):
+            if ok([m[1] for m in must] + [cards[i][1] for i in comb]):
+                opts.append(("cards", tuple(cards[i][0] for i in comb)))
+                resp.append(_cards_response(comb))
+    return Decision(t, pl, opts, resp, dict(acc=acc, must=must))
+
+
 def _p_unselect(t, r):
     """Sélection carte par carte : choisir une carte (ou en retirer une déjà choisie), ou terminer."""
     pl, finishable, cancel = r.take("BBB")
@@ -455,7 +494,7 @@ SELECT_PARSERS = {
     K["MSG_SELECT_YESNO"]: _p_yesno, K["MSG_SELECT_EFFECTYN"]: _p_yesno, K["MSG_SELECT_OPTION"]: _p_option,
     K["MSG_SELECT_CARD"]: _p_select_card, K["MSG_SELECT_TRIBUTE"]: _p_select_card,
     K["MSG_SELECT_CHAIN"]: _p_chain, K["MSG_SELECT_PLACE"]: _p_place, K["MSG_SELECT_DISFIELD"]: _p_place,
-    K["MSG_SELECT_POSITION"]: _p_position, K["MSG_SELECT_UNSELECT_CARD"]: _p_unselect,
+    K["MSG_SELECT_POSITION"]: _p_position, K["MSG_SELECT_UNSELECT_CARD"]: _p_unselect, K["MSG_SELECT_SUM"]: _p_select_sum,
 }
 
 

@@ -98,12 +98,12 @@ PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
- OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT) = range(27)
-N_OPS = 27
+ OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT) = range(28)
+N_OPS = 28
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
-    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS = range(20)
-FW = 20  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT = range(21)
+FW = 21  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
@@ -135,6 +135,10 @@ MW = 9
 KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
 TM = 16         # modificateurs temporaires par tour
 FK = 4          # matériaux de fusion au plus (un filtre par matériau)
+# rituel : somme des niveaux des libérations >= niveau sans libération superflue (Greater), ou égale (Equal)
+RIT_GREATER, RIT_EQUAL = 1, 2
+RIT_MON = TYPE_MONSTER | TYPE_RITUAL  # les sorts rituels ont aussi TYPE_RITUAL
+LVMAX, SMAX = 12, 26  # niveaux des matériaux ; sommes suivies (masques de bits) jusqu'à SMAX
 EXK = 32        # monstres fusion de l'Extra Deck évalués par refresh (fz_c)
 BIG = 1 << 20
 
@@ -294,6 +298,8 @@ class State(NamedTuple):
     proc: jnp.ndarray    # [N] correctement invoquée (STATUS_PROC_COMPLETE : invocation fusion...) ; effacé en main / deck
     fz_c: jnp.ndarray    # [N] monstre fusion de l'Extra Deck réalisable avec la main et le terrain de son propriétaire
     fsel: jnp.ndarray    # sélection de matériaux en cours (OP_FUSMAT) : jamais jouée d'office s'il reste un choix
+    rz_c: jnp.ndarray    # [N] monstre rituel en main invocable : bit 0 en mode Greater, bit 1 en mode Equal
+    rsel: jnp.ndarray    # sélection de libérations rituelles en cours (OP_RITMAT) : mode RIT_*, 0 sinon
     ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
 
 
@@ -794,6 +800,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
     m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc))
     m &= (f[F_FUS] == 0) | s.fz_c
+    m &= (f[F_RIT] == 0) | (((s.rz_c >> jnp.maximum(f[F_RIT] - 1, 0)) & 1) != 0)
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
     if targ:
         m &= ~untargetable(bank, s, h)
@@ -958,6 +965,8 @@ def refresh_b(bank, prev, s, frac=8):
     def ref(s):  # refresh d'un lot ; fusion_ok seulement si une partie du lot a des monstres fusion à l'Extra Deck
         fus = jax.vmap(lambda x: has_fusion(bank, x))(s).any()
         s = lax.cond(fus, lambda s: jax.vmap(lambda x: refresh_fus(bank, x))(s), lambda s: s, s)
+        rit = jax.vmap(lambda x: has_ritual(bank, x))(s).any()
+        s = lax.cond(rit, lambda s: jax.vmap(lambda x: refresh_rit(bank, x))(s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
         return jax.vmap(lambda x: refresh(bank, x, fus=False))(s)
 
     def sub(s):  # tout l'état est réécrit : ne réécrire que les champs de refresh est plus lent (mesuré sur CPU)
@@ -1089,11 +1098,117 @@ def refresh_fus(bank, s):
     return s._replace(fz_c=fz, ovf=s.ovf | jnp.where(fover, 4, 0).astype(I32))
 
 
+def refresh_rit(bank, s):
+    return s._replace(rz_c=ritual_ok(bank, s))
+
+
+def rit_mats(bank, s, p):
+    """[N] : matériaux de rituel de p (monstres de sa main et de son terrain, pas détruits au combat)."""
+    return (((s.zone == Z_HAND) | (s.zone == Z_MZONE)) & (s.ctrl == p) & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
+            & ((s.st & ST_BDES) == 0) & (bank.level[s.cid] > 0))
+
+
+def lv_hist(bank, s, mask):
+    """Histogrammes [LVMAX + 1] des niveaux des cartes mask : main, terrain."""
+    lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
+    field = s.zone == Z_MZONE
+    hh = jnp.zeros(LVMAX + 1, I32).at[lv].add((mask & ~field).astype(I32))
+    hf = jnp.zeros(LVMAX + 1, I32).at[lv].add((mask & field).astype(I32))
+    return hh, hf
+
+
+def sum_ok(hh, hf, req, u, mu, has_f, mode):
+    """Les cartes déjà prises (somme u, plus petit niveau mu, une du terrain si has_f) se complètent-elles par des
+    cartes des histogrammes hh (main) / hf (terrain) en un ensemble valide ? Greater : somme >= req et
+    somme - plus petit < req ; Equal : somme == req. Avec has_f < 0 : un matériau doit venir du terrain (pas de case
+    libre). Sommes atteignables suivies par masques de bits (A : sans carte du terrain, B : avec), niveaux de LVMAX à
+    1 : avec les niveaux >= v, le plus petit ajouté est >= v. O(LVMAX × SMAX), indépendant de N."""
+    need_f = has_f < 0
+    hasf0 = has_f > 0
+    full = (1 << SMAX) - 1
+    A, B = jnp.int32(1), jnp.int32(0)
+    need = req - u
+    # T vide : ce qui est pris suffit déjà
+    ok = jnp.where(mode == RIT_GREATER, (need <= 0) & (u - mu < req), need == 0) & (~need_f | hasf0)
+    for L in range(LVMAX, 0, -1):
+        for k in range(1, SMAX // L + 1):  # cartes de la main de niveau L
+            take = k <= hh[L]
+            A = jnp.where(take, A | ((A << L) & full), A)
+            B = jnp.where(take, B | ((B << L) & full), B)
+        for k in range(1, SMAX // L + 1):  # cartes du terrain de niveau L : passent en B
+            take = k <= hf[L]
+            nb = ((A | B) << L) & full
+            A, B = A, jnp.where(take, B | nb, B)
+        reach = jnp.where(need_f & ~hasf0, B, A | B)
+        win = jnp.minimum(mu, L)                                   # le plus petit de l'ensemble est min(mu, >= L)
+        sig = jnp.arange(SMAX)
+        inwin = jnp.where(mode == RIT_GREATER, (sig >= need) & (sig < need + win), sig == need) & (need > 0)
+        ok |= ((reach >> sig) & 1 & inwin).any().astype(bool)
+    return ok
+
+
+def ritual_ok(bank, s):
+    """[N] rz_c : monstres rituels en main invocables par rituel (matériaux : main et terrain, sans le monstre
+    lui-même ; niveau requis : son niveau). Bit 0 : Greater ; bit 1 : Equal."""
+    n = s.cid.shape[0]
+    out = jnp.zeros(n, I32)
+    lvc = jnp.clip(bank.level[s.cid], 0, LVMAX)
+    for p in (0, 1):
+        mats = rit_mats(bank, s, p)
+        hh, hf = lv_hist(bank, s, mats)
+        room = ex_zones(s, p)[:N_MAIN_ZONES].any()
+
+        def cls(lv):  # le monstre rituel (niveau lv, en main) ne se libère pas lui-même
+            h2 = hh.at[lv].add(-1)
+            g = sum_ok(h2, hf, lv, 0, LVMAX + 1, jnp.where(room, 0, -1), RIT_GREATER)
+            e = sum_ok(h2, hf, lv, 0, LVMAX + 1, jnp.where(room, 0, -1), RIT_EQUAL)
+            return g.astype(I32) | (e.astype(I32) << 1)
+        res = jax.vmap(cls)(jnp.arange(LVMAX + 1))
+        mine = (s.zone == Z_HAND) & (s.ctrl == p) & ((bank.ctype[s.cid] & RIT_MON) == RIT_MON)
+        out = jnp.where(mine, res[lvc], out)
+    return out
+
+
+def rit_picks(bank, s, r, mode):
+    """[N] : libérations qu'on peut encore choisir pour le monstre rituel r : il existe un ensemble valide qui
+    contient les cartes déjà choisies (ST_SEL) et celle-ci. Calcul par classe (niveau, main / terrain)."""
+    p = s.ctrl[r]
+    sel = (s.st & ST_SEL) != 0
+    mats = rit_mats(bank, s, p) & (jnp.arange(s.cid.shape[0]) != r)
+    lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
+    field = s.zone == Z_MZONE
+    hh, hf = lv_hist(bank, s, mats & ~sel)
+    u0 = jnp.where(sel, lv, 0).sum()
+    mu0 = jnp.where(sel, lv, LVMAX + 1).min()
+    f0 = (sel & field).any()
+    room = ex_zones(s, p)[:N_MAIN_ZONES].any()
+    req = bank.level[s.cid[r]]
+
+    def cls(l, isf):
+        h2 = jnp.where(isf, hh, hh.at[l].add(-1))
+        f2 = jnp.where(isf, hf.at[l].add(-1), hf)
+        hasf = f0 | isf
+        return sum_ok(h2, f2, req, u0 + l, jnp.minimum(mu0, l), jnp.where(room | hasf, 1, -1), mode)
+    tab = jax.vmap(lambda isf: jax.vmap(lambda l: cls(l, isf))(jnp.arange(LVMAX + 1)))(jnp.array([False, True]))
+    return mats & ~sel & tab[field.astype(I32), lv]
+
+
+def rit_done(bank, s, r, mode):
+    """La sélection rituelle est complète (somme atteinte)."""
+    sel = (s.st & ST_SEL) != 0
+    return jnp.where(sel, jnp.clip(bank.level[s.cid], 0, LVMAX), 0).sum() >= bank.level[s.cid[r]]
+
+
+def has_ritual(bank, s):
+    return ((s.zone == Z_HAND) & ((bank.ctype[s.cid] & RIT_MON) == RIT_MON)).any()
+
+
 def refresh(bank, s, fus=True):
     """Recalcule les caches (stats, drapeaux, fusions réalisables). fus=False : sans fz_c (refresh_b le fait au
     niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
     if fus:
         s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
+        s = lax.cond(has_ritual(bank, s), lambda s: refresh_rit(bank, s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
@@ -1255,6 +1370,11 @@ def exec_one(bank, s):
                                                 fsel=jnp.bool_(True)),
                      lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
+    def ritmat(s):  # libérations du monstre rituel du registre b (mode c), choisies une par une par p, rangées dans a
+        go = s.reg[jnp.clip(b, 0, R - 1)].any()
+        return _cond(go, lambda s: s._replace(dec=_i(D_SELECT), dec_player=p, need=_i(99), picks=_i(0), rsel=c),
+                     lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
+
     def spsummon(s):
         return _cond(s.reg[ra].any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
 
@@ -1296,6 +1416,7 @@ def exec_one(bank, s):
     branches[OP_LOCK] = lock
     branches[OP_MODIFY] = modify
     branches[OP_FUSMAT] = fusmat
+    branches[OP_RITMAT] = ritmat
     branches[OP_MOVE] = move_
     branches[OP_SPSUMMON] = spsummon
     branches[OP_DRAW] = draw_n
@@ -1378,7 +1499,9 @@ def legal(bank, s, fus=True):
     nmon = my_mon.sum()
     lv = bank.level[s.cid]
     need = jnp.where(lv >= 7, 2, jnp.where(lv >= 5, 1, 0))
-    can_ns = in_hand & monster & ~s.ns_used & jnp.where(need == 0, free_m > 0, nmon >= need)
+    # monstres rituels et de l'Extra Deck : pas d'invocation normale
+    can_ns = (in_hand & monster & ~s.ns_used & jnp.where(need == 0, free_m > 0, nmon >= need)
+              & ((ct & (TYPE_RITUAL | TYPE_EXTRA)) == 0))
     can_repos = my_mon & ((s.st & (ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN)) == 0)
     unsel = (s.st & ST_SEL) == 0
     # get_attack_target (select_target vrai par défaut) : au moins une cible possible, ou attaque directe
@@ -1387,7 +1510,9 @@ def legal(bank, s, fus=True):
     ins = current_ins(bank, s)
     eff_cand = s.reg[jnp.clip(ins[2], 0, R - 1)]
     if fus:
-        eff_cand = jnp.where(s.fsel, fus_picks(bank, s, jnp.argmax(eff_cand)), eff_cand)
+        src = jnp.argmax(eff_cand)
+        eff_cand = jnp.where(s.fsel, fus_picks(bank, s, src),
+                             jnp.where(s.rsel > 0, rit_picks(bank, s, src, s.rsel), eff_cand))
 
     # libérations : sans case principale libre, l'une d'elles doit libérer une case principale (pas une zone extra)
     mainz = my_mon & (s.seq < N_MAIN_ZONES)
@@ -1481,9 +1606,11 @@ def apply(bank, s, a):
                 sel = (s.st & ST_SEL) != 0
                 dst = jnp.clip(current_ins(bank, s)[1], 0, R - 1)
                 return s._replace(reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
-                                  dec=_i(D_RUN), fsel=jnp.bool_(False))
+                                  dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
             s = pick(s)
-            return _cond(s.need == 0, done, lambda s: s, s)
+            rit = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[2], 0, R - 1)])
+            fin = jnp.where(s.rsel > 0, rit_done(bank, s, rit, s.rsel), s.need == 0)
+            return _cond(fin, done, lambda s: s, s)
 
         return _switch(jnp.clip(s.dec - D_TRIBUTE, 0, 4), [tribute, s_id, target, discard, eff_select], s)
 
@@ -1526,7 +1653,8 @@ def apply(bank, s, a):
     def position(s):
         c = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[1], 0, R - 1)])
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
-        fromex = s.zone[c] == Z_EXTRA  # invocation fusion : la carte est correctement invoquée (CompleteProcedure)
+        # invocation fusion (depuis l'Extra Deck) ou rituelle (SPSUMMON avec proc) : correctement invoquée
+        fromex = (s.zone[c] == Z_EXTRA) | (current_ins(bank, s)[3] != 0)
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
         s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.ch_p)
@@ -1556,13 +1684,27 @@ MAX_ITER = 256
 
 def forced(bank, s):
     """Action imposée (option unique, ou sélection où toutes les cartes possibles doivent être prises), sinon -1."""
-    return forced_m(s, legal(bank, s))
+    return forced_m(bank, s, legal(bank, s))
 
 
-def forced_m(s, m):
+def forced_m(bank, s, m):
     k = m.sum()
-    sel = (s.dec == D_TRIBUTE) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel)
-    return jnp.where((k == 1) | (sel & (k > 0) & (k <= s.need)), jnp.argmax(m), -1).astype(I32)
+    sel = (s.dec == D_TRIBUTE) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0))
+    # libérations rituelles : jouées d'office si l'union des choix possibles est elle-même le seul ensemble valide
+    # (l'oracle n'a alors qu'une option) : elle atteint la somme sans carte superflue (Greater) ou exactement (Equal)
+    n = s.cid.shape[0]
+    cand = m[V_SELECT * n:(V_SELECT + 1) * n] | ((s.st & ST_SEL) != 0)
+    lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
+    tot = jnp.where(cand, lv, 0).sum()
+    mn = jnp.where(cand, lv, LVMAX + 1).min()
+    rit = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[2], 0, R - 1)])
+    req = bank.level[s.cid[rit]]
+    # seulement avec une case principale libre (SelectWithSum, une décision) ; sans case libre, ygopro choisit carte par
+    # carte (SelectUnselectGroup) et propose chaque carte de l'ensemble
+    room = ex_zones(s, s.dec_player)[:N_MAIN_ZONES].any()
+    uniq = (s.rsel > 0) & (s.dec == D_SELECT) & room & jnp.where(s.rsel == RIT_GREATER, (tot >= req) & (tot - mn < req),
+                                                          tot == req)
+    return jnp.where((k == 1) | (sel & (k > 0) & (k <= s.need)) | (uniq & (k > 0)), jnp.argmax(m), -1).astype(I32)
 
 
 def run(bank, s):
@@ -1642,10 +1784,10 @@ def step_batch(bank, s, a, frac=0.0):
         act = (a >= 0) & ~s.done
         s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))
         s = _where(act, settle_b(refresh_b(bank, s, _where(act, s1, s))), s)
-        lg = lax.cond(s.fsel.any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
+        lg = lax.cond((s.fsel | (s.rsel > 0)).any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
                       lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
         m = jnp.where(act[:, None], lg, m)
-        return s, m, jnp.where(act, jax.vmap(forced_m)(s, m), -1), i + 1
+        return s, m, jnp.where(act, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m), -1), i + 1
 
     def more(c):
         pend = ((c[2] >= 0) & ~c[0].done).sum()
@@ -1696,7 +1838,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
-              proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f)
+              proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0))
     s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):

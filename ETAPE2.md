@@ -358,3 +358,18 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
   | Extra Deck de 15 (`--extra 15`, N = 110 au lieu de 80) | 10 699 | — |
 
   Coût de la mesure : 0,36 CU.
+
+**Jalon 5, volet b : rituel (2026-10-31).** Ce que montre l'oracle (procédure EDOPro `Ritual.AddProcGreaterCode` / `AddProcEqualCode`) :
+1. choix du monstre rituel en main (msg 15), parmi ceux pour lesquels un ensemble de libérations valide existe ;
+2. libérations :
+   - avec une case principale libre, `SelectWithSumGreater` / `SelectWithSumEqual` (msg 23, MSG_SELECT_SUM) : **une seule décision**, le sous-ensemble entier. `driver.py` énumère les sous-ensembles valides (Greater : somme ≥ niveau et somme − plus petit < niveau ; Equal : somme exacte) ;
+   - sans case principale libre, `SelectUnselectGroup` (msg 26) : carte par carte, avec la contrainte qu'une libération libère une case principale ; la sélection se termine d'elle-même ;
+3. case, puis position. L'invocation est correcte (`CompleteProcedure`) : Monster Reborn peut ensuite réanimer le monstre.
+
+- **Matériaux** (`rit_mats`) : monstres de la main et du terrain du joueur, de niveau > 0, sauf le monstre rituel lui-même.
+- **Test d'existence** (`ritual_ok`, cache `rz_c`, bit 0 Greater, bit 1 Equal) : sommes de sous-ensembles par masques de bits sur l'histogramme des niveaux (main / terrain), niveaux de LVMAX = 12 à 1, sommes < SMAX = 26 (`sum_ok`). Une seule fois par niveau de monstre rituel (vmap sur 13 niveaux), pas par carte. Coût indépendant de N. Calculé seulement si une partie du lot a un monstre rituel en main (`has_ritual`).
+- **OP_RITMAT** (D_SELECT, `rsel` = mode) : un matériau est proposé s'il existe un ensemble valide qui contient les choix déjà faits et ce candidat (`rit_picks`, calcul par classe niveau × main / terrain). La sélection se termine quand la somme atteint le niveau (`rit_done`).
+- **Une décision de l'oracle = plusieurs choix JAX** : avec une case libre, le moteur joue d'office la sélection quand l'union des candidats est elle-même le seul ensemble valide (règle `uniq` de `forced_m`), car l'oracle n'a alors qu'une option. Le harness de `compare.py` saute, dans la suite d'actions d'une réponse msg 23, les cartes déjà choisies d'office. Sans case libre (msg 26), pas de règle `uniq` : l'oracle propose chaque carte.
+- `SPSUMMON(r, pos, proc=True)` pose `proc` (invocation correcte). Les monstres rituels ne s'invoquent ni ne se posent normalement (`can_ns`). Les sorts rituels portent aussi TYPE_RITUAL : les tests de monstre rituel demandent TYPE_MONSTER | TYPE_RITUAL.
+- Cartes : Black Luster Ritual (Greater, niveau 8) → Black Luster Soldier ; End of the World (Equal) → Demise, King of Armageddon (ignition : payer 2000 LP, détruire toutes les autres cartes du terrain). Ruin n'est pas traduit (son second nom n'est pas dans la recette JAX). Mode `rit` de `compare.py` : 22 normaux, 3 de chaque carte rituelle, 2 Monster Reborn, 4 autres.
+- Comparaison avec l'oracle : rit 100/100 (graines 9000-9099 ; sur les 20 premières : 63 sélections par somme, 37 libérations carte par carte sans case libre, 60 activations de Demise). Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent (les decks de test contiennent maintenant les cartes rituelles).
