@@ -34,7 +34,7 @@ codes = np.asarray(bank.code)
 new = set()
 for name in ("J4", "J4B", "J4C", "J4D"):
     new |= getattr(cards, name, set())
-fus = set(getattr(cards, "FUSION", {})) | set(getattr(cards, "SYNCHRO", {}))  # Extra Deck : jamais dans le deck principal
+fus = set(getattr(cards, "FUSION", {})) | set(getattr(cards, "SYNCHRO", {})) | set(getattr(cards, "XYZ", {}))  # Extra Deck : jamais dans le deck principal
 eff = np.array([i for i in range(C, len(codes)) if not (args.old_cards and int(codes[i]) in new) and int(codes[i]) not in fus])
 print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; banque {len(codes)} cartes, {len(eff)} à effet tirables",
       flush=True)

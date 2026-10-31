@@ -12,7 +12,7 @@ les cartes du volet 3a (interdictions, protections) avec des cartes des autres v
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn|xyz]
 """
 import os
 import collections
@@ -54,15 +54,20 @@ def jax_snapshot(bank, s):
     s = jax.tree.map(np.asarray, s)
     code, atk, df = np.asarray(bank.code)[s.cid], s.atk_c, s.df_c
     out = dict(lp=tuple(int(x) for x in s.lp), turn=int(s.turn), turn_player=int(s.tp), phase=int(s.phase))
+
+    def card(i):  # (code, pos, atk, def) + matériaux Xyz attachés s'il y en a (comme l'instantané de l'oracle)
+        ov = np.where((s.zone == core.Z_OVERLAY) & (s.ov_par == i))[0]
+        ov = tuple(int(code[j]) for j in ov[np.argsort(s.seq[ov])])
+        return (int(code[i]), int(s.pos[i]), int(atk[i]), int(df[i])) + ((ov,) if ov else ())
     for p in (0, 1):
         for name, z in ZNAME.items():
             idx = np.where((s.zone == z) & (s.ctrl == p))[0]
             if z in (core.Z_MZONE, core.Z_SZONE):
                 lst = [None] * (7 if z == core.Z_MZONE else 8)
                 for i in idx:
-                    lst[s.seq[i]] = (int(code[i]), int(s.pos[i]), int(atk[i]), int(df[i]))
+                    lst[s.seq[i]] = card(i)
             else:
-                lst = [(int(code[i]), int(s.pos[i]), int(atk[i]), int(df[i])) for i in idx[np.argsort(s.seq[idx])]]
+                lst = [card(i) for i in idx[np.argsort(s.seq[idx])]]
                 if len(set(s.seq[idx])) != len(idx) or (len(idx) and s.seq[idx].max() != len(idx) - 1):
                     raise Mismatch(f"seq incohérents en {p},{name}: {sorted(s.seq[idx])}")
             out[(p, name)] = lst
@@ -208,6 +213,13 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         for d in decks:
             rng.shuffle(d)
         extra = [[97204936, 97204936, 45815891, 45815891, 16527176, 16527176] for _ in range(2)]
+    elif mode == "xyz":
+        l4 = [c for c in pool if (db.rows[c][6] & 0xFF) == 4]
+        decks = [[rng.choice(l4) for _ in range(24)] + [rng.choice(pool) for _ in range(6)] + [83764718] * 2
+                 + [53129443] * 2 + [rng.choice(base) for _ in range(6)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[71594310, 71594310, 71594310, 9053187, 9053187, 9053187] for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
@@ -307,7 +319,7 @@ if __name__ == "__main__":
     mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
     db = driver.CardDB()
     bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS) + list(cards.FUSION) + list(cards.RITUAL)
-                         + list(cards.SYNCHRO) + list(cards.TUNER_STATS))  # une seule banque
+                         + list(cards.SYNCHRO) + list(cards.TUNER_STATS) + list(cards.XYZ))  # une seule banque
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     nok = 0
     for sd in range(seed0, seed0 + n):

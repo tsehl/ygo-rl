@@ -300,7 +300,7 @@ def assemble(codes, cards=CARDS):
             assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             fmat[i, j] = f
         fmn[i] = len(FUSION.get(code, ()))
-        erl[i] = int(code in FUSION or code in RITUAL or code in SYNCHRO)
+        erl[i] = int(code in FUSION or code in RITUAL or code in SYNCHRO or code in XYZ)
     smat = np.zeros((c, 2, len(F())), np.int32)
     syn = np.zeros(c, np.int32)
     for i, code in enumerate(codes):
@@ -309,8 +309,15 @@ def assemble(codes, cards=CARDS):
                 assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
                 smat[i, j] = f
             syn[i] = 1
+    xmat = np.zeros((c, len(F())), np.int32)
+    xct = np.zeros(c, np.int32)
+    for i, code in enumerate(codes):
+        if code in XYZ:
+            f, k = XYZ[code]
+            assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
+            xmat[i], xct[i] = f, k
     return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
-                fmat=fmat, fmn=fmn, erl=erl, smat=smat, syn=syn)
+                fmat=fmat, fmn=fmn, erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct)
 
 
 def setcodes(sc):
@@ -370,6 +377,10 @@ SYNCHRO_STATS = {97204936: (2600, 800, 6, EARTH), 45815891: (2700, 1800, 7, EART
 TUNER_STATS = {74093656: (1600, 200, 3, EARTH), 487395: (400, 1200, 1, WATER), 21615956: (100, 2000, 1, 0x4),  # Tune Warrior, Water Spirit, Flamvell Guard
                68505803: (1400, 1200, 3, 0x20), 40155554: (1800, 1400, 5, 0x20)}  # Genex Controller, Ally Mind
 J5C = set(TUNER_STATS)  # Syntoniseurs normaux (mode syn de compare.py)
+# volet 5d : Xyz (matériaux : ct monstres de niveau = rang, filtre sur MAT_FIELDS) ; EnableReviveLimit
+XYZ = {71594310: (MAT(), 2),                                  # Gem-Knight Pearl (rang 4)
+       9053187: (MAT(), 3)}                                   # Gagagigo the Risen (rang 4)
+XYZ_STATS = {71594310: (2600, 1900, 4, EARTH), 9053187: (2950, 2800, 4, WATER)}
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -391,9 +402,9 @@ def test_bank(key, c):
     st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS) + list(J5A_SPELLS) \
         + list(J5B_SPELLS)
     codes = list(range(c)) + st + list(EFFECT_MONSTERS) + list(MATERIAL_STATS) + list(FUSION) + list(RITUAL) \
-        + list(TUNER_STATS) + list(SYNCHRO)
+        + list(TUNER_STATS) + list(SYNCHRO) + list(XYZ)
     xs = list(MATERIAL_STATS.values()) + [FUSION_STATS[k] for k in FUSION] + list(RITUAL.values()) \
-        + list(TUNER_STATS.values()) + [SYNCHRO_STATS[k] for k in SYNCHRO]
+        + list(TUNER_STATS.values()) + [SYNCHRO_STATS[k] for k in SYNCHRO] + [XYZ_STATS[k] for k in XYZ]
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()], [v[0] for v in xs]])
     df = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 1), (c,), 0, 30)) * 100,
@@ -404,7 +415,7 @@ def test_bank(key, c):
         + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + list(J5A_SPELLS.values()) + list(J5B_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS) \
         + [core.TYPE_MONSTER | core.TYPE_NORMAL] * len(MATERIAL_STATS) + [core.TYPE_MONSTER | core.TYPE_FUSION] * len(FUSION) \
         + list(RITUAL_TYPES.values()) + [core.TYPE_MONSTER | core.TYPE_NORMAL | core.TYPE_TUNER] * len(TUNER_STATS) \
-        + [core.TYPE_MONSTER | core.TYPE_SYNCHRO] * len(SYNCHRO)
+        + [core.TYPE_MONSTER | core.TYPE_SYNCHRO] * len(SYNCHRO) + [core.TYPE_MONSTER | core.TYPE_XYZ] * len(XYZ)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
                            np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS],
@@ -418,7 +429,7 @@ def test_decks(key, bank, b, d, c, eff, x):
     import jax
     import jax.numpy as jnp
     code = np.asarray(bank.code)
-    extra_codes = set(FUSION) | set(SYNCHRO)
+    extra_codes = set(FUSION) | set(SYNCHRO) | set(XYZ)
     effs = np.array([i for i in range(c, len(code)) if int(code[i]) not in MATERIAL_STATS and int(code[i]) not in extra_codes
                      and int(code[i]) not in TUNER_STATS])
     mats = np.array([i for i in range(len(code)) if int(code[i]) in MATERIAL_STATS or int(code[i]) in TUNER_STATS])
