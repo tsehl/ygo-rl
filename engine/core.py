@@ -397,26 +397,42 @@ def enable(s, mask):
 LOC_RANK = (Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_GRAVE, Z_REMOVED)
 
 
-def group_send(s, mask, zone, pos):
+def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None):
     """Envoie les cartes `mask` dans la zone ordonnée `zone` (cimetière, main) de leur propriétaire, d'un coup.
     Comme ygopro-core (card_operation_sort), elles y arrivent triées par contrôleur (joueur du tour d'abord),
-    zone d'origine, puis seq (croissante sur le terrain et en main, décroissante pour deck/cimetière/bannies). O(N)."""
+    zone d'origine, puis seq (croissante sur le terrain et en main, décroissante pour deck/cimetière/bannies). O(N).
+    alt [N] : ces cartes vont plutôt dans zone2 / pos2 (un monstre de l'Extra Deck renvoyé en main), dans le même
+    passage."""
     n = s.cid.shape[0]
+    if alt is not None:
+        dest = jnp.where(alt, zone2, zone)
+        pos = jnp.where(alt, pos2, pos)
+    else:
+        dest = zone
     zr = jnp.zeros(n, I32)
     for i, z in enumerate(LOC_RANK):
         zr = jnp.where(s.zone == z, i, zr)
     desc = (s.zone == Z_DECK) | (s.zone == Z_GRAVE) | (s.zone == Z_REMOVED)
     key = ((s.ctrl != s.tp) * len(LOC_RANK) + zr) * n + jnp.where(desc, n - 1 - s.seq, s.seq)
+    nk = 2 * len(LOC_RANK) * n
+    if alt is not None:
+        key = key + jnp.where(alt, nk, 0)  # rang compté séparément pour chaque destination
+        nk *= 2
     seq = s.seq
     for o in (0, 1):
         mo = mask & (s.owner == o)
-        bins = jnp.zeros(2 * len(LOC_RANK) * n, I32).at[key].add(mo.astype(I32))
+        bins = jnp.zeros(nk, I32).at[key].add(mo.astype(I32))
         rank = (jnp.cumsum(bins) - bins)[key]
-        seq = jnp.where(mo, count(s, zone, o) + rank, seq)
+        if alt is not None:
+            rank = rank - jnp.where(alt, (mo & ~alt).sum(), 0)
+            base = jnp.where(alt, count(s, zone2, o), count(s, zone, o))
+        else:
+            base = count(s, zone, o)
+        seq = jnp.where(mo, base + rank, seq)
     s = compact(s, mask)
-    out = (zone == Z_HAND) | (zone == Z_DECK) | (zone == Z_EXTRA)  # STATUS_PROC_COMPLETE perdu
+    out = (dest == Z_HAND) | (dest == Z_DECK) | (dest == Z_EXTRA)  # STATUS_PROC_COMPLETE perdu
     s = s._replace(proc=jnp.where(mask & out, False, s.proc))
-    return s._replace(pzone=jnp.where(mask, s.zone, s.pzone), zone=jnp.where(mask, zone, s.zone),
+    return s._replace(pzone=jnp.where(mask, s.zone, s.pzone), zone=jnp.where(mask, dest, s.zone),
                       seq=jnp.where(mask, seq, s.seq), ctrl=jnp.where(mask, s.owner, s.ctrl),
                       pos=jnp.where(mask, pos, s.pos), st=jnp.where(mask, 0, s.st), mv=jnp.where(mask, s.clk + 1, s.mv),
                       en_t=jnp.where(mask, s.clk + 1, s.en_t),
@@ -426,7 +442,7 @@ def group_send(s, mask, zone, pos):
 def group_to_hand(bank, s, mask):
     """Renvoi en main ; un monstre de l'Extra Deck retourne dans l'Extra Deck (verso)."""
     ex = mask & ((bank.ctype[s.cid] & TYPE_EXTRA) != 0)
-    return group_send(group_send(s, mask & ~ex, Z_HAND, P_HAND), ex, Z_EXTRA, P_FD_DEF)
+    return group_send(s, mask, Z_HAND, P_HAND, Z_EXTRA, P_FD_DEF, alt=ex)
 
 
 def group_to_grave(s, mask):
@@ -939,51 +955,78 @@ def refresh_b(bank, prev, s, frac=8):
     d = changed(prev, s)
     k = max(1, nb // frac)
 
+    def ref(s):  # refresh d'un lot ; fusion_ok seulement si une partie du lot a des monstres fusion à l'Extra Deck
+        fus = jax.vmap(lambda x: has_fusion(bank, x))(s).any()
+        s = lax.cond(fus, lambda s: jax.vmap(lambda x: refresh_fus(bank, x))(s), lambda s: s, s)
+        return jax.vmap(lambda x: refresh(bank, x, fus=False))(s)
+
     def sub(s):  # tout l'état est réécrit : ne réécrire que les champs de refresh est plus lent (mesuré sur CPU)
         idx = jnp.nonzero(d, size=k, fill_value=nb)[0]
-        part = jax.vmap(lambda x: refresh(bank, x))(jax.tree.map(lambda x: x[jnp.minimum(idx, nb - 1)], s))
+        part = ref(jax.tree.map(lambda x: x[jnp.minimum(idx, nb - 1)], s))
         return jax.tree.map(lambda x, y: x.at[idx].set(y, mode="drop"), s, part)
-    return lax.cond(d.sum() > k, lambda s: jax.vmap(lambda x: refresh(bank, x))(s),
-                    lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
+    return lax.cond(d.sum() > k, ref, lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
 
 
 SUBS = [[(q >> j) & 1 for j in range(FK)] for q in range(1 << FK)]  # sous-ensembles des emplacements de matériaux
 
 
+MAT_FIELDS = (F_TYPE, F_ATTR, F_RACE, F_SET, F_CODE1, F_CODE2, F_LV_LO, F_LV_HI)  # champs permis dans une recette
+
+
+def mat_mask(bank, s, f):
+    """Filtre de matériau allégé (seulement les champs MAT_FIELDS, sans la zone) : moins cher que filter_mask."""
+    ct, code, lv = bank.ctype[s.cid], bank.code[s.cid], bank.level[s.cid]
+    m = (f[F_TYPE] == 0) | ((ct & f[F_TYPE]) != 0)
+    m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
+    m &= (f[F_RACE] == 0) | ((bank.race[s.cid] & f[F_RACE]) != 0)
+    m &= (f[F_SET] == 0) | set_match(bank, s.cid, f[F_SET])
+    m &= (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2])
+    return m & (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI])
+
+
 def fus_cands(bank, s, c):
-    """[FK, N] : cartes utilisables pour chaque matériau du monstre fusion c (main et terrain de son propriétaire)."""
+    """[FK, N] : cartes utilisables pour chaque matériau du monstre fusion c (main et terrain de son propriétaire,
+    monstres, pas détruits au combat)."""
     p = s.owner[c]
-    mats = ((s.zone == Z_HAND) | (s.zone == Z_MZONE)) & (s.ctrl == p) & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
+    mats = (((s.zone == Z_HAND) | (s.zone == Z_MZONE)) & (s.ctrl == p) & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
+            & ((s.st & ST_BDES) == 0))
     k = bank.fmn[s.cid[c]]
-    return jnp.stack([filter_mask(bank, s, bank.fmat[s.cid[c], j], p, c) & mats & (j < k) for j in range(FK)])
-
-
-def hall(cand, k, slots=None):
-    """[N] -> bool : les emplacements `slots` (masque [FK], défaut : les k premiers) ont des matériaux distincts
-    (théorème de Hall : tout sous-ensemble Q d'emplacements a au moins |Q| candidats)."""
-    sub = jnp.asarray(SUBS, bool)                                  # [2^FK, FK]
-    use = jnp.arange(FK) < k if slots is None else slots
-    inq = sub & use[None, :]
-    ok = ~(sub & ~use[None, :]).any(1)                             # Q ⊆ slots
-    cnt = (inq[:, :, None] & cand[None]).any(1).sum(-1)
-    return (~ok | (cnt >= inq.sum(1))).all()
+    return jnp.stack([mat_mask(bank, s, bank.fmat[s.cid[c], j]) & mats & (j < k) for j in range(FK)])
 
 
 def fusion_ok(bank, s):
     """[N] fz_c : monstres fusion de l'Extra Deck réalisables (matériaux distincts sur la main et le terrain, et une case
-    pour l'invocation : une case libre, ou un matériau sur le terrain qui en libérera une). O(EXK × 2^FK × N)."""
+    pour l'invocation : une case libre, ou un matériau sur le terrain qui en libérera une). Chaque carte est résumée
+    par le masque des emplacements qu'elle peut remplir ; le test de Hall se fait sur l'histogramme de ces masques
+    (main / terrain), en O(2^FK × 2^FK) une fois l'histogramme fait. O(EXK × (FK + 1) × N)."""
     n = s.cid.shape[0]
     want = (s.zone == Z_EXTRA) & (bank.fmn[s.cid] > 0)
     idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
     live = jnp.arange(EXK) < want.sum()
+    nq = 1 << FK
+    q = jnp.arange(nq)
+    qsize = jnp.asarray([bin(x).count("1") for x in range(nq)])
+    field = s.zone == Z_MZONE
 
     def one(c, ok):
-        cand = fus_cands(bank, s, c)
+        cand = fus_cands(bank, s, c)                               # [FK, N]
+        bits = (cand * (1 << jnp.arange(FK))[:, None]).sum(0)      # [N] emplacements possibles de chaque carte
+        hist = jnp.zeros(2 * nq, I32).at[bits + nq * field].add(1)  # [main | terrain]
+        hh, hf = hist[:nq], hist[nq:]
         k = bank.fmn[s.cid[c]]
-        field = s.zone == Z_MZONE
-        # pas de case libre : un des matériaux doit venir du terrain (GetLocationCountFromEx avec les matériaux)
-        with_field = jnp.stack([hall(cand.at[j].set(cand[j] & field), k) & (j < k) for j in range(FK)]).any()
-        return ok & hall(cand, k) & (ex_zones(s, s.owner[c]).any() | with_field)
+        use = (1 << k) - 1
+        inter = (q[:, None] & q[None, :]) != 0                     # [valeur, Q] : la carte sert à un emplacement de Q
+
+        def hall_h(hh, hf):  # tout Q ⊆ use a au moins |Q| cartes candidates
+            cnt = ((hh + hf)[:, None] * inter).sum(0)              # [Q]
+            return ((q & ~use) != 0) | (cnt >= qsize)
+        ok_all = hall_h(hh, hf).all()
+        # sans case libre : un emplacement j doit être tenu par un monstre du terrain (les cartes de la main perdent j)
+        with_field = jnp.zeros((), bool)
+        for j in range(FK):
+            hj = jnp.zeros(nq, I32).at[q & ~(1 << j)].add(hh)
+            with_field |= (j < k) & hall_h(hj, hf).all()
+        return ok & ok_all & (ex_zones(s, s.owner[c]).any() | with_field)
     oks = jax.vmap(one)(idx, live)
     return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(oks, mode="drop"), want.sum() > EXK
 
@@ -1036,9 +1079,21 @@ def ex_zones(s, p):
     return jnp.concatenate([~me[:5], jnp.stack([emz & ~op[6], emz & ~op[5]])])
 
 
-def refresh(bank, s):
+def has_fusion(bank, s):
+    """Des monstres fusion attendent dans un Extra Deck (sinon fusion_ok est inutile)."""
+    return ((s.zone == Z_EXTRA) & (bank.fmn[s.cid] > 0)).any()
+
+
+def refresh_fus(bank, s):
     fz, fover = fusion_ok(bank, s)
-    s = s._replace(fz_c=fz, ovf=s.ovf | jnp.where(fover, 4, 0).astype(I32))
+    return s._replace(fz_c=fz, ovf=s.ovf | jnp.where(fover, 4, 0).astype(I32))
+
+
+def refresh(bank, s, fus=True):
+    """Recalcule les caches (stats, drapeaux, fusions réalisables). fus=False : sans fz_c (refresh_b le fait au
+    niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
+    if fus:
+        s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
@@ -1308,7 +1363,9 @@ def auto_pass(bank, s):
     return (s.dec == D_CHAIN) & (s.wk != W_TRIG) & ~s.done & ~act_cand(bank, s).any()
 
 
-def legal(bank, s):
+def legal(bank, s, fus=True):
+    """Masque des actions légales. fus=False : sans le choix des matériaux de fusion (step_batch ne le calcule que si
+    une partie du lot en est là)."""
     n = s.cid.shape[0]
     p = s.dec_player
     mine = s.ctrl == p
@@ -1328,8 +1385,9 @@ def legal(bank, s):
     atk_ok = ~op_mon.any() | (op_mon & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
     can_atk = my_mon & (s.pos == P_FU_ATK) & ((s.st & ST_ATTACKED) == 0) & ((s.fl_c & FL_NO_ATTACK) == 0) & atk_ok
     ins = current_ins(bank, s)
-    eff_cand = jnp.where(s.fsel, fus_picks(bank, s, jnp.argmax(s.reg[jnp.clip(ins[2], 0, R - 1)])),
-                         s.reg[jnp.clip(ins[2], 0, R - 1)])
+    eff_cand = s.reg[jnp.clip(ins[2], 0, R - 1)]
+    if fus:
+        eff_cand = jnp.where(s.fsel, fus_picks(bank, s, jnp.argmax(eff_cand)), eff_cand)
 
     # libérations : sans case principale libre, l'une d'elles doit libérer une case principale (pas une zone extra)
     mainz = my_mon & (s.seq < N_MAIN_ZONES)
@@ -1584,7 +1642,9 @@ def step_batch(bank, s, a, frac=0.0):
         act = (a >= 0) & ~s.done
         s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))
         s = _where(act, settle_b(refresh_b(bank, s, _where(act, s1, s))), s)
-        m = jnp.where(act[:, None], jax.vmap(lambda s: legal(bank, s))(s), m)
+        lg = lax.cond(s.fsel.any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
+                      lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
+        m = jnp.where(act[:, None], lg, m)
         return s, m, jnp.where(act, jax.vmap(forced_m)(s, m), -1), i + 1
 
     def more(c):

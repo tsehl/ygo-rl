@@ -343,3 +343,18 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 - Cartes : Polymerization ; Flame Swordsman, Gaia the Dragon Champion (deux noms), Blue-Eyes Ultimate Dragon (trois matériaux identiques). Mode `fus` de `compare.py` : 20 normaux, 12 matériaux, 3 Polymerization, 2 Monster Reborn, 3 autres ; Extra Deck de 6 (2 de chaque).
 - `sb_check`, `vmap_check` et `obs_check` jouent maintenant avec des Extra Decks (6 monstres fusion, 15 % de matériaux dans les decks).
 - Comparaison avec l'oracle : fus 100/100 (graines 8000-8099), toute la non-régression inchangée ; `obs_check`, `vmap_check` et `sb_check` passent (avec Extra Decks).
+- **Coût du volet 5a.** La première version faisait tomber le CPU de 482 à 172 décisions/s, même sans Extra Deck : `fusion_ok` prenait 159 ms sur les 174 ms d'un `refresh` (B = 256). Quatre correctifs :
+  - chaque carte est résumée par le masque des emplacements qu'elle peut remplir, et le test de Hall (avec ses variantes « un emplacement tenu par le terrain ») se fait sur l'histogramme de ces masques (main / terrain), en O(16 × 16) ;
+  - filtre de matériau allégé (`mat_mask`, champs MAT_FIELDS ; `assemble` vérifie qu'une recette n'en utilise pas d'autres) ;
+  - `fusion_ok` seulement si une partie du lot a des monstres fusion dans son Extra Deck, et `legal` sans `fus_picks` si aucune partie du lot ne choisit de matériaux ;
+  - un seul `group_send` pour un renvoi en main qui envoie des monstres de l'Extra Deck dans l'Extra Deck (destination par carte), au lieu de deux.
+
+  Résultat sur CPU (B = 64, sans Extra Deck) : 420 décisions/s.
+- **Mesure L4** (`engine_bench.py`, frac = 0,05) :
+
+  | | B = 1024 | B = 4096 |
+  |---|---|---|
+  | sans Extra Deck | 12 651 décisions/s (13 497 avant le volet) | 13 046 |
+  | Extra Deck de 15 (`--extra 15`, N = 110 au lieu de 80) | 10 699 | — |
+
+  Coût de la mesure : 0,36 CU.

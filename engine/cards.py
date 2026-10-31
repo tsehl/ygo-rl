@@ -6,6 +6,8 @@ Joueurs relatifs : ME = celui qui active, OPP = son adversaire.
 """
 import numpy as np
 
+import core
+
 from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMON, EV_SPSUMMON, EV_SUMMON, EV_TO_GRAVE,
                   FW, K_TRIG_F, K_TRIG_O, OP_COND_EVP, OP_COND_SELF, OP_COND_TURN, OP_EVENT, OP_LOCK, K_ACTIVATE,
                   K_IGNITION, NF, OP_CHAINCARD, OP_CHOOSE, OP_COND_CHAIN, OP_DAMAGE, OP_DRAW,
@@ -276,8 +278,11 @@ def assemble(codes, cards=CARDS):
     fmat = np.zeros((c, FK, len(F())), np.int32)
     fmn = np.zeros(c, np.int32)
     erl = np.zeros(c, np.int32)
+    dflt = F()
     for i, code in enumerate(codes):
         for j, f in enumerate(FUSION.get(code, ())):
+            # recette : seuls les champs de core.MAT_FIELDS sont lus (la zone est la main et le terrain)
+            assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             fmat[i, j] = f
         fmn[i] = len(FUSION.get(code, ()))
         erl[i] = int(code in FUSION)
