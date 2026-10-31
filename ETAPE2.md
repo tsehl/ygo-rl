@@ -289,4 +289,24 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 - CPU, B = 64, mêmes cartes (celles d'avant le jalon 4) : moteur `9e6349a` 482 décisions/s ; moteur actuel 119 décisions/s, soit environ ×4 plus lent.
 - Cause : `refresh` (stats, drapeaux, annulations) coûte ~13,5 ms pour 256 parties, contre 3,8 ms pour `exec_one`, et il tourne après chaque instruction exécutée. Le coût croît avec KM (environ 1,4 ms par case à B = 256) ; les filtres n'en sont qu'environ un tiers, le reste est une centaine de petites opérations [K, N].
 - Déjà fait : pli des stats sous forme close (dernier index et sommes masquées sur [K, N], plus de `lax.scan` séquentiel, qui sur GPU lançait 32 étapes de petits kernels à chaque instruction) ; un filtre de moins par effet continu (compte et condition fusionnés dans le filtre 1). Aucun gain sur CPU, gain attendu sur GPU, à mesurer.
-- Mesure L4 en attente : le réseau de l'environnement cloud bloque colab.research.google.com.
+- **Mesure L4 (2026-10-31)**, `bench/engine_bench.py`, frac = 0,05, 40 appels :
+
+  | moteur | B = 1024 | B = 4096 |
+  |---|---|---|
+  | `9e6349a` (avant le jalon 4) | 15 782 décisions/s (62 ms/appel) | 14 918 (264 ms/appel) |
+  | actuel, toutes les cartes | 7 012 (140 ms) | 4 921 (797 ms) |
+  | actuel, cartes d'avant le jalon 4 | 6 647 (148 ms) | 4 712 (834 ms) |
+
+  Le surcoût vient du moteur (stats, drapeaux, annulations, fenêtres), pas des nouvelles cartes. Il est de ×2,2 à B = 1024 et de ×3 à B = 4096. La compilation passe de ~100 s à ~220 s.
+- **Composants sur L4** (B = 1024, un appel vmappé, sur l'état initial) :
+
+  | composant | ancien | actuel |
+  |---|---|---|
+  | `exec_one` | 0,88 ms | 1,22 ms |
+  | `refresh` | — | 1,01 ms |
+  | `legal` | 4,61 ms | 6,26 ms |
+  | `trig_eval` | 4,68 ms | 5,88 ms |
+  | `apply` | 0,60 ms | 0,82 ms |
+
+  Une itération de la boucle d'exécution (`exec_one` + `refresh`) passe de 0,88 à 2,2 ms. `legal` et `trig_eval` prennent 26 à 36 % de plus (filtres plus larges, damage step).
+- Coût de la mesure : 0,64 CU.
