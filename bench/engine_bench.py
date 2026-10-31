@@ -1,6 +1,6 @@
 """Débit du moteur sous step_batch (décisions de la politique par seconde), politique aléatoire.
 
-Usage : python engine_bench.py DOSSIER_ENGINE [--b 1024,4096] [--frac 0.05] [--calls 60] [--old-cards]
+Usage : python engine_bench.py DOSSIER_ENGINE [--b 1024,4096] [--frac 0.05] [--calls 60] [--old-cards] [--extra X]
 DOSSIER_ENGINE : dossier contenant core.py et cards.py (moteur actuel, ou ancien moteur extrait de git).
 --old-cards : les cartes à effet des decks sont tirées parmi celles d'avant le jalon 4 (isole le coût du moteur).
 Une décision = une action choisie par la politique (les actions forcées rendues par step_batch ne comptent pas).
@@ -16,6 +16,7 @@ ap.add_argument("--b", default="1024,4096")
 ap.add_argument("--frac", type=float, default=0.05)
 ap.add_argument("--calls", type=int, default=60)
 ap.add_argument("--old-cards", action="store_true")
+ap.add_argument("--extra", type=int, default=0, help="Extra Deck de X monstres fusion par joueur (cards.test_decks)")
 args = ap.parse_args()
 sys.path.insert(0, args.engine)
 
@@ -33,12 +34,15 @@ codes = np.asarray(bank.code)
 new = set()
 for name in ("J4", "J4B", "J4C", "J4D"):
     new |= getattr(cards, name, set())
-eff = np.array([i for i in range(C, len(codes)) if not (args.old_cards and int(codes[i]) in new)])
+fus = set(getattr(cards, "FUSION", {}))  # monstres fusion : jamais dans le deck principal
+eff = np.array([i for i in range(C, len(codes)) if not (args.old_cards and int(codes[i]) in new) and int(codes[i]) not in fus])
 print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; banque {len(codes)} cartes, {len(eff)} à effet tirables",
       flush=True)
 
 
 def decks(k, b):
+    if args.extra:
+        return cards.test_decks(k, bank, b, D, C, 0.3, args.extra)
     k1, k2, k3 = jax.random.split(k, 3)
     normal = jax.random.randint(k1, (b, 2, D), 0, C)
     effc = jnp.asarray(eff)[jax.random.randint(k2, (b, 2, D), 0, len(eff))]
@@ -46,7 +50,11 @@ def decks(k, b):
 
 
 def run(b):
-    ng = jax.jit(jax.vmap(lambda d, k: core.new_game(bank, d[0], d[1], k)))
+    if args.extra:
+        ng0 = jax.jit(jax.vmap(lambda d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1])))
+        ng = lambda dx, k: ng0(dx[0], dx[1], k)
+    else:
+        ng = jax.jit(jax.vmap(lambda d, k: core.new_game(bank, d[0], d[1], k)))
     legal = jax.jit(jax.vmap(lambda s: core.legal(bank, s)))
     sb = jax.jit(lambda s, a: core.step_batch(bank, s, a, args.frac))
     t0 = time.time()

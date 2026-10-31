@@ -39,6 +39,8 @@ P_FACEUP = P_FU_ATK | P_FU_DEF
 # types (= TYPE_*)
 TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL = 1, 2, 4, 0x10
 TYPE_QUICKPLAY, TYPE_CONTINUOUS, TYPE_COUNTER = 0x10000, 0x20000, 0x100000
+TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK = 0x40, 0x80, 0x2000, 0x800000, 0x4000000
+TYPE_EXTRA = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK  # monstres de l'Extra Deck
 # statuts (bits)
 ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : choisie dans la sélection en cours
 ST_SET_TURN, ST_LEAVE = 16, 32  # posée ce tour (magie/piège) ; activée, ira au cimetière en fin de chaîne
@@ -96,12 +98,12 @@ PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
- OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE) = range(26)
-N_OPS = 26
+ OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT) = range(27)
+N_OPS = 27
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
-    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS = range(19)
-FW = 19  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS = range(20)
+FW = 20  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
@@ -132,6 +134,8 @@ M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX = range(9)
 MW = 9
 KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
 TM = 16         # modificateurs temporaires par tour
+FK = 4          # matériaux de fusion au plus (un filtre par matériau)
+EXK = 32        # monstres fusion de l'Extra Deck évalués par refresh (fz_c)
 BIG = 1 << 20
 
 # actions : verbe × slot, puis actions spéciales
@@ -168,10 +172,13 @@ class Bank(NamedTuple):
     setcode: jnp.ndarray  # [C, NSET] archétypes (0 : aucun)
     emod: jnp.ndarray   # [C, E, MW] effet continu (K_CONT) : M_*
     edmg: jnp.ndarray   # [C, E] activation au damage step : bits DMG_*
+    fmat: jnp.ndarray   # [C, FK, FW] matériaux de fusion (un filtre par matériau, sur la main et le terrain)
+    fmn: jnp.ndarray    # [C] nombre de matériaux (0 : pas de recette)
+    erl: jnp.ndarray    # [C] EnableReviveLimit : invocable spécialement seulement si correctement invoquée avant
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
-              race=None, erng=None, setcode=None, emod=None, edmg=None):
+              race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None):
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.asarray(df, I32), tprog=test_prog(prog, c),
@@ -180,7 +187,8 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 attr=i(attr, (c,)), race=i(race, (c,)),
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
                 etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)), setcode=i(setcode, (c, NSET)),
-                emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)))
+                emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)), fmat=i(fmat, (c, FK, FW)), fmn=i(fmn, (c,)),
+                erl=i(erl, (c,)))
 
 
 def test_prog(prog, c):
@@ -283,6 +291,9 @@ class State(NamedTuple):
     fl_c: jnp.ndarray    # [N] interdictions / protections courantes (FL_*), calculées par refresh
     ib_c: jnp.ndarray    # [N] indestructible au combat contre un monstre d'ATK >= ib_c (BIG : non)
     pf_c: jnp.ndarray    # [2] interdictions des joueurs (PF_*)
+    proc: jnp.ndarray    # [N] correctement invoquée (STATUS_PROC_COMPLETE : invocation fusion...) ; effacé en main / deck
+    fz_c: jnp.ndarray    # [N] monstre fusion de l'Extra Deck réalisable avec la main et le terrain de son propriétaire
+    fsel: jnp.ndarray    # sélection de matériaux en cours (OP_FUSMAT) : jamais jouée d'office s'il reste un choix
     ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
 
 
@@ -354,7 +365,7 @@ def leave_hand(s, c):
     return s._replace(seq=s.seq - shift.astype(I32))
 
 
-ORDERED = (Z_DECK, Z_HAND, Z_GRAVE, Z_REMOVED)
+ORDERED = (Z_DECK, Z_HAND, Z_GRAVE, Z_REMOVED, Z_EXTRA)
 
 
 def compact(s, leaving):
@@ -403,11 +414,19 @@ def group_send(s, mask, zone, pos):
         rank = (jnp.cumsum(bins) - bins)[key]
         seq = jnp.where(mo, count(s, zone, o) + rank, seq)
     s = compact(s, mask)
+    out = (zone == Z_HAND) | (zone == Z_DECK) | (zone == Z_EXTRA)  # STATUS_PROC_COMPLETE perdu
+    s = s._replace(proc=jnp.where(mask & out, False, s.proc))
     return s._replace(pzone=jnp.where(mask, s.zone, s.pzone), zone=jnp.where(mask, zone, s.zone),
                       seq=jnp.where(mask, seq, s.seq), ctrl=jnp.where(mask, s.owner, s.ctrl),
                       pos=jnp.where(mask, pos, s.pos), st=jnp.where(mask, 0, s.st), mv=jnp.where(mask, s.clk + 1, s.mv),
                       en_t=jnp.where(mask, s.clk + 1, s.en_t),
                       clk=s.clk + 1)
+
+
+def group_to_hand(bank, s, mask):
+    """Renvoi en main ; un monstre de l'Extra Deck retourne dans l'Extra Deck (verso)."""
+    ex = mask & ((bank.ctype[s.cid] & TYPE_EXTRA) != 0)
+    return group_send(group_send(s, mask & ~ex, Z_HAND, P_HAND), ex, Z_EXTRA, P_FD_DEF)
 
 
 def group_to_grave(s, mask):
@@ -756,7 +775,9 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= (f[F_ST] == 0) | ((s.st & f[F_ST]) != 0)
     lv = bank.level[s.cid]
     m &= (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI])
-    m &= (f[F_SPSUM] == 0) | ((s.fl_c & FL_NO_SS) == 0)
+    # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
+    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc))
+    m &= (f[F_FUS] == 0) | s.fz_c
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
     if targ:
         m &= ~untargetable(bank, s, h)
@@ -926,7 +947,98 @@ def refresh_b(bank, prev, s, frac=8):
                     lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
 
 
+SUBS = [[(q >> j) & 1 for j in range(FK)] for q in range(1 << FK)]  # sous-ensembles des emplacements de matériaux
+
+
+def fus_cands(bank, s, c):
+    """[FK, N] : cartes utilisables pour chaque matériau du monstre fusion c (main et terrain de son propriétaire)."""
+    p = s.owner[c]
+    mats = ((s.zone == Z_HAND) | (s.zone == Z_MZONE)) & (s.ctrl == p) & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
+    k = bank.fmn[s.cid[c]]
+    return jnp.stack([filter_mask(bank, s, bank.fmat[s.cid[c], j], p, c) & mats & (j < k) for j in range(FK)])
+
+
+def hall(cand, k, slots=None):
+    """[N] -> bool : les emplacements `slots` (masque [FK], défaut : les k premiers) ont des matériaux distincts
+    (théorème de Hall : tout sous-ensemble Q d'emplacements a au moins |Q| candidats)."""
+    sub = jnp.asarray(SUBS, bool)                                  # [2^FK, FK]
+    use = jnp.arange(FK) < k if slots is None else slots
+    inq = sub & use[None, :]
+    ok = ~(sub & ~use[None, :]).any(1)                             # Q ⊆ slots
+    cnt = (inq[:, :, None] & cand[None]).any(1).sum(-1)
+    return (~ok | (cnt >= inq.sum(1))).all()
+
+
+def fusion_ok(bank, s):
+    """[N] fz_c : monstres fusion de l'Extra Deck réalisables (matériaux distincts sur la main et le terrain, et une case
+    pour l'invocation : une case libre, ou un matériau sur le terrain qui en libérera une). O(EXK × 2^FK × N)."""
+    n = s.cid.shape[0]
+    want = (s.zone == Z_EXTRA) & (bank.fmn[s.cid] > 0)
+    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
+    live = jnp.arange(EXK) < want.sum()
+
+    def one(c, ok):
+        cand = fus_cands(bank, s, c)
+        k = bank.fmn[s.cid[c]]
+        field = s.zone == Z_MZONE
+        # pas de case libre : un des matériaux doit venir du terrain (GetLocationCountFromEx avec les matériaux)
+        with_field = jnp.stack([hall(cand.at[j].set(cand[j] & field), k) & (j < k) for j in range(FK)]).any()
+        return ok & hall(cand, k) & (ex_zones(s, s.owner[c]).any() | with_field)
+    oks = jax.vmap(one)(idx, live)
+    return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(oks, mode="drop"), want.sum() > EXK
+
+
+PERMS = [(0, 1, 2, 3), (0, 1, 3, 2), (0, 2, 1, 3), (0, 2, 3, 1), (0, 3, 1, 2), (0, 3, 2, 1), (1, 0, 2, 3), (1, 0, 3, 2), (1, 2, 0, 3), (1, 2, 3, 0), (1, 3, 0, 2), (1, 3, 2, 0), (2, 0, 1, 3), (2, 0, 3, 1), (2, 1, 0, 3), (2, 1, 3, 0), (2, 3, 0, 1), (2, 3, 1, 0), (3, 0, 1, 2), (3, 0, 2, 1), (3, 1, 0, 2), (3, 1, 2, 0), (3, 2, 0, 1), (3, 2, 1, 0)]
+
+
+def fus_picks(bank, s, f):
+    """[N] : matériaux qu'on peut encore choisir pour le monstre fusion f, les cartes ST_SEL étant déjà choisies : il
+    existe une affectation des matériaux choisis et du candidat à des emplacements distincts, et les emplacements
+    restants ont des matériaux distincts parmi les autres cartes (Hall). Toutes les permutations des FK emplacements
+    sont essayées (FK! = 24). O(FK! × 2^FK × N)."""
+    n = s.cid.shape[0]
+    k = bank.fmn[s.cid[f]]
+    cand = fus_cands(bank, s, f)                                   # [FK, N]
+    sel = (s.st & ST_SEL) != 0
+    t = sel.sum()
+    chosen = jnp.nonzero(sel, size=FK, fill_value=0)[0]            # cartes déjà choisies, dans l'ordre des slots
+    free = cand & ~sel[None, :]
+    sub = jnp.asarray(SUBS, bool)                                  # [Q, FK]
+    field = s.zone == Z_MZONE
+
+    def hallq(fr):  # [Q, N] : Hall pour Q avec les candidats fr, sans la carte c
+        unionm = (sub[:, :, None] & fr[None]).any(1)
+        return (unionm.sum(-1)[:, None] - unionm) >= sub.sum(1)[:, None]
+    hq = hallq(free)
+    hqf = [hallq(free.at[j].set(free[j] & field)) for j in range(FK)]  # l'emplacement j pris sur le terrain
+    # pas de case libre pour le monstre fusion : un matériau au moins doit venir du terrain
+    room = ex_zones(s, s.owner[f]).any() | (sel & field).any()
+    out = jnp.zeros(n, bool)
+    for pm in PERMS:
+        pm_ = jnp.asarray(pm)
+        pos = jnp.arange(FK)
+        ok_s = ((pos >= t) | cand[pm_, chosen]).all()              # les choisis vont aux premiers emplacements
+        slot_c = pm_[jnp.minimum(t, FK - 1)]
+        rest = jnp.zeros(FK, bool).at[pm_].set((pos > t) & (pm_ < k))
+        need_q = ~(sub & ~rest[None, :]).any(1)                    # Q ⊆ emplacements restants
+        ok_h = (~need_q[:, None] | hq).all(0)
+        ok_f = jnp.stack([rest[j] & (~need_q[:, None] | hqf[j]).all(0) for j in range(FK)]).any(0)
+        okc = ok_s & (t < k) & (slot_c < k) & cand[slot_c] & jnp.where(room | field, ok_h, ok_f)
+        out |= okc
+    return out & ~sel
+
+
+def ex_zones(s, p):
+    """[7] : cases où p peut invoquer un monstre de l'Extra Deck (MR5 sans Link : les 5 cases principales libres ; les
+    zones extra 5 et 6 si p n'en occupe aucune et que l'adversaire n'occupe pas la case symétrique)."""
+    me, op = zone_used(s, p, Z_MZONE), zone_used(s, 1 - p, Z_MZONE)
+    emz = ~me[5] & ~me[6]
+    return jnp.concatenate([~me[:5], jnp.stack([emz & ~op[6], emz & ~op[5]])])
+
+
 def refresh(bank, s):
+    fz, fover = fusion_ok(bank, s)
+    s = s._replace(fz_c=fz, ovf=s.ovf | jnp.where(fover, 4, 0).astype(I32))
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
@@ -1078,8 +1190,15 @@ def exec_one(bank, s):
     def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer), la main du propriétaire ou les bannies
         return adv(_switch(jnp.where(b == Z_HAND, 1, jnp.where(b == Z_REMOVED, 2, 0)),
                               [lambda s: group_to_grave(s, target(s)),
-                               lambda s: group_send(s, target(s), Z_HAND, P_HAND),
+                               lambda s: group_to_hand(bank, s, target(s)),
                                lambda s: group_send(s, target(s), Z_REMOVED, P_GRAVE)], s))
+
+    def fusmat(s):  # matériaux du monstre fusion du registre b, choisis un par un par p (D_SELECT), rangés dans a
+        f = jnp.argmax(s.reg[jnp.clip(b, 0, R - 1)])
+        go = s.reg[jnp.clip(b, 0, R - 1)].any()
+        return _cond(go, lambda s: s._replace(dec=_i(D_SELECT), dec_player=p, need=bank.fmn[s.cid[f]], picks=_i(0),
+                                                fsel=jnp.bool_(True)),
+                     lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
     def spsummon(s):
         return _cond(s.reg[ra].any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
@@ -1121,6 +1240,7 @@ def exec_one(bank, s):
     branches[OP_CHOOSE] = choose
     branches[OP_LOCK] = lock
     branches[OP_MODIFY] = modify
+    branches[OP_FUSMAT] = fusmat
     branches[OP_MOVE] = move_
     branches[OP_SPSUMMON] = spsummon
     branches[OP_DRAW] = draw_n
@@ -1207,15 +1327,21 @@ def legal(bank, s):
     # get_attack_target (select_target vrai par défaut) : au moins une cible possible, ou attaque directe
     atk_ok = ~op_mon.any() | (op_mon & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
     can_atk = my_mon & (s.pos == P_FU_ATK) & ((s.st & ST_ATTACKED) == 0) & ((s.fl_c & FL_NO_ATTACK) == 0) & atk_ok
-    eff_cand = s.reg[jnp.clip(current_ins(bank, s)[2], 0, R - 1)]
+    ins = current_ins(bank, s)
+    eff_cand = jnp.where(s.fsel, fus_picks(bank, s, jnp.argmax(s.reg[jnp.clip(ins[2], 0, R - 1)])),
+                         s.reg[jnp.clip(ins[2], 0, R - 1)])
 
+    # libérations : sans case principale libre, l'une d'elles doit libérer une case principale (pas une zone extra)
+    mainz = my_mon & (s.seq < N_MAIN_ZONES)
+    trib_ok = ((free_m > 0) | mainz | (mainz & ~unsel).any()
+               | ((s.need >= 2) & (mainz & unsel).any()))
     idle, bat, chn = s.dec == D_IDLE, s.dec == D_BATTLE, s.dec == D_CHAIN
     verbs = [
         idle & can_ns,
         idle & can_ns,
         idle & can_repos,
         bat & can_atk,
-        ((s.dec == D_TRIBUTE) & my_mon & unsel) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
+        ((s.dec == D_TRIBUTE) & my_mon & unsel & trib_ok) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
         | ((s.dec == D_DISCARD) & in_hand & unsel) | ((s.dec == D_SELECT) & eff_cand & unsel),
         idle & in_hand & (spell | trap) & (free_s > 0),
     ]
@@ -1232,7 +1358,10 @@ def legal(bank, s):
     sp = sp.at[A_TO_EP].set(idle | bat)
     mz = (s.zctx == ZC_SUMMON) | (s.zctx == ZC_SPSUM)
     used = jnp.where(mz, zone_used(s, p, Z_MZONE), zone_used(s, p, Z_SZONE))[:7]
-    sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & ~used & (jnp.arange(7) < N_MAIN_ZONES))
+    spc = jnp.argmax(s.reg[jnp.clip(ins[1], 0, R - 1)])             # carte invoquée spécialement (ZC_SPSUM)
+    fromex = (s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)
+    zok = jnp.where(fromex, ex_zones(s, p), ~used & (jnp.arange(7) < N_MAIN_ZONES))
+    sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises
     sp = sp.at[A_POS_ATK].set((s.dec == D_POS) & ((pos_ok & P_FU_ATK) != 0))
     sp = sp.at[A_POS_DEF].set((s.dec == D_POS) & ((pos_ok & P_FU_DEF) != 0))
@@ -1294,7 +1423,7 @@ def apply(bank, s, a):
                 sel = (s.st & ST_SEL) != 0
                 dst = jnp.clip(current_ins(bank, s)[1], 0, R - 1)
                 return s._replace(reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
-                                  dec=_i(D_RUN))
+                                  dec=_i(D_RUN), fsel=jnp.bool_(False))
             s = pick(s)
             return _cond(s.need == 0, done, lambda s: s, s)
 
@@ -1339,9 +1468,11 @@ def apply(bank, s, a):
     def position(s):
         c = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[1], 0, R - 1)])
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
+        fromex = s.zone[c] == Z_EXTRA  # invocation fusion : la carte est correctement invoquée (CompleteProcedure)
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
         s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.ch_p)
+        s = s._replace(proc=s.proc.at[c].set(s.proc[c] | fromex))
         return s._replace(st=s.st.at[c].set(ST_SUMMON_TURN), pc=s.pc + 1, dec=_i(D_RUN))
 
     def to_ep(s):
@@ -1372,7 +1503,7 @@ def forced(bank, s):
 
 def forced_m(s, m):
     k = m.sum()
-    sel = (s.dec == D_TRIBUTE) | (s.dec == D_DISCARD) | (s.dec == D_SELECT)
+    sel = (s.dec == D_TRIBUTE) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel)
     return jnp.where((k == 1) | (sel & (k > 0) & (k <= s.need)), jnp.argmax(m), -1).astype(I32)
 
 
@@ -1465,27 +1596,32 @@ def step_batch(bank, s, a, frac=0.0):
     s, m, f, _ = lax.while_loop(more, body, (s, m, a.astype(I32), _i(0)))
     return s, m, f
 
-def new_game(bank, deck0, deck1, key=None):
+def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     """deck0/deck1 : [D] index dans la banque, dans l'ordre d'ajout (dernier = dessus du deck).
+    extra0/extra1 : [X] Extra Deck (même taille pour les deux joueurs ; None : aucun), dans l'ordre d'ajout.
 
     key=None : ordre fixe, slots dans l'ordre des decks (pour coller à l'oracle en DUEL_PSEUDO_SHUFFLE).
     Avec une clé : decks mélangés et cartes réparties au hasard dans les slots, pour que ni l'ordre du deck
     ni le numéro de slot ne trahissent une carte cachée.
     """
     d = deck0.shape[0]
-    n = 2 * d
-    cid = jnp.concatenate([deck0, deck1]).astype(I32)
-    owner = jnp.repeat(jnp.arange(2, dtype=I32), d)
-    seq = jnp.tile(jnp.arange(d, dtype=I32), 2)
+    x = 0 if extra0 is None else extra0.shape[0]
+    nd = 2 * d
+    n = nd + 2 * x
+    cid = jnp.concatenate([deck0, deck1] + ([] if x == 0 else [extra0, extra1])).astype(I32)
+    owner = jnp.concatenate([jnp.repeat(jnp.arange(2, dtype=I32), d), jnp.repeat(jnp.arange(2, dtype=I32), x)])
+    seq = jnp.concatenate([jnp.tile(jnp.arange(d, dtype=I32), 2), jnp.tile(jnp.arange(x, dtype=I32), 2)])
+    zone0 = jnp.concatenate([jnp.full(nd, Z_DECK, I32), jnp.full(2 * x, Z_EXTRA, I32)])
     if key is not None:
         k1, k2 = jax.random.split(key)
-        order = jnp.lexsort((jax.random.uniform(k1, (n,)), owner))  # mélange à l'intérieur de chaque deck
-        seq = jnp.zeros(n, I32).at[order].set(jnp.arange(n, dtype=I32)) - owner * d
+        own = owner[:nd]
+        order = jnp.lexsort((jax.random.uniform(k1, (nd,)), own))  # mélange à l'intérieur de chaque deck
+        seq = seq.at[:nd].set(jnp.zeros(nd, I32).at[order].set(jnp.arange(nd, dtype=I32)) - own * d)
         perm = jax.random.permutation(k2, n)
-        cid, owner, seq = cid[perm], owner[perm], seq[perm]
+        cid, owner, seq, zone0 = cid[perm], owner[perm], seq[perm], zone0[perm]
     z = jnp.zeros(n, I32)
     f = jnp.bool_(False)
-    s = State(cid=cid, zone=jnp.full(n, Z_DECK, I32),
+    s = State(cid=cid, zone=zone0,
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0),
@@ -1495,11 +1631,13 @@ def new_game(bank, deck0, deck1, key=None):
               lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
-              pzone=jnp.full(n, Z_DECK, I32), tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
+              pzone=zone0, tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, opt_cid=jnp.zeros((2, KO), I32),
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
-              ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32))
+              ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
+              proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f)
+    s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):
             s = draw(s, p)

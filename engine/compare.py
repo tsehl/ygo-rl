@@ -12,7 +12,7 @@ les cartes du volet 3a (interdictions, protections) avec des cartes des autres v
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus]
 """
 import os
 import collections
@@ -80,6 +80,7 @@ def slot(s, con, loc, seq):
 def translate(dec, opt, s):
     """Option de l'oracle → suite d'actions JAX ; None si l'option est exclue."""
     kind = opt[0]
+    N = s.cid.shape[0]
     sp = lambda k: NV * N + k
     if kind in ("summon", "mset", "repos", "attack", "sset", "activate", "chain"):
         verb = dict(summon=V_SUMMON, mset=V_MSET, repos=V_REPOS, attack=V_ATTACK, sset=V_SSET, activate=V_ACT0,
@@ -147,7 +148,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D  # cartes du jalon 4 : seulement dans cont, dmg, ds, flag, neg
+    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A  # cartes des jalons 4-5 : seulement dans leurs modes
+    extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
         fast = list(cards.ST_TYPES)
@@ -177,6 +179,13 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                  for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
+    elif mode == "fus":
+        mats = [34460851, 44287299, 6368038, 28279543, 89631139]
+        decks = [[rng.choice(pool) for _ in range(20)] + [rng.choice(mats) for _ in range(12)] + [24094653] * 3
+                 + [83764718] * 2 + [rng.choice(base) for _ in range(3)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[45231177, 45231177, 66889139, 66889139, 23995346, 23995346] for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
@@ -204,8 +213,9 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             rng.shuffle(d)
     else:
         decks = [[rng.choice(pool) for _ in range(D)] for _ in range(2)]
-    duel = driver.Duel(db, decks[0], decks[1], seed=seed)
-    s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]))
+    duel = driver.Duel(db, decks[0], decks[1], seed=seed, extra0=extra[0], extra1=extra[1])
+    ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
+    s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
     ndec = 0
     try:
         while True:
@@ -271,7 +281,7 @@ if __name__ == "__main__":
     seed0 = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
     db = driver.CardDB()
-    bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS))  # une seule banque : pas de recompilation
+    bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS) + list(cards.FUSION))  # une seule banque
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     nok = 0
     for sd in range(seed0, seed0 + n):

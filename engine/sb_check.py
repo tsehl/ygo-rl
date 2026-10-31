@@ -11,11 +11,9 @@ B, D, C, T = 32, 40, 670, 150
 key = jax.random.PRNGKey(1)
 bank = cards.test_bank(key, C)
 CT = bank.code.shape[0]
-kd = jax.random.fold_in(key, 3)
-decks = jnp.where(jax.random.uniform(kd, (B, 2, D)) < 0.4,          # 40 % de cartes à effet
-                  jax.random.randint(jax.random.fold_in(kd, 1), (B, 2, D), C, CT),
-                  jax.random.randint(jax.random.fold_in(kd, 2), (B, 2, D), 0, C))
-s0 = jax.jit(jax.vmap(lambda d, k: core.new_game(bank, d[0], d[1], k)))(decks, jax.random.split(key, B))
+decks, extras = cards.test_decks(jax.random.fold_in(key, 3), bank, B, D, C, 0.4, 6)
+s0 = jax.jit(jax.vmap(lambda d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1])))(decks, extras,
+                                                                                       jax.random.split(key, B))
 legal = jax.jit(jax.vmap(lambda s: core.legal(bank, s)))
 step_v = jax.jit(jax.vmap(lambda s, a: core.step(bank, s, a)))
 step_b = jax.jit(lambda s, a: core.step_batch(bank, s, a, 0.0))

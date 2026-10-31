@@ -19,7 +19,8 @@ from core import I32, NV
 
 T = 64
 ST_PUBLIC = core.ST_SUMMON_TURN | core.ST_ATTACKED | core.ST_FORM_CHANGED | core.ST_SET_TURN | core.ST_LEAVE
-ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, core.Z_REMOVED: 4, core.Z_DECK: 5}
+ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, core.Z_REMOVED: 4, core.Z_DECK: 5,
+             core.Z_EXTRA: 6}
 
 
 class Obs(NamedTuple):
@@ -64,8 +65,9 @@ def observe(bank, s, p=None):
 
     # une carte que p peut choisir lui est montrée (recherche dans son deck), mais pas sa place dans le deck
     deck = s.zone == core.Z_DECK
-    shown = (mine & (s.zone == core.Z_HAND)) | field | public | acted
-    known = shown & ((mine & ((s.zone == core.Z_HAND) | field | deck)) | (field & faceup) | public)
+    own_ex = mine & (s.zone == core.Z_EXTRA)  # son propre Extra Deck est connu (verso pour l'adversaire)
+    shown = (mine & (s.zone == core.Z_HAND)) | field | public | acted | own_ex
+    known = shown & ((mine & ((s.zone == core.Z_HAND) | field | deck | own_ex)) | (field & faceup) | public)
 
     zrank = jnp.zeros(n, I32)
     for z, r in ZONE_RANK.items():

@@ -17,15 +17,12 @@ B, D, C, TT = 32, 40, 670, 300
 key = jax.random.PRNGKey(0)
 bank = cards.test_bank(key, C)
 CT = bank.code.shape[0]
-kd = jax.random.fold_in(key, 3)
-decks = jnp.where(jax.random.uniform(kd, (B, 2, D)) < 0.3,          # 30 % de cartes à effet
-                  jax.random.randint(jax.random.fold_in(kd, 1), (B, 2, D), C, CT),
-                  jax.random.randint(jax.random.fold_in(kd, 2), (B, 2, D), 0, C))
-N = 2 * D
+decks, extras = cards.test_decks(jax.random.fold_in(key, 3), bank, B, D, C, 0.3, 6)
+N = 2 * (D + 6)
 
 
-def rollout(d, k):
-    s = core.new_game(bank, d[0], d[1], jax.random.fold_in(k, 7))
+def rollout(d, x, k):
+    s = core.new_game(bank, d[0], d[1], jax.random.fold_in(k, 7), x[0], x[1])
 
     def body(s, kt):
         m = core.legal(bank, s)
@@ -36,7 +33,7 @@ def rollout(d, k):
     return jax.lax.scan(body, s, jax.random.split(k, TT))[1]
 
 
-hist = jax.jit(jax.vmap(rollout))(decks, jax.random.split(jax.random.fold_in(key, 4), B))
+hist = jax.jit(jax.vmap(rollout))(decks, extras, jax.random.split(jax.random.fold_in(key, 4), B))
 hist = jax.tree.map(np.asarray, hist)
 live = ~hist.done
 print("états vivants :", int(live.sum()))
@@ -70,7 +67,7 @@ def perturb(s, p):
     search = (int(s.dec_player) == p) & np.asarray(legal_j(core.State(*[jnp.asarray(x) for x in s]))[:core.NV * N]
                                                     .reshape(core.NV, N).any(0) & (s.zone == core.Z_DECK)).any()
     hidden = (((s.zone == core.Z_DECK) & ~(search & (s.ctrl == p)))
-              | ((s.zone == core.Z_HAND) & (s.ctrl != p))
+              | (((s.zone == core.Z_HAND) | (s.zone == core.Z_EXTRA)) & (s.ctrl != p))
               | (((s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)) & (s.ctrl != p) & ~faceup))
     h = np.where(hidden)[0]
     cid = s.cid.copy()
@@ -84,7 +81,8 @@ def perturb(s, p):
     inv = np.argsort(perm)
     sl = lambda x: np.where(x >= 0, inv[x], -1)
     s = s._replace(**{f: getattr(s, f)[perm] for f in ("cid", "zone", "seq", "ctrl", "owner", "pos", "st", "pzone", "tg", "tg_e",
-                                                  "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t", "fl_c", "ib_c")}, tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
+                                                  "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t", "fl_c", "ib_c",
+                                                  "proc", "fz_c")}, tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
                    pend=sl(s.pend), ch_src=sl(s.ch_src), atk=sl(s.atk), atk_tgt=sl(s.atk_tgt), lk_src=sl(s.lk_src),
                    reg=s.reg[:, perm], lk_reg=s.lk_reg[:, :, perm], mv=s.mv[perm], ev_g=s.ev_g[:, perm], tev=s.tev[:, perm])
     return core.State(*[jnp.asarray(x) for x in s]), len(h)

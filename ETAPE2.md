@@ -321,3 +321,25 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 - **`engine/sb_check.py`** (ajouté à `regress.sh`) : `step_batch` (frac = 0) donne les mêmes états et masques que `vmap(step)`, champ par champ, sur 32 parties × 150 décisions. `compare.py` ne passe que par `step`.
 - Résultats (CPU, B = 64, cartes d'avant le jalon 4) : 119 → 180 (sans les refresh de `ds_damage`) → 381 (recalcul des seules parties modifiées) → 482 (programmes de test compacts), comme le moteur `9e6349a`.
 - Résultats L4 (`engine_bench.py`, frac = 0,05, toutes les cartes) : **13 497 décisions/s à B = 1024, 12 801 à B = 4096**, contre 7 012 / 4 921 avant et 15 782 / 14 918 avant le jalon 4. Il reste environ 15 % de surcoût pour tout le jalon 4. Coût des deux mesures : 0,31 CU.
+
+**Jalon 5, volet a : Extra Deck et fusion (2026-10-31).** Ce que montre l'oracle pour Polymerization :
+1. choix du monstre fusion (msg 15) ;
+2. matériaux choisis un par un (msg 26) : seuls sont proposés ceux qui laissent la recette réalisable, et la sélection se termine d'elle-même quand elle est complète ;
+3. case (msg 18, 7 cases dont les zones de monstre extra 5 et 6, MR5 + DUEL_FSX_MMZONE) ;
+4. position (msg 19).
+
+- **Taille de partie** : `new_game(..., extra0, extra1)` avec X cartes d'Extra Deck par joueur, d'où N = 2 × (D + X). L'Extra Deck est une zone ordonnée (`compact`), verso. Sans Extra Deck (X = 0), rien ne change pour les anciens modes.
+- **Banque** :
+  - `fmat` [C, FK = 4, FW] : une recette, soit un filtre par matériau (main et terrain) ;
+  - `fmn` : nombre de matériaux ;
+  - `erl` : EnableReviveLimit.
+- **État** :
+  - `proc` (STATUS_PROC_COMPLETE) : mis à l'invocation depuis l'Extra Deck, effacé en main, dans le deck ou l'Extra Deck. Monster Reborn (F_SPSUM) refuse une carte à réanimation limitée qui n'a pas été correctement invoquée ;
+  - `fz_c` (cache de `refresh`) : les monstres fusion de l'Extra Deck dont la recette est réalisable. Test de Hall sur les 2^FK sous-ensembles d'emplacements, en O(EXK × 2^FK × N). Sans case libre pour le monstre fusion, un matériau doit venir du terrain (`GetLocationCountFromEx` avec les matériaux) : le test de Hall est refait en imposant un emplacement tenu par un monstre du terrain. Cas trouvé par l'oracle.
+- **OP_FUSMAT** (D_SELECT, `fsel`) : un matériau n'est proposé que s'il existe une affectation des matériaux déjà choisis et de ce candidat à des emplacements distincts (les FK! = 24 permutations), avec un test de Hall sur les emplacements restants (et la contrainte de terrain ci-dessus). Pas de choix joué d'office tant qu'il reste plus d'une option : l'oracle présente chaque choix.
+- **Cases** : un monstre invoqué depuis l'Extra Deck peut aller dans les 5 cases principales libres et dans les zones extra 5 / 6. La règle sans Link : aucune si le joueur en occupe déjà une ; sinon chacune, si l'adversaire n'occupe pas la case symétrique (`is_location_useable` : 11 − seq).
+- **Libérations** : sans case principale libre, l'une des libérations doit libérer une case principale. Un monstre en zone extra ne suffit pas (cas trouvé par l'oracle).
+- Un monstre de l'Extra Deck renvoyé en main retourne dans l'Extra Deck. L'observation montre son propre Extra Deck ; celui de l'adversaire est caché.
+- Cartes : Polymerization ; Flame Swordsman, Gaia the Dragon Champion (deux noms), Blue-Eyes Ultimate Dragon (trois matériaux identiques). Mode `fus` de `compare.py` : 20 normaux, 12 matériaux, 3 Polymerization, 2 Monster Reborn, 3 autres ; Extra Deck de 6 (2 de chaque).
+- `sb_check`, `vmap_check` et `obs_check` jouent maintenant avec des Extra Decks (6 monstres fusion, 15 % de matériaux dans les decks).
+- Comparaison avec l'oracle : fus 100/100 (graines 8000-8099), toute la non-régression inchangée ; `obs_check`, `vmap_check` et `sb_check` passent (avec Extra Decks).

@@ -17,18 +17,19 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   OP_COND_ATK, OP_ATTACKER, DMG_STEP, DMG_CAL, DMG_STAT, MC_BASE_ATK, MC_SET_ATK, MC_SET_DEF,
                   MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA, MC_DISABLE, OP_COND_PHASE,
-                  PH_MAIN1, PH_MAIN2)
+                  PH_MAIN1, PH_MAIN2, OP_FUSMAT, FK, TYPE_FUSION)
 
 ME, OPP = 0, 1
 
 
 def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
-      st=0, lv=(-BIG, BIG), spsum=0, nodis=0):
+      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0):
     """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
-    statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés."""
+    statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés ;
+    fus : monstre fusion invocable maintenant avec la main et le terrain (recette réalisable)."""
     code = (code, code) if isinstance(code, int) else code
     return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
-            spsum, nodis)
+            spsum, nodis, fus)
 
 
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
@@ -60,6 +61,7 @@ def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False):
     elle-même, effacé si ses effets sont annulés)."""
     return (OP_MODIFY, r, code | (mode << 5) | (dur << 9) | (int(rd) << 13), val)
 def COND_PHASE(ph): return (OP_COND_PHASE, ph, 0, 0)      # pendant l'une des phases ph (masque PH_*)
+def FUSMAT(dst, src): return (OP_FUSMAT, dst, src, 0)     # matériaux du monstre fusion de src, choisis un par un
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
 def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
 
@@ -227,6 +229,10 @@ CARDS = {
                      target=[FILTER(1, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_EFFECT, nodis=1), tgt=True), CHOOSE(2, 1, 1)],
                      resolve=[FILTER(3, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_MONSTER, nodis=1), within=2),
                               MODIFY(3, MC_DISABLE)])],
+    # jalon 5, volet a : fusion
+    24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
+                   resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2),
+                            SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
     42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
                cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
 }
@@ -267,7 +273,16 @@ def assemble(codes, cards=CARDS):
             assert len(fl) <= NF, code
             for j, f in enumerate(fl):
                 filt[i, e, j] = f
-    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg)
+    fmat = np.zeros((c, FK, len(F())), np.int32)
+    fmn = np.zeros(c, np.int32)
+    erl = np.zeros(c, np.int32)
+    for i, code in enumerate(codes):
+        for j, f in enumerate(FUSION.get(code, ())):
+            fmat[i, j] = f
+        fmn[i] = len(FUSION.get(code, ()))
+        erl[i] = int(code in FUSION)
+    return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
+                fmat=fmat, fmn=fmn, erl=erl)
 
 
 def setcodes(sc):
@@ -297,6 +312,21 @@ J4C = set(J4C_SPELLS) | set(J4C_MONSTERS)
 J4D_SPELLS = {82732705: TYPE_TRAP | TYPE_CONTINUOUS, 25789292: TYPE_SPELL | TYPE_QUICKPLAY}
 J4D_MONSTERS = [97268402]
 J4D = set(J4D_SPELLS) | set(J4D_MONSTERS)
+# jalon 5 : recettes de fusion (un filtre par matériau, pris sur la main et le terrain) ; EnableReviveLimit pour tous
+def MAT(**kw):  # filtre d'un matériau de fusion : main et terrain du joueur
+    return F(me=Z_HAND | Z_MZONE, **kw)
+
+
+FUSION = {
+    45231177: [MAT(code=34460851), MAT(code=44287299)],      # Flame Swordsman : Flame Manipulator + Masaki
+    66889139: [MAT(code=6368038), MAT(code=28279543)],       # Gaia the Dragon Champion : Gaia the Fierce Knight + Curse of Dragon
+    23995346: [MAT(code=89631139)] * 3,                      # Blue-Eyes Ultimate Dragon : 3 Blue-Eyes White Dragon
+}
+FUSION_STATS = {45231177: (1800, 1600, 5), 66889139: (2600, 2100, 7), 23995346: (4500, 3800, 12)}
+MATERIAL_STATS = {34460851: (900, 1000, 3), 44287299: (1100, 1100, 4), 6368038: (2300, 2100, 7), 28279543: (2000, 1500, 5),
+                  89631139: (3000, 2500, 8)}  # matériaux (monstres normaux) : banque de test
+J5A_SPELLS = {24094653: TYPE_SPELL}
+J5A = set(J5A_SPELLS)  # cartes du volet 5a (mode fus de compare.py)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -315,17 +345,38 @@ def test_bank(key, c):
     """c monstres normaux aléatoires (codes 0..c-1) + les cartes de CARDS (indices c..)."""
     import jax
     import core
-    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS)
-    codes = list(range(c)) + st + list(EFFECT_MONSTERS)
+    st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS) + list(J5A_SPELLS)
+    codes = list(range(c)) + st + list(EFFECT_MONSTERS) + list(MATERIAL_STATS) + list(FUSION)
+    xs = list(MATERIAL_STATS.values()) + [FUSION_STATS[k] for k in FUSION]
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
-                          [v[0] for v in EFFECT_MONSTERS.values()]])
+                          [v[0] for v in EFFECT_MONSTERS.values()], [v[0] for v in xs]])
     df = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 1), (c,), 0, 30)) * 100,
-                         np.zeros(len(st), int), [v[1] for v in EFFECT_MONSTERS.values()]])
+                         np.zeros(len(st), int), [v[1] for v in EFFECT_MONSTERS.values()], [v[1] for v in xs]])
     lv = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 2), (c,), 1, 13)),
-                         np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()]])
+                         np.zeros(len(st), int), [v[2] for v in EFFECT_MONSTERS.values()], [v[2] for v in xs]])
     ctype = [core.TYPE_MONSTER | core.TYPE_NORMAL] * c + [core.TYPE_SPELL] * len(SPELL_CODES) \
-        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS)
+        + list(ST_TYPES.values()) + list(J4_SPELLS.values()) + list(J4B_SPELLS.values()) + list(J4C_SPELLS.values()) + list(J4D_SPELLS.values()) + list(J5A_SPELLS.values()) + [core.TYPE_MONSTER | 0x20] * len(EFFECT_MONSTERS) \
+        + [core.TYPE_MONSTER | core.TYPE_NORMAL] * len(MATERIAL_STATS) + [core.TYPE_MONSTER | core.TYPE_FUSION] * len(FUSION)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
-                           np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS]])
+                           np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS],
+                           np.zeros(len(xs), int)])
     return core.make_bank(np.array(codes), atk, df, lv, ctype=ctype, attr=attr, **assemble(codes))
+
+
+def test_decks(key, bank, b, d, c, eff, x):
+    """Decks de test [b, 2, d] (eff : part de cartes à effet, 15 % de matériaux de fusion, le reste des monstres normaux
+    aléatoires) et Extra Decks [b, 2, x] de monstres fusion, pour la banque de test_bank(key, c)."""
+    import jax
+    import jax.numpy as jnp
+    code = np.asarray(bank.code)
+    effs = np.array([i for i in range(c, len(code)) if int(code[i]) not in MATERIAL_STATS and int(code[i]) not in FUSION])
+    mats = np.array([i for i in range(len(code)) if int(code[i]) in MATERIAL_STATS])
+    fus = np.array([i for i in range(len(code)) if int(code[i]) in FUSION])
+    k = jax.random.split(key, 6)
+    u = jax.random.uniform(k[0], (b, 2, d))
+    decks = jnp.where(u < eff, jnp.asarray(effs)[jax.random.randint(k[1], (b, 2, d), 0, len(effs))],
+                      jnp.where(u < eff + 0.15, jnp.asarray(mats)[jax.random.randint(k[2], (b, 2, d), 0, len(mats))],
+                                jax.random.randint(k[3], (b, 2, d), 0, c)))
+    extra = jnp.asarray(fus)[jax.random.randint(k[4], (b, 2, x), 0, len(fus))]
+    return decks, extra
