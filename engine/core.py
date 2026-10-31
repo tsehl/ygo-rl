@@ -1112,39 +1112,45 @@ def lv_hist(bank, s, mask):
     """Histogrammes [LVMAX + 1] des niveaux des cartes mask : main, terrain."""
     lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
     field = s.zone == Z_MZONE
-    hh = jnp.zeros(LVMAX + 1, I32).at[lv].add((mask & ~field).astype(I32))
-    hf = jnp.zeros(LVMAX + 1, I32).at[lv].add((mask & field).astype(I32))
+    oh = lv[None, :] == jnp.arange(LVMAX + 1)[:, None]  # one-hot (un scatter est lent sous vmap)
+    hh = (oh & (mask & ~field)[None, :]).sum(1, dtype=I32)
+    hf = (oh & (mask & field)[None, :]).sum(1, dtype=I32)
     return hh, hf
 
 
-def sum_ok(hh, hf, req, u, mu, has_f, mode):
+def sum_ok(hh, hf, req, u, mu, has_f):
     """Les cartes déjà prises (somme u, plus petit niveau mu, une du terrain si has_f) se complètent-elles par des
-    cartes des histogrammes hh (main) / hf (terrain) en un ensemble valide ? Greater : somme >= req et
-    somme - plus petit < req ; Equal : somme == req. Avec has_f < 0 : un matériau doit venir du terrain (pas de case
-    libre). Sommes atteignables suivies par masques de bits (A : sans carte du terrain, B : avec), niveaux de LVMAX à
-    1 : avec les niveaux >= v, le plus petit ajouté est >= v. O(LVMAX × SMAX), indépendant de N."""
+    cartes des histogrammes hh (main) / hf (terrain) en un ensemble valide ? Renvoie (Greater, Equal). Greater :
+    somme >= req et somme - plus petit < req ; Equal : somme == req. Avec has_f < 0 : un matériau doit venir du terrain
+    (pas de case libre). Sommes atteignables suivies par masques de bits (A : sans carte du terrain, B : avec), niveaux
+    de LVMAX à 1 : avec les niveaux >= v, le plus petit ajouté est >= v. Les effectifs sont pris par paquets 1, 2, 4...
+    (découpage binaire). O(LVMAX × log SMAX), indépendant de N."""
     need_f = has_f < 0
     hasf0 = has_f > 0
     full = (1 << SMAX) - 1
     A, B = jnp.int32(1), jnp.int32(0)
     need = req - u
+    fok = ~need_f | hasf0
     # T vide : ce qui est pris suffit déjà
-    ok = jnp.where(mode == RIT_GREATER, (need <= 0) & (u - mu < req), need == 0) & (~need_f | hasf0)
+    g = (need <= 0) & (u - mu < req) & fok
+    e = (need == 0) & fok
+    sig = jnp.arange(SMAX)
     for L in range(LVMAX, 0, -1):
-        for k in range(1, SMAX // L + 1):  # cartes de la main de niveau L
-            take = k <= hh[L]
-            A = jnp.where(take, A | ((A << L) & full), A)
-            B = jnp.where(take, B | ((B << L) & full), B)
-        for k in range(1, SMAX // L + 1):  # cartes du terrain de niveau L : passent en B
-            take = k <= hf[L]
-            nb = ((A | B) << L) & full
-            A, B = A, jnp.where(take, B | nb, B)
-        reach = jnp.where(need_f & ~hasf0, B, A | B)
+        cmax = SMAX // L
+        nb = cmax.bit_length()  # paquets 1, 2, ..., 2^(nb-1) : couvrent 0..cmax
+        ch, cf = jnp.minimum(hh[L], cmax), jnp.minimum(hf[L], cmax)
+        for i in range(nb):
+            k = jnp.clip(ch - (2 ** i - 1), 0, 2 ** i)  # paquet i de la main (0 : rien)
+            A = A | ((A << (k * L)) & full)
+            B = B | ((B << (k * L)) & full)
+        for i in range(nb):
+            k = jnp.clip(cf - (2 ** i - 1), 0, 2 ** i)  # paquet i du terrain : passe en B
+            B = jnp.where(k > 0, B | (((A | B) << (k * L)) & full), B)
+        reach = (jnp.where(need_f & ~hasf0, B, A | B) >> sig) & 1
         win = jnp.minimum(mu, L)                                   # le plus petit de l'ensemble est min(mu, >= L)
-        sig = jnp.arange(SMAX)
-        inwin = jnp.where(mode == RIT_GREATER, (sig >= need) & (sig < need + win), sig == need) & (need > 0)
-        ok |= ((reach >> sig) & 1 & inwin).any().astype(bool)
-    return ok
+        g |= ((reach != 0) & (sig >= need) & (sig < need + win) & (need > 0)).any()
+        e |= ((reach != 0) & (sig == need) & (need > 0)).any()
+    return g, e
 
 
 def ritual_ok(bank, s):
@@ -1159,9 +1165,8 @@ def ritual_ok(bank, s):
         room = ex_zones(s, p)[:N_MAIN_ZONES].any()
 
         def cls(lv):  # le monstre rituel (niveau lv, en main) ne se libère pas lui-même
-            h2 = hh.at[lv].add(-1)
-            g = sum_ok(h2, hf, lv, 0, LVMAX + 1, jnp.where(room, 0, -1), RIT_GREATER)
-            e = sum_ok(h2, hf, lv, 0, LVMAX + 1, jnp.where(room, 0, -1), RIT_EQUAL)
+            h2 = hh - (jnp.arange(LVMAX + 1) == lv)
+            g, e = sum_ok(h2, hf, lv, 0, LVMAX + 1, jnp.where(room, 0, -1))
             return g.astype(I32) | (e.astype(I32) << 1)
         res = jax.vmap(cls)(jnp.arange(LVMAX + 1))
         mine = (s.zone == Z_HAND) & (s.ctrl == p) & ((bank.ctype[s.cid] & RIT_MON) == RIT_MON)
@@ -1185,10 +1190,12 @@ def rit_picks(bank, s, r, mode):
     req = bank.level[s.cid[r]]
 
     def cls(l, isf):
-        h2 = jnp.where(isf, hh, hh.at[l].add(-1))
-        f2 = jnp.where(isf, hf.at[l].add(-1), hf)
+        one = jnp.arange(LVMAX + 1) == l
+        h2 = hh - (one & ~isf)
+        f2 = hf - (one & isf)
         hasf = f0 | isf
-        return sum_ok(h2, f2, req, u0 + l, jnp.minimum(mu0, l), jnp.where(room | hasf, 1, -1), mode)
+        g, e = sum_ok(h2, f2, req, u0 + l, jnp.minimum(mu0, l), jnp.where(room | hasf, 1, -1))
+        return jnp.where(mode == RIT_GREATER, g, e)
     tab = jax.vmap(lambda isf: jax.vmap(lambda l: cls(l, isf))(jnp.arange(LVMAX + 1)))(jnp.array([False, True]))
     return mats & ~sel & tab[field.astype(I32), lv]
 
