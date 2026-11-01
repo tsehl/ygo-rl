@@ -532,3 +532,14 @@ Résultats :
   - Débit CPU : 307-328 décisions/s à B = 64, contre 334 pour le code d'avant le volet f remesuré dans la même session (−2 à −8 %). Compilation de `step_batch` : 40 s (36 avant).
   - Toute la non-régression reste verte ; `vmap_check` et `sb_check` passent. `obs_check` échouait au départ (« fuite » de `cid` / `level`) : le test traitait comme caché tout l'Extra Deck adverse, alors que les pendules recto y sont publics. Le test est corrigé et passe.
 - Le jalon 5 (Extra Deck) est terminé. Suite : mesure du débit GPU (L4) de tout l'Extra Deck.
+
+**Débit GPU de tout l'Extra Deck (L4, 2026-11-01).** `bench/engine_bench.py`, frac = 0,05, 40 appels, moteur `4908453` (jalon 5 complet : fusion, rituel, synchro, Xyz, Link, Knightmare, pendule) :
+
+| | B = 1024 | B = 4096 | compilation (B = 1024) |
+|---|---|---|---|
+| sans Extra Deck (N = 80) | 9 220 décisions/s (12 651 après le volet a) | — | 213 s |
+| Extra Deck de 15 (`--extra 15`, N = 110 ; fusion, synchro, Xyz, Link tirés au hasard) | 5 759 (10 699 après le volet a) | 3 062 | 144 s (190 s à B = 4096) |
+
+- Baisse depuis le volet a : −27 % sans Extra Deck, −46 % avec. Et avec Extra Deck, le débit **baisse** quand B augmente (1 283 ms/appel à B = 4096, soit ×7,5 pour ×4 parties), alors qu'il montait encore après le volet a. Un calcul grossit plus vite que le lot : à chercher (le compilateur signale des réductions [B, 2, 128, 5], c'est-à-dire l'énumération des 128 sous-ensembles de cases du Link, pour les deux joueurs).
+- Sur CPU, la baisse était peu visible (420 → 328 décisions/s à B = 64, sans Extra Deck) : le CPU ne montre pas ce coût, il faut profiler les volets b à f un par un.
+- Coût de la mesure : 0,63 CU (une session L4, ~20 min dont ~8 de compilation et l'envoi du code par morceaux de 24 Ko : un `colab exec -f` de 93 Ko ne passe pas).
