@@ -42,4 +42,4 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
   - une session Colab sans progrès depuis ~3 min doit être arrêtée tout de suite ;
   - toujours arrêter les sessions à la fin.
 - Le travail mécanique (comptages, scripts d'extraction, grep) peut être confié à des agents Haiku avec une spécification précise.
-- Pousser sur la branche de travail après chaque commit (Thomas veut voir le code).
+- Travailler sur `main` et pousser après chaque commit (Thomas veut voir le code).
