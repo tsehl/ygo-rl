@@ -382,7 +382,10 @@ def _card_list(r, n, tribute=False):
         else:
             code = r.take("I")
             con, loc, seq, pos = r.loc_info()
-            out.append((code, con, LOCS.get(loc, loc), seq))
+            if loc & K["LOCATION_OVERLAY"]:  # matériau Xyz : seq = case du Xyz, pos = rang du matériau
+                out.append((code, con, "overlay", (seq, pos)))
+            else:
+                out.append((code, con, LOCS.get(loc, loc), seq))
     return out
 
 

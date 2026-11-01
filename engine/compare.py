@@ -75,6 +75,13 @@ def jax_snapshot(bank, s):
 
 
 def slot(s, con, loc, seq):
+    if loc == "overlay":  # matériau Xyz : (case du Xyz, rang)
+        par = slot(s, con, "mzone", seq[0])
+        m = (np.asarray(s.zone) == core.Z_OVERLAY) & (np.asarray(s.ov_par) == par) & (np.asarray(s.seq) == seq[1])
+        idx = np.where(m)[0]
+        if len(idx) != 1:
+            raise Mismatch(f"pas de matériau unique pour {con},{seq}")
+        return int(idx[0])
     m = (np.asarray(s.zone) == ZNAME[loc]) & (np.asarray(s.ctrl) == con) & (np.asarray(s.seq) == seq)
     idx = np.where(m)[0]
     if len(idx) != 1:
@@ -161,7 +168,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C  # cartes des jalons 4-5 : seulement dans leurs modes
+    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D  # cartes des jalons 4-5 : seulement dans leurs modes
     extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
@@ -215,16 +222,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         extra = [[97204936, 97204936, 45815891, 45815891, 16527176, 16527176] for _ in range(2)]
     elif mode == "xyz":
         l4 = [c for c in pool if (db.rows[c][6] & 0xFF) == 4]
-        decks = [[rng.choice(l4) for _ in range(24)] + [rng.choice(pool) for _ in range(6)] + [83764718] * 2
-                 + [53129443] * 2 + [rng.choice(base) for _ in range(6)] for _ in range(2)]
+        l3 = [c for c in pool if (db.rows[c][6] & 0xFF) == 3]
+        decks = [[rng.choice(l4) for _ in range(16)] + [rng.choice(l3) for _ in range(10)] + [rng.choice(pool) for _ in range(4)]
+                 + [83764718] * 2 + [53129443] * 2 + [rng.choice(base) for _ in range(6)] for _ in range(2)]
         for d in decks:
             rng.shuffle(d)
-        extra = [[71594310, 71594310, 71594310, 9053187, 9053187, 9053187] for _ in range(2)]
+        extra = [[71594310, 71594310, 9053187, 9053187, 69610924, 69610924] for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
                       | {c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O, core.K_IGNITION)
-                    and c not in cards.J5B})
+                    and c not in cards.J5B | cards.J5D})
         decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(j4d) for _ in range(10)]
                  + [rng.choice(mons) for _ in range(12)] + [rng.choice(base) for _ in range(4)] for _ in range(2)]
         for d in decks:

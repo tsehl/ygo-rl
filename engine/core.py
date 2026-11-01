@@ -116,8 +116,10 @@ MC_NONE, MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK, MC_DEF, MC_SET_DEF, MC_F
 # IMMUNE_EFFECT (effets de piège), CANNOT_SPECIAL_SUMMON (cartes visées, toutes zones), INDESTRUCTABLE_BATTLE (valeur :
 # ATK minimale du monstre adverse, 0 = toujours), CANNOT_ACTIVATE (cartes piège, joueurs M_VAL : 1 = moi, 2 = adversaire)
 MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP, MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP = range(9, 16)
+MC_NO_DIRECT = 17  # EFFECT_CANNOT_DIRECT_ATTACK
 MC_DISABLE = 16  # EFFECT_DISABLE : effets de la carte annulés (continus inactifs, pas d'activation, maillons annulés)
 FL_NO_ATTACK, FL_NO_BTARGET, FL_NO_ETARGET, FL_IMM_TRAP, FL_NO_SS, FL_DISABLED = 1, 2, 4, 8, 16, 32  # bits de fl_c
+FL_NO_DIRECT = 128  # pas d'attaque directe
 FL_ONF = 64  # recto sur le terrain, effets actifs (STATUS_EFFECT_ENABLED) au calcul précédent
 PF_NO_TRAP = 1  # bits de pf_c
 # card::add_effect : un modificateur temporaire de ce code efface ceux de ces codes déjà sur la carte (masque de bits)
@@ -129,7 +131,7 @@ for _set, _fin, _upd, _base in ((MC_SET_ATK, MC_FINAL_ATK, MC_ATK, MC_BASE_ATK),
 # valeur d'un modificateur temporaire (OP_MODIFY) : constante, moitié de l'ATK de base / de l'ATK courante de la cible
 MV_CONST, MV_HALF_BASE_ATK, MV_HALF_ATK = range(3)
 # durée : fin du tour (RESETS_STANDARD_PHASE_END), fin du calcul des dommages (RESET_PHASE + PHASE_DAMAGE_CAL)
-TD_TURN, TD_DCAL = range(2)
+TD_TURN, TD_DCAL, TD_PERM = range(3)  # TD_PERM : tant que la carte reste sur le terrain (RESETS_STANDARD)
 # champs de emod : code, la carte elle-même (SINGLE_RANGE) ou le filtre 0 (FIELD), valeur, × nombre de cartes du
 # filtre 1, condition : joueur du tour (1 : moi, 2 : adversaire), phases (masque PH_*, 0 : toutes), nombre de cartes
 # du filtre 1 dans [M_CMIN, M_CMAX] (si M_CNT ; M_PER et M_CNT s'excluent)
@@ -459,6 +461,22 @@ def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None):
                       clk=s.clk + 1)
 
 
+def detach_fix(s):
+    """Après un détachement (un matériau a quitté Z_OVERLAY) : ov_par effacé, rangs des matériaux restants resserrés
+    (card::xyz_remove). O(8N)."""
+    n = s.cid.shape[0]
+    gone = (s.zone != Z_OVERLAY) & (s.ov_par >= 0)
+
+    def fix(s):
+        ov = s.zone == Z_OVERLAY
+        par = jnp.clip(s.ov_par, 0, n - 1)
+        key = par * 8 + jnp.clip(s.seq, 0, 7)
+        cnt = jnp.zeros(8 * n, I32).at[key].add(ov.astype(I32))
+        cs = jnp.cumsum(cnt) - cnt
+        return s._replace(ov_par=jnp.where(gone, -1, s.ov_par), seq=jnp.where(ov, cs[key] - cs[par * 8], s.seq))
+    return _cond(gone.any(), fix, lambda s: s, s)
+
+
 def drop_overlays(s):
     """Les matériaux des Xyz qui ont quitté le terrain (ailleurs que sur le terrain, déplacés après l'attachement : pas
     un Xyz de l'Extra Deck en cours d'invocation) vont au cimetière de leur propriétaire, d'un coup (ygopro : send_to
@@ -627,11 +645,22 @@ def trig_point(bank, s):
     return _cond(tg.any(), lambda s: trig_next(bank, s), lambda s: s, s)
 
 
+def keep_perm(s):
+    """Fin de tour pour la table des modificateurs : seuls restent les TD_PERM encore sur une carte du terrain qui n'a
+    pas bougé depuis, regroupés en tête (l'ordre d'application vient de tm_t, pas du rang)."""
+    alive = (s.tm_m & (s.mv[None, :] <= s.tm_t[:, None]) & (s.zone == Z_MZONE)[None, :]).any(1)
+    keep = (s.tm_dur == TD_PERM) & (jnp.arange(TM) < s.tm_n) & alive
+    o = jnp.argsort(jnp.where(keep, 0, 1) * TM + jnp.arange(TM))
+    k = keep[o]
+    return s._replace(tm_code=jnp.where(k, s.tm_code[o], 0), tm_m=s.tm_m[o] & k[:, None], tm_v=s.tm_v[o],
+                      tm_t=s.tm_t[o], tm_dur=s.tm_dur[o], tm_rd=s.tm_rd[o], tm_n=keep.sum().astype(I32))
+
+
 def start_turn(s):
     tp = jnp.where(s.turn == 0, 0, 1 - s.tp).astype(I32)
     s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
-                   tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid),
-                   tm_code=jnp.zeros_like(s.tm_code), tm_m=jnp.zeros_like(s.tm_m), tm_n=_i(0))
+                   tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
+    s = keep_perm(s)
     # pioche (sauf au premier tour) puis fenêtre ; ensuite fenêtre de phase
     return _cond(s.turn > 1, lambda s: open_quick(rule_draw(s, tp), tp, R_DP, chained=False),
                         lambda s: open_phase(s, WP_DRAW, PH_DRAW), s)
@@ -825,6 +854,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     n = s.cid.shape[0]
     loc = jnp.where(s.ctrl == p, f[F_LOC_ME], f[F_LOC_OP])
     m = (s.zone & loc) != 0
+    m &= (s.zone != Z_OVERLAY) | (s.ov_par == h)  # matériaux Xyz : seulement ceux de la carte source
     if bdes:
         m &= (s.st & ST_BDES) == 0  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
     m &= (f[F_POS] == 0) | ((s.pos & f[F_POS]) != 0)
@@ -917,7 +947,7 @@ def stats(bank, s):
     craw &= ~(ctrap[:, None] & imm[None, :] & onf[None, :])
     fl = (jnp.where(dis, FL_DISABLED, 0) | jnp.where(onf & faceup, FL_ONF, 0)).astype(I32)
     for c, b in ((MC_NO_ATTACK, FL_NO_ATTACK), (MC_NO_BTARGET, FL_NO_BTARGET), (MC_NO_ETARGET, FL_NO_ETARGET),
-                 (MC_IMM_TRAP, FL_IMM_TRAP)):
+                 (MC_IMM_TRAP, FL_IMM_TRAP), (MC_NO_DIRECT, FL_NO_DIRECT)):
         fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0), b, 0)
     fl |= jnp.where((craw & (ccode == MC_NO_SS)[:, None]).any(0), FL_NO_SS, 0)  # carte visée, où qu'elle soit
     ib = jnp.where(ctgt & (ccode == MC_INDES_BATTLE)[:, None], cval[:, None], BIG).min(0)
@@ -1371,6 +1401,7 @@ def refresh(bank, s, fus=True):
     """Recalcule les caches (stats, drapeaux, fusions réalisables). fus=False : sans fz_c (refresh_b le fait au
     niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
     s = drop_overlays(s)
+    s = detach_fix(s)
     if fus:
         s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
         s = lax.cond(has_ritual(bank, s), lambda s: refresh_rit(bank, s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
@@ -1673,7 +1704,10 @@ def legal(bank, s, fus=True):
     unsel = (s.st & ST_SEL) == 0
     # get_attack_target (select_target vrai par défaut) : au moins une cible possible, ou attaque directe
     atk_ok = ~op_mon.any() | (op_mon & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
-    can_atk = my_mon & (s.pos == P_FU_ATK) & ((s.st & ST_ATTACKED) == 0) & ((s.fl_c & FL_NO_ATTACK) == 0) & atk_ok
+    # sans attaque directe (FL_NO_DIRECT) : il faut un monstre adverse qui peut être attaqué
+    tgt_ok = (op_mon & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
+    can_atk = (my_mon & (s.pos == P_FU_ATK) & ((s.st & ST_ATTACKED) == 0) & ((s.fl_c & FL_NO_ATTACK) == 0)
+               & jnp.where((s.fl_c & FL_NO_DIRECT) != 0, tgt_ok, atk_ok))
     ins = current_ins(bank, s)
     eff_cand = s.reg[jnp.clip(ins[2], 0, R - 1)]
     if fus:

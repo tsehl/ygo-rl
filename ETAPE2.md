@@ -407,4 +407,15 @@ Chaque jalon : moteur JAX vérifié contre l'oracle avant de passer au suivant. 
 - Mémoire : le retrait des matériaux est fait par `drop_overlays`, appelé par `refresh` (une seule copie dans le graphe). La première version le faisait dans `group_send`, recopié à chaque appel : un `compare.py` est monté à 3,7 Go et a été tué par l'OOM killer. Un `compare.py` atteint environ 3,6 Go dès le volet 5c ; `regress.sh` lance donc 3 processus par défaut au lieu de 4.
 - `drop_overlays` ne touche à rien (horloge `clk`, `ev_p`) quand aucun matériau n'est à retirer : `refresh` n'est pas appelé le même nombre de fois dans `step` et dans `step_batch`, et `sb_check` l'a détecté.
 - Comparaison avec l'oracle : xyz 100/100 (graines 11000-11099 ; sur les 10 premières : 92 invocations Xyz, 150 choix de matériaux, 42 Dark Hole). Toute la non-régression reste verte. Après la correction de `drop_overlays` : xyz et syn 100/100, et `sb_check`, `vmap_check` et `obs_check` passent.
-- Reste du volet 5d : détacher un matériau (coût), avec Number 17: Leviathan Dragon (+500 ATK permanent, pas d'attaque directe sans matériau). L'oracle présente ce choix en msg 15, localisation 132 (OVERLAY | MZONE), seq = case du Xyz.
+
+**Jalon 5, volet d (fin) : détacher un matériau (2026-10-31).** Number 17: Leviathan Dragon (rang 3) a deux effets :
+- une ignition, une fois par tour pour cette carte (`Cost.DetachFromSelf(1)`) : +500 ATK tant qu'elle reste sur le terrain (RESETS_STANDARD_DISABLE) ;
+- un effet continu : pas d'attaque directe si elle n'a plus de matériau.
+
+L'oracle présente le choix du matériau à détacher en msg 15. Sa localisation est 132 (OVERLAY | MZONE), avec seq = case du Xyz et position = rang du matériau ; `driver.py` le rend comme (« overlay », (case, rang)).
+- **Pas de nouvelle brique pour détacher** : dans un filtre, la zone Z_OVERLAY ne voit que les matériaux de la carte source (`filter_mask`), d'où `FILTER(0, F(me=Z_OVERLAY)), CHOOSE(1, 0, 1), MOVE(1)`. La même règle sert aux conditions de compte des effets continus (`cont(..., cnt=(F(me=Z_OVERLAY), 0, 0))` : aucun matériau).
+- `detach_fix` (dans `refresh`) : un matériau sorti de Z_OVERLAY perd `ov_par`, et les rangs des matériaux restants sont resserrés (`card::xyz_remove`). O(8N), seulement s'il y a eu un détachement.
+- **Modificateurs permanents** : durée TD_PERM. À la fin du tour, `keep_perm` garde dans la table ceux qui portent encore sur une carte restée sur le terrain, et efface les autres. L'ordre d'application vient toujours de `tm_t`.
+- **MC_NO_DIRECT / FL_NO_DIRECT** (EFFECT_CANNOT_DIRECT_ATTACK) : un monstre sans attaque directe ne peut attaquer que s'il existe un monstre adverse qui peut être attaqué.
+- `ignition(..., opt=OPT_CARD)` (SetCountLimit(1) sans code). Leviathan est exclu des decks des anciens modes (J5D).
+- Mode `xyz` : 16 normaux de niveau 4, 10 de niveau 3, 4 autres ; Extra Deck : 2 Gem-Knight Pearl, 2 Gagagigo, 2 Leviathan. xyz 100/100 (graines 11000-11099 ; sur les 10 premières : 87 invocations Xyz, 38 activations de Leviathan). Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent.

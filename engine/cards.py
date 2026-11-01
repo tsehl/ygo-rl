@@ -20,7 +20,7 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA, MC_DISABLE, OP_COND_PHASE,
                   PH_MAIN1, PH_MAIN2, OP_FUSMAT, FK, TYPE_FUSION, OP_RITMAT, RIT_GREATER, RIT_EQUAL,
-                  TYPE_RITUAL)
+                  TYPE_RITUAL, Z_OVERLAY, MC_NO_DIRECT, TD_PERM, OPT_CARD)
 
 ME, OPP = 0, 1
 
@@ -88,8 +88,9 @@ def act(cost=(), target=(), resolve=(), on=0, dmg=0):
     return (K_ACTIVATE, on, 0, 0, cost, target, resolve, dict(dmg=dmg))
 
 
-def ignition(cost=(), target=(), resolve=()):
-    return (K_IGNITION, 0, 0, 0, cost, target, resolve)
+def ignition(cost=(), target=(), resolve=(), opt=0):
+    """Effet d'ignition ; opt : OPT_* (OPT_CARD : SetCountLimit(1) sans code, par carte)."""
+    return (K_IGNITION, 0, int(opt), 0, cost, target, resolve)
 
 
 def trigger(on, cost=(), target=(), resolve=(), optional=False, opt=False):
@@ -245,6 +246,11 @@ CARDS = {
     24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
                    resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2),
                             SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
+    # jalon 5, volet d : Xyz ; détacher = choisir parmi ses propres matériaux (filtre Z_OVERLAY) et les envoyer au cimetière
+    69610924: [ignition(opt=OPT_CARD, cost=[FILTER(0, F(me=Z_OVERLAY)), CHOOSE(1, 0, 1), MOVE(1)],      # Leviathan Dragon
+                        resolve=[SELF(0), FILTER(1, F(me=Z_MZONE, pos=P_FACEUP), within=0),
+                                 MODIFY(1, MC_ATK, 500, dur=TD_PERM, rd=True)]),
+               cont(Z_MZONE, MC_NO_DIRECT, 0, cnt=(F(me=Z_OVERLAY), 0, 0))],              # sans matériau : pas d'attaque directe
     # jalon 5, volet b : rituel (sorts rituels : choisir le monstre en main, libérations, invocation correcte)
     55761792: ritual_spell(5405694, RIT_GREATER),                                                          # Black Luster Ritual
     8198712: ritual_spell(72426662, RIT_EQUAL),                                                            # End of the World
@@ -379,8 +385,10 @@ TUNER_STATS = {74093656: (1600, 200, 3, EARTH), 487395: (400, 1200, 1, WATER), 2
 J5C = set(TUNER_STATS)  # Syntoniseurs normaux (mode syn de compare.py)
 # volet 5d : Xyz (matériaux : ct monstres de niveau = rang, filtre sur MAT_FIELDS) ; EnableReviveLimit
 XYZ = {71594310: (MAT(), 2),                                  # Gem-Knight Pearl (rang 4)
-       9053187: (MAT(), 3)}                                   # Gagagigo the Risen (rang 4)
-XYZ_STATS = {71594310: (2600, 1900, 4, EARTH), 9053187: (2950, 2800, 4, WATER)}
+       9053187: (MAT(), 3),                                   # Gagagigo the Risen (rang 4)
+       69610924: (MAT(), 2)}                                  # Number 17: Leviathan Dragon (rang 3)
+XYZ_STATS = {71594310: (2600, 1900, 4, EARTH), 9053187: (2950, 2800, 4, WATER), 69610924: (2000, 0, 3, WATER)}
+J5D = {69610924}  # Xyz à effet (cartes de CARDS)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
