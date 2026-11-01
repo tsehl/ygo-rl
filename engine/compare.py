@@ -121,8 +121,8 @@ def translate(dec, opt, s):
         return [V_SELECT * N + slot(s, c[1], c[2], c[3])]
     if kind in ("cancel", "unpick"):
         return None
-    if kind == "finish":
-        return []
+    if kind == "finish":  # sélection des matériaux Link terminée (ailleurs : jouée d'office, voir filtered)
+        return [sp(core.A_PASS)] if int(s.psel) == core.PS_LINK else []
     if kind == "pass":
         return [sp(core.A_PASS)]
     raise Mismatch(f"option non gérée {opt}")
@@ -132,9 +132,12 @@ def N_(s):
     return s.cid.shape[0]
 
 
-def filtered(dec):
-    """Indices des options retenues (sans annuler / retirer ; « terminer » seul dès qu'il est possible)."""
+def filtered(dec, s=None):
+    """Indices des options retenues (sans annuler / retirer ; « terminer » seul dès qu'il est possible, sauf pendant
+    le choix des matériaux Link, où « terminer » et ajouter un matériau sont deux choix du joueur)."""
     idx = [i for i, o in enumerate(dec.options) if o[0] not in ("cancel", "unpick")]
+    if s is not None and int(s.psel) == core.PS_LINK:
+        return idx
     if any(dec.options[i][0] == "finish" for i in idx):
         idx = [i for i in idx if dec.options[i][0] == "finish"]
     return idx
@@ -153,6 +156,41 @@ def resync_hand(s, so, players):
             free.remove(j)
             seq[j] = k
     return s._replace(seq=jnp.asarray(seq))
+
+
+def link_cover(bank, s, o):
+    """Couverture du mode lnk : cases désignées par les flèches (les siennes, celles de l'adversaire), Link compté pour
+    son lien, choix « terminer »."""
+    lk = lambda i: (int(bank.ctype[int(s.cid[i])]) & core.TYPE_LINK) != 0
+    if int(s.psel) == core.PS_LINK:
+        sel = np.where((np.asarray(s.st) & core.ST_SEL) != 0)[0]
+        if o[0] == "finish":
+            COVER["lnk: terminer"] += 1
+            if len(sel) < int(bank.level[int(s.cid[int(s.pend)])]):
+                COVER["lnk: terminer, un Link compté pour son lien"] += 1
+        if o[0] == "pick" and (int(bank.ctype[bank_index(bank, o[1][0])]) & core.TYPE_LINK):
+            COVER["lnk: Link choisi comme matériau"] += 1
+
+
+def bank_index(bank, code):
+    return int(np.where(np.asarray(bank.code) == code)[0][0])
+
+
+def link_arrivals(bank, before, s):
+    """Couverture du mode lnk : monstres Link arrivés de l'Extra Deck depuis l'état before, et la case qu'ils ont prise
+    (zone extra, case principale désignée par une flèche à soi / de l'adversaire)."""
+    lk = (np.asarray(bank.ctype)[np.asarray(s.cid)] & core.TYPE_LINK) != 0
+    COVER["lnk: Link réanimé"] += int((lk & (np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(before.zone) == core.Z_GRAVE)).sum())
+    new = lk & (np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(before.zone) == core.Z_EXTRA)
+    for c in np.where(new)[0]:
+        q, p = int(s.seq[c]), int(s.ctrl[c])
+        if q >= 5:
+            COVER["lnk: invoqué en zone extra"] += 1
+            continue
+        arw = np.asarray(core.link_arrows(bank, s, p))[:, q]
+        mine = np.asarray(s.ctrl) == p
+        COVER["lnk: invoqué en case principale, flèche à soi"] += bool(arw[mine].any())
+        COVER["lnk: invoqué en case principale, flèche adverse"] += bool(arw[~mine].any())
 
 
 BANK_CODE = None
@@ -228,6 +266,15 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         for d in decks:
             rng.shuffle(d)
         extra = [[71594310, 71594310, 9053187, 9053187, 69610924, 69610924] for _ in range(2)]
+    elif mode == "lnk":
+        low = [c for c in pool if (db.rows[c][6] & 0xFF) <= 4]
+        l4 = [c for c in low if (db.rows[c][6] & 0xFF) == 4]
+        decks = [[rng.choice(low) for _ in range(20)] + [rng.choice(l4) for _ in range(8)] + [83764718] * 2
+                 + [53129443] * 2 + [rng.choice(base) for _ in range(8)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[77637979, 77637979, 67598234, 67598234, 41248270, 41248270, 5402805, 5402805, 71594310, 71594310]
+                 for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
@@ -266,10 +313,10 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     try:
         while True:
             dec = duel.next_decision()
-            while dec is not None and len(filtered(dec)) == 1:
+            while dec is not None and len(filtered(dec, s)) == 1:
                 if verbose and dec.msg != K["MSG_SELECT_CHAIN"]:
-                    print("   auto", dec.msg, dec.options[filtered(dec)[0]])
-                duel.respond(dec, filtered(dec)[0])
+                    print("   auto", dec.msg, dec.options[filtered(dec, s)[0]])
+                duel.respond(dec, filtered(dec, s)[0])
                 dec = duel.next_decision()
             if dec is None:
                 if not bool(s.done) or int(s.winner) != duel.winner:
@@ -290,7 +337,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             if diff:
                 raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff)
                                + f" | jax légales {np.where(np.asarray(legal(bank, s)))[0].tolist()}")
-            idx = filtered(dec)
+            idx = filtered(dec, s)
             seqs = {i: translate(dec, dec.options[i], s) for i in idx}
             m = np.asarray(legal(bank, s))
             want = {a for q in seqs.values() if q for a in (q if dec.options[0][0] == "cards" else q[:1])}
@@ -305,18 +352,36 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                                                and dec.options[i][1] in cards.J4B_SPELLS)]
                 if keep and rng.random() < 0.9:
                     pick = keep
+            if mode == "lnk":
+                # lnk : invocations par procédure plus fréquentes, et un Link gardé sur le terrain plus souvent (pour
+                # que le suivant se place selon ses flèches)
+                sps = [i for i in idx if dec.options[i][0] == "spsummon"]
+                sus = [i for i in idx if dec.options[i][0] in ("summon", "mset")]
+                if sps and rng.random() < 0.5:
+                    pick = sps
+                elif sus and rng.random() < 0.6:
+                    pick = sus
+                if int(s.psel) == core.PS_LINK and rng.random() < 0.6:
+                    keep = [i for i in idx if not (dec.options[i][0] == "pick" and int(
+                        bank.ctype[bank_index(bank, dec.options[i][1][0])]) & core.TYPE_LINK)]
+                    pick = keep or pick
             i = rng.choice(pick)
             o = dec.options[i]
-            COVER[(o[0], db.names.get(o[1], o[1]), o[3]) if o[0] in ("activate", "sset", "chain") else (dec.msg, o[0])] += 1
+            if mode == "lnk":
+                link_cover(bank, s, o)
+            COVER[(o[0], db.names.get(o[1], o[1]), o[3]) if o[0] in ("activate", "sset", "chain", "spsummon") else (dec.msg, o[0])] += 1
             if verbose:
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
             duel.respond(dec, i)
+            before = s
             for a in seqs[i]:
                 if dec.msg == K["MSG_SELECT_SUM"] and (int(s.rsel) == 0 or int(s.st[a % N_(s)]) & core.ST_SEL):
                     continue  # sélection par somme : cartes déjà choisies d'office (forced_m), ou sélection terminée
                 if not bool(legal(bank, s)[a]):
                     raise Mismatch(f"action {a} illégale côté JAX en cours de sélection {dec.options[i]}")
                 s = step(bank, s, a)
+            if mode == "lnk":
+                link_arrivals(bank, before, s)
             ndec += 1
     except Mismatch as e:
         return dict(ok=False, decisions=ndec, turn=duel.turn, err=str(e))
@@ -330,7 +395,7 @@ if __name__ == "__main__":
     mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
     db = driver.CardDB()
     bank, cmap = make_bank(db, db.normal_monsters() + list(cards.CARDS) + list(cards.FUSION) + list(cards.RITUAL)
-                         + list(cards.SYNCHRO) + list(cards.TUNER_STATS) + list(cards.XYZ))  # une seule banque
+                         + list(cards.SYNCHRO) + list(cards.TUNER_STATS) + list(cards.XYZ) + list(cards.LINK))  # une seule banque
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     nok = 0
     for sd in range(seed0, seed0 + n):

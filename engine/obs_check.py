@@ -82,7 +82,7 @@ def perturb(s, p):
     sl = lambda x: np.where(x >= 0, inv[x], -1)
     s = s._replace(**{f: getattr(s, f)[perm] for f in ("cid", "zone", "seq", "ctrl", "owner", "pos", "st", "pzone", "tg", "tg_e",
                                                   "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t", "fl_c", "ib_c",
-                                                  "proc", "fz_c", "rz_c", "sz_c", "xz_c", "uid")},
+                                                  "proc", "fz_c", "rz_c", "sz_c", "xz_c", "lz_c", "uid")},
                    ov_par=sl(s.ov_par)[perm], tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
                    pend=sl(s.pend), ch_src=sl(s.ch_src), atk=sl(s.atk), atk_tgt=sl(s.atk_tgt), lk_src=sl(s.lk_src),
                    reg=s.reg[:, perm], lk_reg=s.lk_reg[:, :, perm], mv=s.mv[perm], ev_g=s.ev_g[:, perm], tev=s.tev[:, perm])
