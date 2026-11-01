@@ -17,8 +17,17 @@ from dataclasses import dataclass, field
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.path.join(HERE, "ygopro-core/bin/release", "libocgcore.dylib" if sys.platform == "darwin" else "libocgcore.so")
 DATA = os.path.join(HERE, "../data")
-SCRIPTS = [os.path.join(DATA, "CardScripts"), os.path.join(DATA, "CardScripts/official")]
+SCRIPTS = [os.path.join(DATA, "CardScripts"), os.path.join(DATA, "CardScripts/official"), os.path.join(HERE, "test_scripts")]
 CDB = os.path.join(DATA, "BabelCDB/cards.cdb")
+# Cartes fictives, pour tester contre l'oracle une règle qu'aucune vraie carte simple ne met en jeu (scripts dans
+# test_scripts/ ; la règle reste celle d'ygopro-core et des procédures Lua). Jamais dans l'entraînement.
+# code : ((alias, setcode, type, atk, def ou flèches, level, race, attribute), nom)
+TEST_CARDS = {
+    # Extra Link (volet 5e) : Link sans effet, 2 monstres, Cyberse LIGHT
+    990000001: ((0, 0, 0x4000001, 1500, 0x140, 2, 0x1000000, 0x10), "Test Link TL-TR"),  # haut-gauche, haut-droite
+    990000002: ((0, 0, 0x4000001, 1400, 0x0A0, 2, 0x1000000, 0x10), "Test Link T-R"),    # haut, droite
+    990000003: ((0, 0, 0x4000001, 1400, 0x088, 2, 0x1000000, 0x10), "Test Link L-T"),    # gauche, haut
+}
 
 
 def _constants():
@@ -99,6 +108,9 @@ class CardDB:
         for r in con.execute("select id, alias, setcode, type, atk, def, level, race, attribute from datas"):
             self.rows[r[0]] = r
         self.names = dict(con.execute("select id, name from texts"))
+        for code, (row, name) in TEST_CARDS.items():
+            assert code not in self.rows
+            self.rows[code], self.names[code] = (code,) + row, name
 
     def fill(self, code, out):
         r = self.rows.get(code)

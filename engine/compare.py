@@ -186,11 +186,31 @@ def link_arrivals(bank, before, s):
         q, p = int(s.seq[c]), int(s.ctrl[c])
         if q >= 5:
             COVER["lnk: invoqué en zone extra"] += 1
+            other = (np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(s.ctrl) == p) & (np.asarray(s.seq) == 11 - q)
+            COVER["lnk: Extra Link (l'autre zone extra est à soi)"] += bool(other.any())
             continue
         arw = np.asarray(core.link_arrows(bank, s, p))[:, q]
         mine = np.asarray(s.ctrl) == p
         COVER["lnk: invoqué en case principale, flèche à soi"] += bool(arw[mine].any())
         COVER["lnk: invoqué en case principale, flèche adverse"] += bool(arw[~mine].any())
+
+
+EXTRA_LINK = jax.jit(lambda bank, s, p: core.extra_link(bank, s, p, jnp.zeros((1, 7), bool)))
+
+
+def xlink_cover(bank, s):
+    """Couverture du mode xlk : états où le joueur à la décision a une seule zone extra et l'autre libre ; où une
+    chaîne de co-liens la relie à une case qui désigne l'autre zone extra (l'Extra Link n'attend plus qu'un Link de la
+    bonne flèche)."""
+    p = int(s.dec_player)
+    me = (np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(s.ctrl) == p)
+    sq = np.asarray(s.seq)
+    if bool((me & (sq == 5)).any()) != bool((me & (sq == 6)).any()):
+        COVER["xlk: une seule zone extra à soi"] += 1
+        e, x = EXTRA_LINK(bank, s, p)
+        COVER["xlk: chaîne de co-liens vers l'autre zone extra"] += bool(int(x[0]) != 0)
+        return (int(e[0]), int(x[0])) if int(x[0]) != 0 else None
+    return None
 
 
 BANK_CODE = None
@@ -275,6 +295,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             rng.shuffle(d)
         extra = [[77637979, 77637979, 67598234, 67598234, 41248270, 41248270, 5402805, 5402805, 71594310, 71594310]
                  for _ in range(2)]
+    elif mode == "xlk":
+        # Extra Link : decks du mode lnk ; Extra Deck : les trois Link fictifs (driver.TEST_CARDS) et des Link dont les
+        # flèches du bas désignent les cases 0-4 depuis une zone extra
+        low = [c for c in pool if (db.rows[c][6] & 0xFF) <= 4]
+        l4 = [c for c in low if (db.rows[c][6] & 0xFF) == 4]
+        decks = [[rng.choice(low) for _ in range(22)] + [rng.choice(l4) for _ in range(8)] + [83764718] * 4
+                 + [rng.choice(base) for _ in range(6)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[990000001] * 3 + [990000002] * 2 + [990000003] * 2 + [41248270] * 2 + [77637979] * 3
+                 + [67598234] * 2 for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
@@ -338,6 +369,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff)
                                + f" | jax légales {np.where(np.asarray(legal(bank, s)))[0].tolist()}")
             idx = filtered(dec, s)
+            ready = mode == "xlk" and xlink_cover(bank, s)
             seqs = {i: translate(dec, dec.options[i], s) for i in idx}
             m = np.asarray(legal(bank, s))
             want = {a for q in seqs.values() if q for a in (q if dec.options[0][0] == "cards" else q[:1])}
@@ -352,7 +384,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                                                and dec.options[i][1] in cards.J4B_SPELLS)]
                 if keep and rng.random() < 0.9:
                     pick = keep
-            if mode == "lnk":
+            if mode in ("lnk", "xlk"):
                 # lnk : invocations par procédure plus fréquentes, et un Link gardé sur le terrain plus souvent (pour
                 # que le suivant se place selon ses flèches)
                 sps = [i for i in idx if dec.options[i][0] == "spsummon"]
@@ -361,13 +393,49 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                     pick = sps
                 elif sus and rng.random() < 0.6:
                     pick = sus
-                if int(s.psel) == core.PS_LINK and rng.random() < 0.6:
+                if int(s.psel) == core.PS_LINK and rng.random() < (0.85 if mode == "xlk" else 0.6):
                     keep = [i for i in idx if not (dec.options[i][0] == "pick" and int(
                         bank.ctype[bank_index(bank, dec.options[i][1][0])]) & core.TYPE_LINK)]
                     pick = keep or pick
+            if ready:
+                # xlk : chaîne de co-liens prête : invoquer par procédure, et prendre l'autre zone extra
+                e, x = ready
+                sps = [i for i in idx if dec.options[i][0] == "spsummon" and int(core.arrows_at(
+                    bank.lmark[bank_index(bank, dec.options[i][1])], jnp.int32(e))) & x]
+                emz = [i for i in idx if dec.options[i][0] == "place" and dec.options[i][2] == "mzone"
+                       and dec.options[i][3] >= 5]
+                if sps:
+                    COVER["xlk: chaîne prête, un Link de la bonne flèche invocable"] += 1
+                COVER["xlk: chaîne prête par une carte adverse"] += bool(x & 0xF80)
+                # matériaux hors chaîne : monstres recto non-Link du joueur (sinon la sélection défait la chaîne)
+                ct = np.asarray(bank.ctype)[np.asarray(s.cid)]
+                nl = int(((np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(s.ctrl) == int(s.dec_player))
+                          & ((np.asarray(s.pos) & core.P_FACEUP) != 0) & ((ct & core.TYPE_LINK) == 0)).sum())
+                more = [i for i in idx if dec.options[i][0] in ("summon", "repos")
+                        or (dec.options[i][0] == "activate" and dec.options[i][1] == 83764718)]
+                nolk = [i for i in idx if dec.options[i][0] == "pick" and not (int(
+                    bank.ctype[bank_index(bank, dec.options[i][1][0])]) & core.TYPE_LINK)]
+                if sps and nl >= 2 and rng.random() < 0.9:
+                    pick = sps
+                elif more and nl < 2 and rng.random() < 0.9:
+                    pick = more
+                elif nl < 2 and rng.random() < 0.9 and [i for i in idx if dec.options[i][0] not in ("spsummon", "attack")]:
+                    pick = [i for i in idx if dec.options[i][0] not in ("spsummon", "attack")]  # garder la chaîne
+                elif nolk:
+                    pick = nolk
+                elif emz and rng.random() < 0.9:
+                    pick = emz
+            elif mode == "xlk" and dec.options[idx[0]][0] == "place" and int(s.dec) == core.D_ZONE:
+                # xlk : la case 2 (désignée par les deux zones extra) gardée pour les Link, qui y vont de préférence
+                z2 = [i for i in pick if dec.options[i][2] == "mzone" and dec.options[i][3] == 2]
+                no2 = [i for i in pick if i not in z2]
+                if int(s.zctx) == core.ZC_SUMMON and no2 and rng.random() < 0.9:
+                    pick = no2
+                elif int(s.zctx) != core.ZC_SUMMON and z2 and rng.random() < 0.8:
+                    pick = z2
             i = rng.choice(pick)
             o = dec.options[i]
-            if mode == "lnk":
+            if mode in ("lnk", "xlk"):
                 link_cover(bank, s, o)
             COVER[(o[0], db.names.get(o[1], o[1]), o[3]) if o[0] in ("activate", "sset", "chain", "spsummon") else (dec.msg, o[0])] += 1
             if verbose:
@@ -380,7 +448,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 if not bool(legal(bank, s)[a]):
                     raise Mismatch(f"action {a} illégale côté JAX en cours de sélection {dec.options[i]}")
                 s = step(bank, s, a)
-            if mode == "lnk":
+            if mode in ("lnk", "xlk"):
                 link_arrivals(bank, before, s)
             ndec += 1
     except Mismatch as e:

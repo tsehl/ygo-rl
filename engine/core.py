@@ -1437,11 +1437,75 @@ def link_arrows(bank, s, p):
     return on[:, None] & jnp.where((s.ctrl == p)[:, None], own, opp)
 
 
-def link_zones(bank, s, p):
-    """[7] : cases où p peut invoquer un monstre Link (get_rule_zone_fromex) : cases principales libres désignées par
-    une flèche, et les zones extra (règle de ex_zones)."""
+def link_zones(bank, s, p, c):
+    """[7] : cases où p peut invoquer le monstre Link c (get_rule_zone_fromex) : cases principales libres désignées par
+    une flèche, les zones extra (règle de ex_zones), et l'autre zone extra par Extra Link."""
     ez = ex_zones(s, p)
-    return jnp.concatenate([ez[:N_MAIN_ZONES] & link_arrows(bank, s, p).any(0), ez[N_MAIN_ZONES:]])
+    e, x = extra_link(bank, s, p, jnp.zeros((1, 7), bool))
+    ok = (arrows_at(bank.lmark[s.cid[c]], e[0]) & x[0]) != 0
+    return jnp.concatenate([ez[:N_MAIN_ZONES] & link_arrows(bank, s, p).any(0),
+                            ez[N_MAIN_ZONES:] | (ok & (jnp.arange(5, 7) == e[0]))])
+
+
+def arrows_at(mk, q):
+    """Cases désignées par un monstre Link de flèches mk en case q (0-4 principales, 5-6 zones extra), vues de son
+    contrôleur : masque de 12 bits (0-4 ses cases principales, 5-6 ses zones extra, 7-11 cases principales adverses).
+    card::get_linked_zone sans les zones magie/piège."""
+    h = lambda b: (mk & b) != 0
+    bit = lambda i: jnp.left_shift(jnp.int32(1), jnp.clip(i, 0, 11))
+    main, ex = q < 5, q >= 5
+    e2 = 2 * (q - 5)
+    return (jnp.where(main & (q > 0) & h(LM_L), bit(q - 1), 0) | jnp.where(main & (q < 4) & h(LM_R), bit(q + 1), 0)
+            | jnp.where(((q == 0) & h(LM_TR)) | ((q == 1) & h(LM_T)) | ((q == 2) & h(LM_TL)), 1 << 5, 0)
+            | jnp.where(((q == 2) & h(LM_TR)) | ((q == 3) & h(LM_T)) | ((q == 4) & h(LM_TL)), 1 << 6, 0)
+            | jnp.where(ex & h(LM_BL), bit(e2), 0) | jnp.where(ex & h(LM_B), bit(e2 + 1), 0)
+            | jnp.where(ex & h(LM_BR), bit(e2 + 2), 0) | jnp.where(ex & h(LM_TL), bit(11 - e2), 0)
+            | jnp.where(ex & h(LM_T), bit(10 - e2), 0) | jnp.where(ex & h(LM_TR), bit(9 - e2), 0)).astype(I32)
+
+
+def _swap12(m):
+    """Masque de 12 cases vu de l'adversaire : cases principales échangées, zones extra 5 et 6 échangées."""
+    return ((m & 0x1F) << 7) | ((m >> 7) & 0x1F) | (((m >> 5) & 1) << 6) | (((m >> 6) & 1) << 5)
+
+
+def extra_link(bank, s, p, sub):
+    """Extra Link (field::get_spsummonable_count_fromex_rule4, check_extra_link, card::is_extra_link_state), pour
+    chaque sous-ensemble sub [S, 7] de cases de p dont les monstres partent (matériaux). Si p occupe une seule zone
+    extra o et que l'autre zone e est libre (ni lui ni l'adversaire), un monstre Link posé en e y est permis quand sa
+    composante de co-liens contient o. Sans cette carte, la composante de o est fixe ; la carte la rejoint par un
+    voisin co-lié. Rend (e [S] : 5 ou 6, X [S] : masque des cases de la composante de o qui désignent e ; 0 si la
+    règle ne s'applique pas) ; la carte c est permise en e si arrows_at(lmark[c], e) & X ≠ 0. Cases de 12 bits vues
+    de p (voir arrows_at). O(N + S × 12 × 11)."""
+    on = (s.zone == Z_MZONE) & ((bank.ctype[s.cid] & TYPE_LINK) != 0) & ((s.pos & P_FACEUP) != 0)
+    mine = s.ctrl == p
+    q = s.seq
+    m = arrows_at(bank.lmark[s.cid], q)
+    m = jnp.where(mine, m, _swap12(m))
+    cell = jnp.where(mine, q, jnp.where(q < 5, q + 7, 11 - q))
+    cell = jnp.where(on, cell, 12)
+    pt = jnp.zeros(12, I32).at[cell].add(m, mode="drop")                 # [12] cases désignées par chaque case
+    lk = jnp.zeros(12, bool).at[cell].set(True, mode="drop")             # cases tenues par un Link recto
+    j = jnp.arange(12)
+    mut = (((pt[:, None] >> j[None, :]) & 1) != 0) & (((pt[None, :] >> j[:, None]) & 1) != 0)
+    M = jnp.where(mut, 1 << j[None, :], 0).sum(1).astype(I32)          # [12] voisins co-liés
+    me, op = zone_used(s, p, Z_MZONE)[:7], zone_used(s, 1 - p, Z_MZONE)[:7]
+    left = me[None, :] & ~sub                                             # [S, 7]
+    l5, l6 = left[:, 5], left[:, 6]
+    pre = (l5 & ~l6 & ~op[5]) | (l6 & ~l5 & ~op[6])                      # zone extra symétrique de l'adversaire libre
+    o = jnp.where(l5, 5, 6)
+    e = 11 - o
+    lkb = jnp.where(lk, 1 << j, 0).sum().astype(I32)
+    subb = jnp.where(sub, 1 << jnp.arange(7), 0).sum(1).astype(I32)
+    alive = lkb & ~subb                                                   # [S]
+    reach0 = (1 << o) & alive
+
+    def grow(_, r):
+        for a in range(12):
+            r = r | jnp.where(((r >> a) & 1) != 0, M[a], 0)
+        return r & alive
+    reach = lax.fori_loop(0, 11, grow, reach0)
+    back = jnp.where(((pt[None, :] >> e[:, None]) & 1) != 0, 1 << j[None, :], 0).sum(1).astype(I32)  # [S] désignent e
+    return e.astype(I32), jnp.where(pre, reach & back & alive, 0).astype(I32)
 
 
 def link_table(bank, s, p):
@@ -1449,7 +1513,7 @@ def link_table(bank, s, p):
     [7, N] ; nombre de cartes [128] ; sommes possibles [128] (masque de bits : chaque monstre compte 1, un Link de lien
     L > 1 compte 1 ou L, Link.GetLinkCount) ; contient un Link [128] ; sous-ensemble de monstres recto, et une case
     reste pour le monstre Link une fois ces matériaux partis (GetLocationCountFromEx avec les matériaux : ni leurs cases
-    ni leurs flèches) [128]. O(7 N + 128 × 7 × 5)."""
+    ni leurs flèches) [128] ; Extra Link par sous-ensemble (extra_link). O(7 N + 128 × 7 × 5 + 128 × 12 × 11)."""
     ct = bank.ctype[s.cid]
     mine = (s.zone == Z_MZONE) & (s.ctrl == p)
     oh = mine[None, :] & (s.seq[None, :] == jnp.arange(7)[:, None])      # [7, N]
@@ -1472,16 +1536,18 @@ def link_table(bank, s, p):
         m = jnp.where(sub[:, z], ((m << 1) | alt) & 0xFFFF, m)
     hasl = (sub & islk[None, :]).any(1)
     base = ~(sub & ~ok[None, :]).any(1)
-    return oh, sub.sum(1), m, hasl, zok & base
+    ee, ex = extra_link(bank, s, p, sub)
+    return oh, sub.sum(1), m, hasl, zok & base, ee, jnp.where(base, ex, 0)
 
 
 def link_valid(bank, s, c, tab):
     """[128] : ensembles de matériaux valides pour le monstre Link c (Link.CheckGoal) : filtre, nombre de matériaux,
     somme égale au lien, un Link parmi eux si demandé, une case pour c."""
-    oh, cnt, m, hasl, zok = tab
+    oh, cnt, m, hasl, zok, ee, ex = tab
     k = s.cid[c]
     mm = (oh & mat_mask(bank, s, bank.lmat[k])[None, :]).any(1)          # [7]
     sub = jnp.asarray(SUB7)
+    zok = zok | ((arrows_at(bank.lmark[k], ee) & ex) != 0)               # Extra Link
     return (zok & ~(sub & ~mm[None, :]).any(1) & (cnt >= bank.lmin[k]) & (cnt <= bank.lmax[k])
             & (((m >> jnp.clip(bank.level[k], 0, 15)) & 1) != 0) & ((bank.lneed[k] == 0) | hasl))
 
@@ -1883,7 +1949,7 @@ def legal(bank, s, fus=True):
     fromex = ((s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)) | (s.zctx == ZC_PROC)
     pc = jnp.where(s.zctx == ZC_PROC, jnp.maximum(s.pend, 0), spc)    # carte invoquée (procédure ou effet)
     is_lk = (ct[pc] & TYPE_LINK) != 0
-    exz = lax.cond(is_lk & (s.dec == D_ZONE), lambda s: link_zones(bank, s, p), lambda s: ex_zones(s, p), s)
+    exz = lax.cond(is_lk & (s.dec == D_ZONE), lambda s: link_zones(bank, s, p, pc), lambda s: ex_zones(s, p), s)
     zok = jnp.where(fromex, exz, ~used & (jnp.arange(7) < N_MAIN_ZONES))
     sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises

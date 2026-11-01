@@ -401,10 +401,15 @@ J5D = {69610924}  # Xyz à effet (cartes de CARDS)
 LINK = {77637979: (MAT(), 2, 2, 0),                           # LANphorhynchus (lien 2) : 2 monstres
         67598234: (MAT(), 2, 3, 0),                           # Gaia Saber, the Lightning Shadow (lien 3) : 2+ monstres
         41248270: (MAT(), 3, 3, 0),                           # Traffic Ghost (lien 3) : 3 monstres
-        5402805: (MAT(), 2, 3, 1)}                            # Berserker of the Tenyi (lien 3) : 2-3 monstres dont un Link
+        5402805: (MAT(), 2, 3, 1),                            # Berserker of the Tenyi (lien 3) : 2-3 monstres dont un Link
+        # cartes fictives de test (driver.TEST_CARDS) : Extra Link
+        990000001: (MAT(), 2, 2, 0),                          # Test Link TL-TR (lien 2)
+        990000002: (MAT(), 2, 2, 0),                          # Test Link T-R
+        990000003: (MAT(), 2, 2, 0)}                          # Test Link L-T
 # (ATK, flèches, lien, attribut)
 LINK_STATS = {77637979: (1200, 5, 2, 0x10), 67598234: (2600, 42, 3, EARTH), 41248270: (1800, 7, 3, 0x20),
-              5402805: (3000, 388, 3, 0x20)}
+              5402805: (3000, 388, 3, 0x20), 990000001: (1500, 0x140, 2, 0x10), 990000002: (1400, 0xA0, 2, 0x10),
+              990000003: (1400, 0x88, 2, 0x10)}
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
