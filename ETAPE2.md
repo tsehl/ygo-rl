@@ -503,3 +503,32 @@ Résultats :
   - Débit CPU : 340 décisions/s à B = 64 (331 avant, dans le bruit).
   - Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent.
 - Le volet e (Link) est terminé. Suite : volet f (pendule), puis mesure du débit GPU de tout l'Extra Deck.
+
+**Jalon 5, volet f : pendule (2026-11-01).** Ce que font les scripts et ygopro-core (MR5) :
+- zones pendule = cases magie / piège 0 et 4. Un pendule y a le type PENDULUM | SPELL (`card::get_type`), y compris pour les filtres de type et pour la condition de chaîne de Magic Jammer. Activation : vitesse 1, carte posée recto (P_SFU), qui reste sur le terrain ;
+- `negate_chain` (générique, pas propre aux pendules) : si le maillon nié est une activation (EFFECT_TYPE_ACTIVATE) dont la carte est encore en zone magie / piège, elle reçoit LEAVE_CONFIRMED + ACTIVATE_DISABLED et part au cimetière ;
+- redirection : un pendule envoyé au cimetière depuis la zone monstres, ou depuis la zone magie / piège sans ACTIVATE_DISABLED, va recto en défense à la fin de l'Extra Deck, sans EV_TO_GRAVE. Une carte verso qui revient dans l'Extra Deck est insérée avant les pendules recto ;
+- invocation pendule (`proc_pendulum.lua`) : une fois par tour, si les cases 0 et 4 sont des pendules. Candidats : niveau strictement entre les échelles, ni Xyz ni Link, invocables spécialement ; depuis la main s'il reste une case principale libre, depuis l'Extra Deck (pendules recto) s'il reste une case désignée par une flèche ou une zone extra utilisable. Sélection par SelectUnselect, « terminer » dès la première carte, bornée par les compteurs ft / ft1 / ft2 ;
+- placement (`operations.cpp`, étapes 23-24) : carte par carte, par uid croissant, case puis position. Une carte de la main évite les cases désignées s'il n'en reste pas assez pour les cartes de l'Extra Deck à venir ; une carte de l'Extra Deck va en zone extra s'il ne reste plus de case principale pour les autres. EV_SPSUMMON pour tout le groupe à la fin.
+
+Moteur :
+- `bank.lsc` / `bank.rsc` (échelles), `TYPE_PENDULUM`, `P_SPELL` ; statuts ST_ACTDIS et ST_PSTEP ; champ d'état `ps_used` (exposé dans l'observation, comme les pendules recto de l'Extra Deck) ;
+- `group_to_grave(bank, s, mask)` fait la redirection (alt de `group_send`) ; OP_NEGATE pose ST_LEAVE | ST_ACTDIS ; `begin_act` ne fait pas partir les pendules ;
+- invocation : verbe 0 sur l'échelle gauche → D_TRIBUTE avec PS_PEND (cartes candidates de `pend_info`), A_PASS pour terminer, puis `pend_next` / `pend_place` en boucle (ZC_PEND : cases de `pend_zones`, puis D_POS). Tout est en O(N) ;
+- le chemin « carte verso rendue à un Extra Deck qui contient des pendules recto » n'est pas atteint par les cartes actuelles (aucune ne renvoie un monstre d'Extra Deck en main ou au deck) : écrit d'après le C++, non vérifié contre l'oracle.
+
+Cartes : Flash Knight, Mandragon, Fire Opal Head, Gallugallud the Endless Enigma, Dragong (pendules normaux, scripts réduits à `Pendulum.AddProcedure(c)`). Elles entrent dans `test_bank`, donc dans les decks de `vmap_check`, `sb_check`, `obs_check` et du bench.
+
+Mode `pen` de `compare.py` :
+- decks : 16 normaux, 12 pendules, 2 Monster Reborn, 2 Mystical Space Typhoon, 2 Magic Jammer, Dark Hole, Raigeki, 4 autres ; Extra Deck : 3 LANphorhynchus, 2 Gaia Saber, 2 Traffic Ghost (cases désignées par les flèches), 2 Gem-Knight Pearl (pendules en matériau Xyz → cimetière) ;
+- biais de la politique : invoquer par pendule (p = 0,9), activer un pendule (0,7), Magic Jammer contre un maillon de pendule (0,9), continuer à choisir pendant la sélection (0,75).
+
+Résultats :
+- pen 100/100 (graines 15000-15099), du premier coup. Sur ces 100 parties :
+  - 1 685 invocations pendule (1 865 décisions où elle est possible) ; groupes de 1 (1 079), 2 (438), 3 (124), 4 (37), 5 (5) et 6 (2) cartes ;
+  - 1 455 monstres invoqués depuis la main, 1 068 depuis l'Extra Deck ; 1 547 cases principales choisies, 222 zones extra ;
+  - pendules vers l'Extra Deck : 1 932 depuis la zone monstres, 284 depuis la zone pendule ;
+  - 81 Magic Jammer possibles contre un pendule, 78 activations niées (pendule au cimetière) ; 159 pendules au cimetière comme matériau Xyz.
+  - Débit CPU : 307-328 décisions/s à B = 64, contre 334 pour le code d'avant le volet f remesuré dans la même session (−2 à −8 %). Compilation de `step_batch` : 40 s (36 avant).
+  - Toute la non-régression reste verte ; `vmap_check` et `sb_check` passent. `obs_check` échouait au départ (« fuite » de `cid` / `level`) : le test traitait comme caché tout l'Extra Deck adverse, alors que les pendules recto y sont publics. Le test est corrigé et passe.
+- Le jalon 5 (Extra Deck) est terminé. Suite : mesure du débit GPU (L4) de tout l'Extra Deck.

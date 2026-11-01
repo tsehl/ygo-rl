@@ -43,6 +43,8 @@ TYPE_QUICKPLAY, TYPE_CONTINUOUS, TYPE_COUNTER = 0x10000, 0x20000, 0x100000
 TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK = 0x40, 0x80, 0x2000, 0x800000, 0x4000000
 TYPE_EXTRA = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK  # monstres de l'Extra Deck
 TYPE_TUNER = 0x1000
+TYPE_PENDULUM = 0x1000000
+P_SPELL = TYPE_PENDULUM | TYPE_SPELL  # type d'un pendule en zone pendule (card::get_type), et de son activation
 # statuts (bits)
 ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : choisie dans la sélection en cours
 ST_SET_TURN, ST_LEAVE = 16, 32  # posée ce tour (magie/piège) ; activée, ira au cimetière en fin de chaîne
@@ -53,6 +55,8 @@ ST_CNTN = 1024  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFF
 ST_FLIP_TURN = 4096  # invoquée par flip ce tour (STATUS_FLIP_SUMMON_TURN)
 ST_SPSUM, ST_LINKSUM = 8192, 16384  # invoquée spécialement / par lien (IsSpecialSummoned, IsLinkSummoned) : tant
 # qu'elle reste sur le terrain
+ST_ACTDIS = 32768  # activation niée (STATUS_ACTIVATE_DISABLED) : un pendule va alors au cimetière, pas dans l'Extra Deck
+ST_PSTEP = 65536  # placée par l'invocation pendule en cours (EVENT_SPSUMMON du groupe à la fin)
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | ST_CNT | (ST_CNT << 1) | ST_FLIP_TURN
 # phases (= PHASE_* d'ygopro-core, telles que vues aux décisions)
 PH_DRAW, PH_STANDBY, PH_MAIN1, PH_BATTLE, PH_MAIN2, PH_END = 0x1, 0x2, 0x4, 0x8, 0x100, 0x200
@@ -61,8 +65,9 @@ D_NONE, D_IDLE, D_BATTLE, D_TRIBUTE, D_ZONE, D_TARGET, D_DISCARD, D_SELECT, D_PO
 # D_YESNO : question oui / non pendant la résolution (Duel.SelectYesNo) : A_YES continue l'effet, A_PASS l'arrête
 # D_TRIG (interne) : déclencheurs en attente à tester, traité par settle hors de la boucle d'exécution
 # à quoi sert le choix de case en cours
-ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC = range(5)  # ZC_PROC : invocation par procédure (synchro, Xyz, Link)
-PS_SYN, PS_XYZ, PS_LINK = 1, 2, 3  # psel
+ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC, ZC_PEND = range(6)  # ZC_PROC : invocation par procédure (synchro, Xyz,
+# Link) ; ZC_PEND : invocation pendule (une carte à la fois, dans l'ordre des uid)
+PS_SYN, PS_XYZ, PS_LINK, PS_PEND = 1, 2, 3, 4  # psel
 # flèches Link (LINK_MARKER_*)
 LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T, LM_TR = 1, 2, 4, 8, 0x20, 0x40, 0x80, 0x100
 # fenêtres de réponse ; W_TRIG : mise en chaîne des effets déclenchés (SEGOC)
@@ -205,11 +210,14 @@ class Bank(NamedTuple):
     lmax: jnp.ndarray   # [C] Link : au plus (0 : pas de procédure Link)
     lneed: jnp.ndarray  # [C] Link : les matériaux doivent comprendre un monstre Link
     ldiff: jnp.ndarray  # [C] Link : matériaux de noms différents (GetClassCount(Card.GetCode) == #g)
+    lsc: jnp.ndarray    # [C] pendule : échelle gauche
+    rsc: jnp.ndarray    # [C] pendule : échelle droite
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
               race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None,
-              smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None, ldiff=None):
+              smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None, ldiff=None,
+              lsc=None, rsc=None):
     """df : DEF, ou flèches pour un monstre Link (champ def de la base ygopro) : rangées dans lmark, DEF nulle."""
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
@@ -217,7 +225,7 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
     df = jnp.asarray(df, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.where(is_link, 0, df), tprog=test_prog(prog, c),
                 lmark=jnp.where(is_link, df, 0), lmat=i(lmat, (c, FW)), lmin=i(lmin, (c,)), lmax=i(lmax, (c,)),
-                lneed=i(lneed, (c,)), ldiff=i(ldiff, (c,)),
+                lneed=i(lneed, (c,)), ldiff=i(ldiff, (c,)), lsc=i(lsc, (c,)), rsc=i(rsc, (c,)),
                 level=jnp.asarray(level, I32),
                 ctype=jnp.full(c, TYPE_MONSTER | TYPE_NORMAL, I32) if ctype is None else jnp.asarray(ctype, I32),
                 attr=i(attr, (c,)), race=i(race, (c,)),
@@ -341,6 +349,7 @@ class State(NamedTuple):
     cl_c: jnp.ndarray    # [N] monstre Link co-lié (GetMutualLinkedGroupCount() > 0), calculé par refresh
     psel: jnp.ndarray    # sélection de matériaux d'une procédure en cours (D_TRIBUTE, carte pend) : PS_*, 0 sinon
     ov_par: jnp.ndarray  # [N] Z_OVERLAY : index du Xyz qui porte ce matériau (-1 sinon)
+    ps_used: jnp.ndarray  # invocation pendule faite ce tour (flag 10000000 de proc_pendulum.lua)
     uid: jnp.ndarray     # [N] ordre de création de la carte (cardid d'ygopro : deck 0, Extra 0, deck 1, Extra 1)
     ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
 
@@ -473,11 +482,18 @@ def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None):
         rank = (jnp.cumsum(bins) - bins)[key]
         if alt is not None:
             rank = rank - jnp.where(alt, (mo & ~alt).sum(), 0)
-            base = jnp.where(alt, count(s, zone2, o), count(s, zone, o))
+            base2 = count(s, zone2, o)
+            if zone2 == Z_EXTRA and pos2 == P_FD_DEF:  # verso : avant les pendules recto (end - extra_p_count)
+                base2 = base2 - ((s.zone == Z_EXTRA) & (s.ctrl == o) & (s.pos == P_FU_DEF)).sum()
+            base = jnp.where(alt, base2, count(s, zone, o))
         else:
             base = count(s, zone, o)
         seq = jnp.where(mo, base + rank, seq)
     s = compact(s, mask)
+    if alt is not None and zone2 == Z_EXTRA and pos2 == P_FD_DEF:  # les pendules recto se décalent
+        fu = (s.zone == Z_EXTRA) & (s.pos == P_FU_DEF) & ~mask
+        nin = jnp.stack([(mask & alt & (s.owner == o)).sum() for o in (0, 1)])
+        s = s._replace(seq=jnp.where(fu, s.seq + nin[s.ctrl], s.seq))
     out = (dest == Z_HAND) | (dest == Z_DECK) | (dest == Z_EXTRA)  # STATUS_PROC_COMPLETE perdu
     s = s._replace(proc=jnp.where(mask & out, False, s.proc))
     return s._replace(pzone=jnp.where(mask, s.zone, s.pzone), zone=jnp.where(mask, dest, s.zone),
@@ -537,12 +553,16 @@ def group_to_hand(bank, s, mask):
     return group_send(s, mask, Z_HAND, P_HAND, Z_EXTRA, P_FD_DEF, alt=ex)
 
 
-def group_to_grave(s, mask):
-    return raise_ev(group_send(s, mask, Z_GRAVE, P_GRAVE), EV_TO_GRAVE, mask, s.tp)
+def group_to_grave(bank, s, mask):
+    """Envoi au cimetière. Un pendule qui quitte le terrain (zone monstres, ou zone magie/piège sans activation niée)
+    va plutôt dans l'Extra Deck, recto, après les autres cartes (field::send_to, pas d'EVENT_TO_GRAVE)."""
+    pen = (bank.ctype[s.cid] & TYPE_PENDULUM) != 0
+    red = mask & pen & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ACTDIS) == 0)))
+    return raise_ev(group_send(s, mask, Z_GRAVE, P_GRAVE, Z_EXTRA, P_FU_DEF, alt=red), EV_TO_GRAVE, mask & ~red, s.tp)
 
 
-def selected_to_grave(s):
-    return group_to_grave(s, (s.st & ST_SEL) != 0)._replace(picks=_i(0))
+def selected_to_grave(bank, s):
+    return group_to_grave(bank, s, (s.st & ST_SEL) != 0)._replace(picks=_i(0))
 
 
 def lose(s, p, cond):
@@ -684,7 +704,7 @@ def keep_perm(s):
 
 def start_turn(s):
     tp = jnp.where(s.turn == 0, 0, 1 - s.tp).astype(I32)
-    s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
+    s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), ps_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
                    tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
     s = keep_perm(s)
     # pioche (sauf au premier tour) puis fenêtre ; ensuite fenêtre de phase
@@ -773,7 +793,7 @@ def dmg_send(bank, s):
     """Fin du damage step : les monstres détruits au combat encore sur le terrain vont au cimetière, puis point
     d'événement (« détruit au combat », « envoyé au cimetière »)."""
     m = ((s.st & ST_BDES) != 0) & (s.zone == Z_MZONE)
-    s = raise_ev(group_to_grave(s, m), EV_BATTLE_DESTROYED, m, s.tp)
+    s = raise_ev(group_to_grave(bank, s, m), EV_BATTLE_DESTROYED, m, s.tp)
     return trig_point(bank, open_quick(s, s.tp, R_DMG2, chained=False))
 
 
@@ -884,7 +904,9 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     if bdes:
         m &= (s.st & ST_BDES) == 0  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
     m &= (f[F_POS] == 0) | ((s.pos & f[F_POS]) != 0)
-    m &= (f[F_TYPE] == 0) | ((bank.ctype[s.cid] & f[F_TYPE]) != 0)
+    ct = bank.ctype[s.cid]
+    ct = jnp.where(((ct & TYPE_PENDULUM) != 0) & (s.zone == Z_SZONE), P_SPELL, ct)  # zone pendule : magie pendule
+    m &= (f[F_TYPE] == 0) | ((ct & f[F_TYPE]) != 0)
     m &= ~((f[F_NOT_SELF] != 0) & (jnp.arange(n) == h))
     atk, df = s.atk_c, s.df_c
     m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
@@ -1463,6 +1485,48 @@ def link_zones(bank, s, p, c):
                             ez[N_MAIN_ZONES:] | (ok & (jnp.arange(5, 7) == e[0]))])
 
 
+def pend_info(bank, s, p):
+    """Invocation pendule de p (proc_pendulum.lua) : (carte de l'échelle gauche, invocation possible, candidats de la
+    main, candidats de l'Extra Deck, ft1, ft2, ft, cases désignées libres, zone extra utilisable). Candidats : monstres
+    de la main et pendules recto de l'Extra Deck de niveau strictement entre les échelles, invocables spécialement ;
+    ceux de la main seulement avec une case principale libre (ft1 > 0), ceux de l'Extra Deck seulement avec une case
+    permise (ft2 > 0 : cases principales libres désignées par une flèche, plus une zone extra). ft : cases utilisables
+    (GetUsableMZoneCount). ft1 et ft2 sont bornés par le nombre de candidats (Pendulum.Operation)."""
+    ct = bank.ctype[s.cid]
+    pen = (ct & TYPE_PENDULUM) != 0
+    sz = (s.zone == Z_SZONE) & (s.ctrl == p) & pen
+    lm, rm = sz & (s.seq == 0), sz & (s.seq == 4)
+    l, r = jnp.argmax(lm), jnp.argmax(rm)
+    a, b = bank.lsc[s.cid[l]], bank.rsc[s.cid[r]]
+    lo, hi = jnp.minimum(a, b), jnp.maximum(a, b)
+    lv = bank.level[s.cid]
+    ok = ((lv > lo) & (lv < hi) & ((ct & TYPE_MONSTER) != 0) & ((ct & (TYPE_XYZ | TYPE_LINK)) == 0)
+          & ((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc) & (s.ctrl == p))
+    ez = ex_zones(s, p)
+    free = ez[:N_MAIN_ZONES]
+    lz = free & link_arrows(bank, s, p).any(0)
+    emz = ez[N_MAIN_ZONES] | ez[N_MAIN_ZONES + 1]
+    f1, f2 = free.sum(), lz.sum() + emz
+    ch = ok & (s.zone == Z_HAND) & (f1 > 0)
+    cx = ok & (s.zone == Z_EXTRA) & (s.pos == P_FU_DEF) & pen & (f2 > 0)
+    can = lm.any() & rm.any() & ~s.ps_used & (ch | cx).any()
+    return l, can, ch, cx, jnp.minimum(f1, ch.sum()), jnp.minimum(f2, cx.sum()), f1 + emz, lz, emz
+
+
+def pend_zones(bank, s, p, c, lz):
+    """[7] : cases de la carte c de l'invocation pendule (operations.cpp, étape 23). ct1 / ct2 : cases principales libres
+    / cases permises depuis l'Extra Deck, moins les cartes restantes de la main / de l'Extra Deck (c comprise). Une carte
+    de la main évite les cases désignées si ct2 = 0 ; une carte de l'Extra Deck va en zone extra si ct1 = 0."""
+    ez = ex_zones(s, p)
+    free = ez[:N_MAIN_ZONES]
+    rest = (s.st & ST_SEL) != 0
+    ct1 = free.sum() - (rest & (s.zone == Z_HAND)).sum()
+    ct2 = lz.sum() + (ez[N_MAIN_ZONES] | ez[N_MAIN_ZONES + 1]) - (rest & (s.zone == Z_EXTRA)).sum()
+    no2 = jnp.zeros(2, bool)
+    return jnp.where(s.zone[c] == Z_EXTRA, jnp.concatenate([lz & (ct1 != 0), ez[N_MAIN_ZONES:]]),
+                     jnp.concatenate([free & ~((ct2 == 0) & lz), no2]))
+
+
 def arrows_at(mk, q):
     """Cases désignées par un monstre Link de flèches mk en case q (0-4 principales, 5-6 zones extra), vues de son
     contrôleur : masque de 12 bits (0-4 ses cases principales, 5-6 ses zones extra, 7-11 cases principales adverses).
@@ -1674,8 +1738,9 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     branches[OP_CHOOSE] = lambda: (reg[rb], jnp.bool_(True), reg[rb].sum() >= (c & 15))
     lkind = bank.ekind[lc, s.lk_eff[lk]]
     lfield = (s.zone[jnp.maximum(s.lk_src[lk], 0)] & (Z_MZONE | Z_SZONE)) != 0
+    lct = jnp.where((bank.ctype[lc] & TYPE_PENDULUM) != 0, P_SPELL, bank.ctype[lc])  # activation d'un pendule : magie
     branches[OP_COND_CHAIN] = lambda: cond((k > 0) & jnp.where(
-        b == 0, (lkind == K_ACTIVATE) & ((bank.ctype[lc] & a) != 0), lfield & (lkind != K_ACTIVATE)))
+        b == 0, (lkind == K_ACTIVATE) & ((lct & a) != 0), lfield & (lkind != K_ACTIVATE)))
     branches[OP_CHAINCARD] = lambda: put((jnp.arange(n) == s.lk_src[lk]) & (k > 0)
                                          & ((s.zone & jnp.where(b == 0, Z_SZONE, b)) != 0))
     branches[OP_PAY_LP] = lambda: cond(s.lp[p] >= a)
@@ -1714,7 +1779,7 @@ def current_ins(bank, s):
 def begin_act(bank, s, c, e):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
-    leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & TYPE_CONTINUOUS) == 0)
+    leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) == 0)
     p = s.dec_player
     opt = bank.eopt[s.cid[c], e]
     s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(opt == OPT_NAME, name_add(s.opt_cid[p], s.cid[c]), s.opt_cid[p])),
@@ -1753,7 +1818,7 @@ def chain_end(bank, s):
     """Chaîne résolue : les magies/pièges activés encore sur le terrain partent ensemble au cimetière, puis
     nouvelle fenêtre pour le joueur du tour."""
     n = s.cid.shape[0]
-    s = group_to_grave(s, (s.st & ST_LEAVE) != 0)
+    s = group_to_grave(bank, s, (s.st & ST_LEAVE) != 0)
     s = s._replace(n_chain=_i(0), ch_src=_i(-1), ch_k=_i(0), pg=_i(0), pc=_i(0), reg=jnp.zeros((R, n), bool))
     return trig_point(bank, open_quick(s, s.tp, chained=True))
 
@@ -1796,7 +1861,7 @@ def exec_one(bank, s):
         t = target(s) & ~((c == 1) & ((s.fl_c & FL_INDES_EFF) != 0) & (s.zone == Z_MZONE))
         s = s._replace(reg=jnp.where(c == 1, s.reg.at[ra].set(t), s.reg))
         return adv(_switch(jnp.where(b == Z_HAND, 1, jnp.where(b == Z_REMOVED, 2, 0)),
-                              [lambda s: group_to_grave(s, t),
+                              [lambda s: group_to_grave(bank, s, t),
                                lambda s: group_to_hand(bank, s, t),
                                lambda s: group_send(s, t, Z_REMOVED, P_GRAVE)], s))
 
@@ -1860,7 +1925,14 @@ def exec_one(bank, s):
     branches[OP_DAMAGE] = damage_
     branches[OP_RECOVER] = lambda s: adv(s._replace(lp=s.lp.at[rel(p, a)].add(b)))
     branches[OP_SHUFFLE_HAND] = adv  # l'ordre de la main n'est pas observé : rien à faire
-    branches[OP_NEGATE] = lambda s: adv(s._replace(lk_neg=s.lk_neg.at[jnp.clip(s.ch_k - 1, 0, CH - 1)].set(True)))
+    def negate(s):  # negate_chain : la carte d'une activation encore liée en zone magie/piège part au cimetière
+        k1 = jnp.clip(s.ch_k - 1, 0, CH - 1)
+        lc = jnp.maximum(s.lk_src[k1], 0)
+        hit = ((bank.ekind[s.cid[lc], s.lk_eff[k1]] == K_ACTIVATE) & (s.zone[lc] == Z_SZONE) & (s.mv[lc] <= s.lk_t[k1])
+               & (s.lk_src[k1] >= 0))
+        return adv(s._replace(lk_neg=s.lk_neg.at[k1].set(True),
+                              st=s.st.at[lc].set(jnp.where(hit, s.st[lc] | ST_LEAVE | ST_ACTDIS, s.st[lc]))))
+    branches[OP_NEGATE] = negate
     branches[OP_PAY_LP] = lambda s: adv(damage(s, p, a))
     branches[OP_LABEL] = lambda s: adv(s._replace(ch_lab=s.reg[ra].any().astype(I32)))
     branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
@@ -1883,6 +1955,8 @@ def act_cand(bank, s):
     set_st = mine & (s.zone == Z_SZONE) & (s.pos == P_SFD)
     ready = set_st & ((s.st & ST_SET_TURN) == 0)       # posée avant ce tour
     from_hand = in_hand & (free_s > 0)
+    us = zone_used(s, p, Z_SZONE)
+    pend_hand = in_hand & ((ct & TYPE_PENDULUM) != 0) & (~us[0] | ~us[4])  # vers une zone pendule libre
     faceup_mon = my_mon & ((s.pos & P_FACEUP) != 0)
     trig_w = chn & (s.wk == W_TRIG)
     fast = bat | (chn & ~trig_w)                       # vitesse 2 minimum
@@ -1898,6 +1972,7 @@ def act_cand(bank, s):
         rng = bank.erng[s.cid, e]
         qm = (kind == K_QUICK) & ((in_hand & ((rng & Z_HAND) != 0)) | (faceup_mon & ((rng & Z_MZONE) != 0)))
         where = ((idle & spell & ~quick & act & (from_hand | set_st))
+                 | (idle & act & pend_hand)
                  | ((idle | fast) & qm)
                  | ((idle | fast) & quick & act & ((from_hand & (p == s.tp)) | ready))
                  | ((idle | fast) & trap & act & ready & ((s.pf_c[p] & PF_NO_TRAP) == 0))
@@ -1962,6 +2037,10 @@ def legal(bank, s, fus=True):
     else:
         syn_c = xyz_c = lnk_c = jnp.zeros(n, bool)
         lgoal = jnp.bool_(False)
+    # invocation pendule : V_SUMMON sur l'échelle gauche ; sélection (PS_PEND) : boucle de Pendulum.Operation
+    pl, can_pend, pch, pcx, ft1, ft2, ft, plz, _ = pend_info(bank, s, p)
+    psel_n = (~unsel & pch).sum(), (~unsel & pcx).sum()
+    pen_c = unsel & ((pch & (ft1 > psel_n[0])) | (pcx & (ft2 > psel_n[1]))) & (ft > psel_n[0] + psel_n[1])
 
     # libérations : sans case principale libre, l'une d'elles doit libérer une case principale (pas une zone extra)
     mainz = my_mon & (s.seq < N_MAIN_ZONES)
@@ -1971,11 +2050,11 @@ def legal(bank, s, fus=True):
     # invocation par procédure (synchro, Xyz, Link) : V_SUMMON sur le monstre de l'Extra Deck
     can_syn = (s.zone == Z_EXTRA) & (s.ctrl == p) & (s.sz_c | s.xz_c | s.lz_c)
     verbs = [
-        idle & (can_ns | can_syn),
+        idle & (can_ns | can_syn | ((jnp.arange(n) == pl) & can_pend)),
         idle & can_ns,
         idle & can_repos,
         bat & can_atk,
-        ((s.dec == D_TRIBUTE) & jnp.where(s.psel == PS_SYN, syn_c, jnp.where(s.psel == PS_XYZ, xyz_c, jnp.where(s.psel == PS_LINK, lnk_c, my_mon & unsel & trib_ok)))) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
+        ((s.dec == D_TRIBUTE) & jnp.where(s.psel == PS_SYN, syn_c, jnp.where(s.psel == PS_XYZ, xyz_c, jnp.where(s.psel == PS_LINK, lnk_c, jnp.where(s.psel == PS_PEND, pen_c, my_mon & unsel & trib_ok))))) | ((s.dec == D_TARGET) & op_mon & ((s.fl_c & FL_NO_BTARGET) == 0))
         | ((s.dec == D_DISCARD) & in_hand & unsel) | ((s.dec == D_SELECT) & eff_cand & unsel),
         idle & in_hand & (spell | trap) & (free_s > 0),
     ]
@@ -1994,10 +2073,14 @@ def legal(bank, s, fus=True):
     used = jnp.where(mz, zone_used(s, p, Z_MZONE), zone_used(s, p, Z_SZONE))[:7]
     spc = jnp.argmax(s.reg[jnp.clip(ins[1], 0, R - 1)])             # carte invoquée spécialement (ZC_SPSUM)
     fromex = ((s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)) | (s.zctx == ZC_PROC)
-    pc = jnp.where(s.zctx == ZC_PROC, jnp.maximum(s.pend, 0), spc)    # carte invoquée (procédure ou effet)
+    pc = jnp.where((s.zctx == ZC_PROC) | (s.zctx == ZC_PEND), jnp.maximum(s.pend, 0), spc)  # carte invoquée
     is_lk = (ct[pc] & TYPE_LINK) != 0
     exz = lax.cond(is_lk & (s.dec == D_ZONE), lambda s: link_zones(bank, s, p, pc), lambda s: ex_zones(s, p), s)
     zok = jnp.where(fromex, exz, ~used & (jnp.arange(7) < N_MAIN_ZONES))
+    zok = jnp.where(s.zctx == ZC_PEND, pend_zones(bank, s, p, pc, plz), zok)
+    # activation d'un pendule : zones pendule (cases 0 et 4)
+    pact = (s.zctx == ZC_ACT) & ((ct[jnp.maximum(s.pend, 0)] & TYPE_PENDULUM) != 0)
+    zok &= ~pact | (jnp.arange(7) == 0) | (jnp.arange(7) == 4)
     sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises
     pos_ok &= jnp.where(is_lk, P_FU_ATK, -1)  # un Link est toujours en position d'attaque
@@ -2005,6 +2088,7 @@ def legal(bank, s, fus=True):
     sp = sp.at[A_POS_DEF].set((s.dec == D_POS) & ((pos_ok & P_FU_DEF) != 0))
     sp = sp.at[A_PASS].set((chn & ~(trig_w & (s.tst < 2)))  # les déclencheurs obligatoires ne se refusent pas
                            | ((s.dec == D_TRIBUTE) & (s.psel == PS_LINK) & lgoal)  # Link : « terminer » la sélection
+                           | ((s.dec == D_TRIBUTE) & (s.psel == PS_PEND) & ~unsel.all())  # pendule : au moins une carte
                            | (s.dec == D_YESNO))
     sp = sp.at[A_YES].set(s.dec == D_YESNO)
     m = jnp.concatenate([verbs.reshape(-1), sp])
@@ -2025,8 +2109,11 @@ def apply(bank, s, a):
         s = s._replace(dec=jnp.where(need > 0, D_TRIBUTE, D_ZONE).astype(I32))
         # depuis l'Extra Deck : invocation synchro (matériaux choisis un par un en D_TRIBUTE, puis case et position)
         ps = jnp.where(bank.syn[s.cid[c]] != 0, PS_SYN, jnp.where(bank.xct[s.cid[c]] > 0, PS_XYZ, PS_LINK)).astype(I32)
-        return _cond(s.zone[c] == Z_EXTRA, lambda s: s._replace(psel=ps, need=_i(99), zctx=_i(ZC_PROC),
-                                                                 dec=_i(D_TRIBUTE)), lambda s: s, s)
+        # depuis l'échelle gauche : invocation pendule (cartes choisies une par une, puis placées une par une)
+        return _switch(jnp.where(s.zone[c] == Z_EXTRA, 1, jnp.where(s.zone[c] == Z_SZONE, 2, 0)), [
+            lambda s: s,
+            lambda s: s._replace(psel=ps, need=_i(99), zctx=_i(ZC_PROC), dec=_i(D_TRIBUTE)),
+            lambda s: s._replace(psel=_i(PS_PEND), need=_i(99), zctx=_i(ZC_PEND), dec=_i(D_TRIBUTE))], s)
 
     def repos(s):
         new = jnp.where(s.pos[c] == P_FU_ATK, P_FU_DEF, P_FU_ATK)
@@ -2059,7 +2146,7 @@ def apply(bank, s, a):
                             jnp.where(s.psel == PS_XYZ, xdone, (s.psel == 0) & (s.need == 0)))
             done = lambda s: _cond(s.psel == PS_XYZ,
                                    lambda s: attach(s, sel, s.pend)._replace(picks=_i(0)),  # matériaux Xyz attachés
-                                   selected_to_grave, s)._replace(dec=_i(D_ZONE), psel=_i(0))
+                                   lambda s: selected_to_grave(bank, s), s)._replace(dec=_i(D_ZONE), psel=_i(0))
             return _cond(fin, done, lambda s: s, s)
 
         def target(s):
@@ -2068,7 +2155,7 @@ def apply(bank, s, a):
 
         def discard(s):
             s = pick(s)
-            return _cond(s.need == 0, lambda s: start_turn(selected_to_grave(s)), lambda s: s, s)
+            return _cond(s.need == 0, lambda s: start_turn(selected_to_grave(bank, s)), lambda s: s, s)
 
         def eff_select(s):
             def done(s):
@@ -2118,6 +2205,7 @@ def apply(bank, s, a):
             lambda s: begin_act(bank, to_szone(s, P_SFU), s.pend, s.ch_eff),
             lambda s: s._replace(zsel=z, dec=_i(D_POS)),
             lambda s: s._replace(zsel=z, dec=_i(D_POS)),
+            lambda s: s._replace(zsel=z, dec=_i(D_POS)),
         ], s)
 
     def proc_place(s):  # fin d'une invocation par procédure (synchro) : pas de chaîne, fenêtre comme une invocation
@@ -2131,8 +2219,33 @@ def apply(bank, s, a):
                        pend=_i(-1))
         return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
 
+    def pend_next(s):
+        """Invocation pendule : prochaine carte choisie à placer (plus petit uid : card_sort), ou fin : EVENT_SPSUMMON
+        du groupe, puis fenêtre comme une invocation."""
+        sel = (s.st & ST_SEL) != 0
+
+        def go(s):
+            return s._replace(pend=jnp.argmin(jnp.where(sel, s.uid, BIG)).astype(I32), zctx=_i(ZC_PEND), dec=_i(D_ZONE),
+                              dec_player=s.tp, psel=_i(0))
+
+        def fin(s):
+            g = (s.st & ST_PSTEP) != 0
+            s = raise_ev(s, EV_SPSUMMON, g, s.tp)
+            s = s._replace(st=s.st & ~ST_PSTEP, psel=_i(0), pend=_i(-1), ps_used=jnp.bool_(True))
+            return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
+        return _cond(sel.any(), go, fin, s)
+
+    def pend_place(s):
+        c = s.pend
+        pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
+        s = compact(s, jnp.arange(n) == c)
+        s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
+        s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM | ST_PSTEP))
+        return pend_next(s)
+
     def position(s):
-        return _cond(s.zctx == ZC_PROC, proc_place, eff_position, s)
+        return _switch(jnp.where(s.zctx == ZC_PROC, 1, jnp.where(s.zctx == ZC_PEND, 2, 0)),
+                       [eff_position, proc_place, pend_place], s)
 
     def eff_position(s):
         c = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[1], 0, R - 1)])
@@ -2156,7 +2269,8 @@ def apply(bank, s, a):
             lambda s: open_quick(s, 1 - s.tp, R_TO_M2B, passed=True, chained=False),
             to_ep, zone, position,
             lambda s: _cond(s.dec == D_TRIBUTE,  # fin de la sélection des matériaux Link : au cimetière, puis la case
-                            lambda s: selected_to_grave(s)._replace(dec=_i(D_ZONE), psel=_i(0)),
+                            lambda s: _cond(s.psel == PS_PEND, pend_next,  # pendule : placement carte par carte
+                                            lambda s: selected_to_grave(bank, s)._replace(dec=_i(D_ZONE), psel=_i(0)), s),
                             lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
                                             lambda s: pass_priority(bank, s), s), s),
             lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
@@ -2334,7 +2448,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
-              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), uid=uid)
+              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), ps_used=f, uid=uid)
     s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):

@@ -12,7 +12,7 @@ les cartes du volet 3a (interdictions, protections) avec des cartes des autres v
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn|xyz|lnk|xlk|kn]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn|xyz|lnk|xlk|kn|pen]
 """
 import os
 import collections
@@ -45,6 +45,7 @@ def make_bank(db, codes):
     codes = sorted(set(codes))
     r = [db.rows[c] for c in codes]
     bank = core.make_bank(np.array(codes), [x[4] for x in r], [x[5] for x in r], [x[6] & 0xFF for x in r],
+                          lsc=[(x[6] >> 24) & 0xFF for x in r], rsc=[(x[6] >> 16) & 0xFF for x in r],
                           ctype=[x[3] for x in r], race=[x[7] for x in r], attr=[x[8] for x in r],
                           setcode=[cards.setcodes(x[2]) for x in r], **cards.assemble(codes))
     return bank, {c: i for i, c in enumerate(codes)}
@@ -98,8 +99,8 @@ def translate(dec, opt, s):
         verb = dict(summon=V_SUMMON, mset=V_MSET, repos=V_REPOS, attack=V_ATTACK, sset=V_SSET, activate=V_ACT0,
                     chain=V_ACT0)[kind]
         return [verb * N + slot(s, opt[2], opt[3], opt[4])]
-    if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck (synchro) : V_SUMMON sur la carte
-        if opt[3] != "extra":
+    if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck, ou pendule (échelle gauche) : V_SUMMON
+        if opt[3] not in ("extra", "szone"):
             raise Mismatch(f"spsummon hors Extra Deck {opt}")
         return [V_SUMMON * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "to_bp":
@@ -122,7 +123,7 @@ def translate(dec, opt, s):
     if kind in ("cancel", "unpick"):
         return None
     if kind == "finish":  # sélection des matériaux Link terminée (ailleurs : jouée d'office, voir filtered)
-        return [sp(core.A_PASS)] if int(s.psel) == core.PS_LINK else []
+        return [sp(core.A_PASS)] if int(s.psel) in (core.PS_LINK, core.PS_PEND) else []
     if kind in ("pass", "no"):
         return [sp(core.A_PASS)]
     if kind == "yes":
@@ -136,9 +137,9 @@ def N_(s):
 
 def filtered(dec, s=None):
     """Indices des options retenues (sans annuler / retirer ; « terminer » seul dès qu'il est possible, sauf pendant
-    le choix des matériaux Link, où « terminer » et ajouter un matériau sont deux choix du joueur)."""
+    le choix des matériaux Link et des cartes d'une invocation pendule, où « terminer » et ajouter un matériau sont deux choix du joueur)."""
     idx = [i for i, o in enumerate(dec.options) if o[0] not in ("cancel", "unpick")]
-    if s is not None and int(s.psel) == core.PS_LINK:
+    if s is not None and int(s.psel) in (core.PS_LINK, core.PS_PEND):
         return idx
     if any(dec.options[i][0] == "finish" for i in idx):
         idx = [i for i in idx if dec.options[i][0] == "finish"]
@@ -237,6 +238,58 @@ def kn_cover(bank, s, dec, idx):
         COVER["kn: matériaux Knightmare, deux de même nom sur le terrain"] += len(set(codes.tolist())) < len(codes)
 
 
+def pen_pick(bank, s, dec, idx, rng):
+    """Biais du mode pen : activer les pendules, invoquer par pendule, choisir plusieurs cartes."""
+    opts = dec.options
+    pact = [i for i in idx if opts[i][0] in ("activate", "chain") and opts[i][1] in cards.J5F and opts[i][3] == "hand"]
+    psum = [i for i in idx if opts[i][0] == "spsummon" and opts[i][3] == "szone"]
+    if psum:
+        COVER["pen: invocation pendule possible"] += 1
+    # Magic Jammer en réponse à l'activation d'un pendule
+    top = int(s.n_chain) - 1
+    jam = [i for i in idx if opts[i][0] == "chain" and opts[i][1] == 77414722]
+    if jam and top >= 0 and int(bank.code[int(s.cid[int(s.lk_src[top])])]) in cards.J5F:
+        COVER["pen: Magic Jammer possible contre un pendule"] += 1
+        if rng.random() < 0.9:
+            return jam
+    if psum and rng.random() < 0.9:
+        return psum
+    if pact and rng.random() < 0.7:
+        return pact
+    if int(s.psel) == core.PS_PEND:
+        picks = [i for i in idx if opts[i][0] == "pick"]
+        if picks and rng.random() < 0.75:
+            return picks
+    return None
+
+
+def pen_cover(bank, before, s, o):
+    """Couverture du mode pen : pendules arrivés dans l'Extra Deck (depuis la zone monstres / pendule), invoqués par
+    pendule (depuis la main / l'Extra Deck), activations de pendule niées, invocation pendule terminée."""
+    z0, z1 = np.asarray(before.zone), np.asarray(s.zone)
+    pen = (np.asarray(bank.ctype)[np.asarray(s.cid)] & core.TYPE_PENDULUM) != 0
+    for zf, name in ((core.Z_MZONE, "zone monstres"), (core.Z_SZONE, "zone pendule")):
+        COVER[f"pen: pendule vers l'Extra Deck depuis la {name}"] += int((pen & (z0 == zf) & (z1 == core.Z_EXTRA)).sum())
+    COVER["pen: pendule au cimetière depuis la zone pendule (activation niée)"] += int(
+        (pen & (z0 == core.Z_SZONE) & (z1 == core.Z_GRAVE)).sum())
+    COVER["pen: pendule au cimetière depuis le terrain (matériau Xyz)"] += int(
+        (pen & (z0 == core.Z_OVERLAY) & (z1 == core.Z_GRAVE)).sum())
+    ps = (np.asarray(s.st) & core.ST_SPSUM) != 0
+    for zf, name in ((core.Z_HAND, "main"), (core.Z_EXTRA, "Extra Deck")):
+        COVER[f"pen: invoqué par pendule depuis {name}"] += int(((z0 == zf) & (z1 == core.Z_MZONE) & ps & (
+            int(before.psel) == core.PS_PEND or int(before.zctx) == core.ZC_PEND)).sum())
+    if bool(s.ps_used) and not bool(before.ps_used):
+        st, pz = np.asarray(s.st), np.asarray(s.pzone)
+        n = int(((z1 == core.Z_MZONE) & (np.asarray(s.ctrl) == int(s.tp)) & ((st & core.ST_SUMMON_TURN) != 0)
+                 & ((st & core.ST_SPSUM) != 0) & ((pz == core.Z_HAND) | ((pz == core.Z_EXTRA) & pen))).sum())
+        COVER[f"pen: invocation pendule de {n} carte(s)"] += 1
+    if int(before.zctx) == core.ZC_PEND and int(before.dec) == core.D_ZONE and o[0] == "place":
+        COVER[f"pen: case choisie {'zone extra' if o[3] >= 5 else 'principale'}"] += 1
+    fdx = (z1 == core.Z_EXTRA) & (np.asarray(s.pos) == core.P_FD_DEF) & (z0 != core.Z_EXTRA)
+    if fdx.any() and ((z1 == core.Z_EXTRA) & (np.asarray(s.pos) == core.P_FU_DEF)).any():
+        COVER["pen: monstre verso rendu à un Extra Deck qui a des pendules recto"] += 1
+
+
 BANK_CODE = None
 COVER = collections.Counter()  # options jouées (activations par carte, poses, mélanges…)
 NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée est jouée par le step de play()
@@ -250,7 +303,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D | cards.J5E  # cartes des jalons 4-5 : seulement dans leurs modes
+    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D | cards.J5E | cards.J5F  # cartes des jalons 4-5 : seulement dans leurs modes
     extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
@@ -341,6 +394,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         for d in decks:
             rng.shuffle(d)
         extra = [[2857636] * 3 + [75452921] * 3 + [67598234] * 2 + [41248270] * 2 + [77637979] * 2 for _ in range(2)]
+    elif mode == "pen":
+        # pendule : monstres de tous niveaux (entre les échelles), pendules, Monster Reborn, destructions (pendules du
+        # terrain vers l'Extra Deck), Magic Jammer (activation d'un pendule niée) ; Extra Deck : Link (cases désignées
+        # par les flèches pour les pendules de l'Extra Deck) et Xyz (pendules en matériau : au cimetière)
+        pens = sorted(cards.J5F)
+        decks = [[rng.choice(pool) for _ in range(16)] + [rng.choice(pens) for _ in range(12)] + [83764718] * 2
+                 + [5318639] * 2 + [77414722] * 2 + [53129443, 12580477] + [rng.choice(base) for _ in range(4)]
+                 for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[77637979] * 3 + [67598234] * 2 + [41248270] * 2 + [71594310] * 2 for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
@@ -421,6 +485,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                     pick = keep
             if mode == "kn":
                 kn_cover(bank, s, dec, idx)
+            if mode == "pen":
+                pick = pen_pick(bank, s, dec, idx, rng) or pick
             if mode in ("lnk", "xlk", "kn"):
                 # lnk : invocations par procédure plus fréquentes, et un Link gardé sur le terrain plus souvent (pour
                 # que le suivant se place selon ses flèches)
@@ -507,6 +573,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 s = step(bank, s, a)
             if mode in ("lnk", "xlk", "kn"):
                 link_arrivals(bank, before, s)
+            if mode == "pen":
+                pen_cover(bank, before, s, o)
             ndec += 1
     except Mismatch as e:
         return dict(ok=False, decisions=ndec, turn=duel.turn, err=str(e))

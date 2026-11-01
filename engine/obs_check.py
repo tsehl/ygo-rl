@@ -67,7 +67,7 @@ def perturb(s, p):
     search = (int(s.dec_player) == p) & np.asarray(legal_j(core.State(*[jnp.asarray(x) for x in s]))[:core.NV * N]
                                                     .reshape(core.NV, N).any(0) & (s.zone == core.Z_DECK)).any()
     hidden = (((s.zone == core.Z_DECK) & ~(search & (s.ctrl == p)))
-              | (((s.zone == core.Z_HAND) | (s.zone == core.Z_EXTRA)) & (s.ctrl != p))
+              | (((s.zone == core.Z_HAND) | ((s.zone == core.Z_EXTRA) & ~faceup)) & (s.ctrl != p))  # pendules recto : publics
               | (((s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)) & (s.ctrl != p) & ~faceup))
     h = np.where(hidden)[0]
     cid = s.cid.copy()

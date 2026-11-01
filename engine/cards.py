@@ -278,6 +278,12 @@ CARDS = {
     # jalon 5, volet e : Knightmare (co-liens)
     2857636: knightmare(F(op=ONFIELD, typ=TYPE_SPELL | TYPE_TRAP), MC_INDES_BATTLE),                      # Knightmare Phoenix
     75452921: knightmare(F(op=Z_MZONE, st=ST_SPSUM, zx=ZX_MAIN), MC_INDES_EFF),                         # Knightmare Cerberus
+    # jalon 5, volet f : monstres pendule normaux (activation en zone pendule, sans effet pendule)
+    17390179: [act()],                                                                                   # Flash Knight
+    19474136: [act()],                                                                                   # Mandragon
+    28363749: [act()],                                                                                   # Fire Opal Head
+    32872239: [act()],                                                                     # Gallugallud the Endless Enigma
+    83980492: [act()],                                                                                   # Dragong
 }
 
 
@@ -435,6 +441,10 @@ LINK_STATS = {77637979: (1200, 5, 2, 0x10), 67598234: (2600, 42, 3, EARTH), 4124
               5402805: (3000, 388, 3, 0x20), 990000001: (1500, 0x140, 2, 0x10), 990000002: (1400, 0xA0, 2, 0x10),
               990000003: (1400, 0x88, 2, 0x10), 2857636: (1900, 0xA0, 2, 0x4), 75452921: (1600, 0x88, 2, EARTH)}
 J5E = {2857636, 75452921}  # Link à effet (cartes de CARDS, mode kn de compare.py)
+# monstres pendule normaux : (ATK, DEF, niveau, échelle gauche, échelle droite) ; mode pen de compare.py
+PENDULUM = {17390179: (1800, 600, 4, 7, 7), 19474136: (2500, 1000, 5, 2, 2), 28363749: (2500, 1000, 6, 0, 0),
+            32872239: (2000, 2000, 6, 9, 9), 83980492: (500, 2100, 4, 7, 7)}
+J5F = set(PENDULUM)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato
@@ -456,10 +466,10 @@ def test_bank(key, c):
     st = SPELL_CODES + list(ST_TYPES) + list(J4_SPELLS) + list(J4B_SPELLS) + list(J4C_SPELLS) + list(J4D_SPELLS) + list(J5A_SPELLS) \
         + list(J5B_SPELLS)
     codes = list(range(c)) + st + list(EFFECT_MONSTERS) + list(MATERIAL_STATS) + list(FUSION) + list(RITUAL) \
-        + list(TUNER_STATS) + list(SYNCHRO) + list(XYZ) + list(LINK)
+        + list(TUNER_STATS) + list(SYNCHRO) + list(XYZ) + list(LINK) + list(PENDULUM)
     xs = list(MATERIAL_STATS.values()) + [FUSION_STATS[k] for k in FUSION] + list(RITUAL.values()) \
         + list(TUNER_STATS.values()) + [SYNCHRO_STATS[k] for k in SYNCHRO] + [XYZ_STATS[k] for k in XYZ] \
-        + [LINK_STATS[k] for k in LINK]
+        + [LINK_STATS[k] for k in LINK] + [v[:3] for v in PENDULUM.values()]
     atk = np.concatenate([np.asarray(jax.random.randint(key, (c,), 0, 30)) * 100, np.zeros(len(st), int),
                           [v[0] for v in EFFECT_MONSTERS.values()], [v[0] for v in xs]])
     df = np.concatenate([np.asarray(jax.random.randint(jax.random.fold_in(key, 1), (c,), 0, 30)) * 100,
@@ -471,12 +481,14 @@ def test_bank(key, c):
         + [core.TYPE_MONSTER | core.TYPE_NORMAL] * len(MATERIAL_STATS) + [core.TYPE_MONSTER | core.TYPE_FUSION] * len(FUSION) \
         + list(RITUAL_TYPES.values()) + [core.TYPE_MONSTER | core.TYPE_NORMAL | core.TYPE_TUNER] * len(TUNER_STATS) \
         + [core.TYPE_MONSTER | core.TYPE_SYNCHRO] * len(SYNCHRO) + [core.TYPE_MONSTER | core.TYPE_XYZ] * len(XYZ) \
-        + [core.TYPE_MONSTER | core.TYPE_LINK] * len(LINK)
+        + [core.TYPE_MONSTER | core.TYPE_LINK] * len(LINK) \
+        + [core.TYPE_MONSTER | core.TYPE_NORMAL | core.TYPE_PENDULUM] * len(PENDULUM)
     # attributs aléatoires (les effets continus de Bladefly, Deepsea Macrotrema en dépendent)
     attr = np.concatenate([1 << np.asarray(jax.random.randint(jax.random.fold_in(key, 3), (c,), 0, 6)),
                            np.zeros(len(st), int), [WIND if k in (28470714, 62340868) else WATER for k in EFFECT_MONSTERS],
                            [v[3] if len(v) > 3 else 0 for v in xs]])
-    return core.make_bank(np.array(codes), atk, df, lv, ctype=ctype, attr=attr, **assemble(codes))
+    sc = lambda j: [PENDULUM[k][j] if k in PENDULUM else 0 for k in codes]  # échelles
+    return core.make_bank(np.array(codes), atk, df, lv, ctype=ctype, attr=attr, lsc=sc(3), rsc=sc(4), **assemble(codes))
 
 
 def test_decks(key, bank, b, d, c, eff, x):

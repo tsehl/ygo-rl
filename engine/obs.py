@@ -1,7 +1,8 @@
 """Observation d'un joueur : ce qu'il a le droit de voir, sous forme de tokens de taille fixe.
 
 - Un token par carte visible : sa main, tout le terrain (les cartes verso adverses sans leur identité),
-  les cimetières et les bannies. Les decks et la main adverse ne sont que des compteurs (token global).
+  les cimetières, les bannies et les pendules recto des Extra Decks. Les decks et la main adverse ne sont que des
+  compteurs (token global).
 - L'identité (cid, ATK/DEF/niveau) n'est donnée que si le joueur peut la connaître.
 - L'ordre des tokens ne dépend que d'informations visibles (zone, contrôleur, seq), jamais du slot.
 - `slot` sert uniquement à convertir le choix du réseau (verbe × token) en action du moteur. Ce n'est
@@ -57,7 +58,8 @@ def observe(bank, s, p=None):
     faceup = (s.pos & (core.P_FU_ATK | core.P_FU_DEF)) != 0
     field = (s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)
     ovl = s.zone == core.Z_OVERLAY  # matériaux Xyz : publics ; seq = case du Xyz × 8 + rang du matériau
-    public = (s.zone == core.Z_GRAVE) | (s.zone == core.Z_REMOVED) | ovl
+    # les pendules recto de l'Extra Deck sont publics
+    public = (s.zone == core.Z_GRAVE) | (s.zone == core.Z_REMOVED) | ovl | ((s.zone == core.Z_EXTRA) & faceup)
     vseq = jnp.where(ovl, s.seq[jnp.clip(s.ov_par, 0, n - 1)] * 8 + s.seq, s.seq)
     m = core.legal(bank, s)
     act_slot = m[:NV * n].reshape(NV, n).T            # [N, NV]
@@ -91,7 +93,7 @@ def observe(bank, s, p=None):
     link = jnp.zeros(n, I32).at[jnp.where(live, s.lk_src, n)].set(jnp.arange(1, core.CH + 1, dtype=I32), mode="drop")
     neg = jnp.zeros(n, bool).at[jnp.where(live, s.lk_src, n)].set(s.lk_neg, mode="drop")
     glob = jnp.stack([
-        s.lp[p], s.lp[1 - p], s.turn, (s.tp == p).astype(I32), s.phase, s.ns_used.astype(I32),
+        s.lp[p], s.lp[1 - p], s.turn, (s.tp == p).astype(I32), s.phase, s.ns_used.astype(I32), s.ps_used.astype(I32),
         jnp.where(s.dec_player == p, s.dec, 0), jnp.where(s.dec_player == p, s.need, 0),
         jnp.where(s.dec_player == p, s.zctx, 0), s.n_chain,
         *[_count(s, z, q) for q in (p, 1 - p)
