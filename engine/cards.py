@@ -20,20 +20,21 @@ from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLI
                   MC_FINAL_ATK, EV_PRE_DMG, OPT_CARD_NR, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, ST_SUMMON_TURN, ST_FLIP_TURN, Z_EXTRA, MC_DISABLE, OP_COND_PHASE,
                   PH_MAIN1, PH_MAIN2, OP_FUSMAT, FK, TYPE_FUSION, OP_RITMAT, RIT_GREATER, RIT_EQUAL,
-                  TYPE_RITUAL, Z_OVERLAY, MC_NO_DIRECT, TD_PERM, OPT_CARD)
+                  TYPE_RITUAL, Z_OVERLAY, MC_NO_DIRECT, TD_PERM, OPT_CARD, OP_LABEL, OP_COND_LABEL, OP_YESNO,
+                  ST_SPSUM, ST_LINKSUM, ZX_COLINK, ZX_MAIN, MC_INDES_EFF)
 
 ME, OPP = 0, 1
 
 
 def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
-      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0, rit=0):
+      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0, rit=0, zx=0):
     """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
     statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés ;
     fus : monstre fusion invocable maintenant avec la main et le terrain (recette réalisable) ; rit : monstre rituel
-    invocable maintenant par rituel en mode RIT_GREATER / RIT_EQUAL."""
+    invocable maintenant par rituel en mode RIT_GREATER / RIT_EQUAL ; zx : bits ZX_* (co-lié, case principale)."""
     code = (code, code) if isinstance(code, int) else code
     return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
-            spsum, nodis, fus, rit)
+            spsum, nodis, fus, rit, zx)
 
 
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
@@ -45,6 +46,7 @@ def MINATK(dst, src): return (OP_MINATK, dst, src, 0)
 def CHOOSE(dst, src, n, who=ME, upto=False):  # exactement n cartes (upto : au plus n, éventuellement aucune)
     return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
 def MOVE(r, zone=Z_GRAVE): return (OP_MOVE, r, zone, 0)
+def DESTROY(r): return (OP_MOVE, r, Z_GRAVE, 1)  # Duel.Destroy : les indestructibles par effet restent, r = détruites
 def SPSUMMON(r, pos, proc=False): return (OP_SPSUMMON, r, pos, int(proc))  # proc : invocation correcte (rituel)
 def DRAW(who, n): return (OP_DRAW, who, n, 0)
 def DAMAGE(who, n, per=None): return (OP_DAMAGE, who, n, 0 if per is None else per + 1)  # n × |registre per|
@@ -58,7 +60,10 @@ def PAY_LP(n): return (OP_PAY_LP, n, 0, 0)
 def EVENT(r, ev): return (OP_EVENT, r, ev, 0)            # cartes concernées par les événements ev (masque)
 def COND_TURN(who): return (OP_COND_TURN, who, 0, 0)     # c'est le tour de who
 def COND_EVP(ev, who): return (OP_COND_EVP, ev, who, 0)  # l'un des événements ev vient de who
-def COND_SELF(zone=0, prev=0): return (OP_COND_SELF, zone, prev, 0)  # la carte est dans zone / venait de prev
+def COND_SELF(zone=0, prev=0, st=0): return (OP_COND_SELF, zone, prev, st)  # la carte est dans zone / venait de prev / a l'un des statuts st
+def LABEL(r): return (OP_LABEL, r, 0, 0)            # e:SetLabel(registre r non vide) à l'activation
+def COND_LABEL(): return (OP_COND_LABEL, 0, 0, 0)   # à la résolution : le label est mis
+def YESNO(): return (OP_YESNO, 0, 0, 0)             # Duel.SelectYesNo : non arrête l'effet
 def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des cartes de ce nom ce tour
 def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False):
     """MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut) ; rd : RESET_DISABLE (effet de la carte sur
@@ -118,6 +123,18 @@ def cont(rng, code, val, tgt=None, per=None, tp=0, ph=0, cnt=None):
 
 
 MY_DECK = F(me=Z_DECK)
+
+
+def knightmare(tgt, indes):
+    """Knightmare Phoenix / Cerberus : quand il est invoqué par lien (une fois par tour, par nom) : défausser 1 carte,
+    cibler une carte adverse (filtre tgt), la détruire ; s'il était co-lié à l'activation (label), piocher 1 (oui / non).
+    Continu : les monstres co-liés de son contrôleur ne peuvent pas être détruits (indes : au combat / par les effets)."""
+    colinked = F(me=Z_MZONE, zx=ZX_COLINK)
+    return [trigger(ev(EV_SPSUMMON), optional=True, opt=True,
+                    cost=[COND_SELF(st=ST_LINKSUM), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1)],
+                    target=[FILTER(2, tgt, tgt=True), CHOOSE(3, 2, 1), SELF(0), FILTER(0, colinked, within=0), LABEL(0)],
+                    resolve=[DESTROY(3), REQ(3, 1), COND_LABEL(), FILTER(0, MY_DECK), REQ(0, 1), YESNO(), DRAW(ME, 1)]),
+            cont(Z_MZONE, indes, 0, tgt=colinked)]
 OPP_MON = F(op=Z_MZONE)
 ALL_MON = F(me=Z_MZONE, op=Z_MZONE)
 OPP_FACEUP_MON = F(op=Z_MZONE, pos=P_FACEUP)
@@ -144,48 +161,48 @@ TYPE_EFFECT = 0x20
 
 CARDS = {
     55144522: [act(target=[FILTER(0, MY_DECK), REQ(0, 2)], resolve=[DRAW(ME, 2)])],            # Pot of Greed
-    12580477: [act(target=[FILTER(0, OPP_MON), REQ(0, 1)], resolve=[FILTER(0, OPP_MON), MOVE(0)])],  # Raigeki
-    53129443: [act(target=[FILTER(0, ALL_MON), REQ(0, 1)], resolve=[FILTER(0, ALL_MON), MOVE(0)])],  # Dark Hole
+    12580477: [act(target=[FILTER(0, OPP_MON), REQ(0, 1)], resolve=[FILTER(0, OPP_MON), DESTROY(0)])],  # Raigeki
+    53129443: [act(target=[FILTER(0, ALL_MON), REQ(0, 1)], resolve=[FILTER(0, ALL_MON), DESTROY(0)])],  # Dark Hole
     46130346: [act(resolve=[DAMAGE(OPP, 500)])],                                                # Hinotama
     84257639: [act(resolve=[RECOVER(ME, 1000)])],                                               # Dian Keto
     70368879: [act(target=[FILTER(0, MY_DECK), REQ(0, 1)], resolve=[DRAW(ME, 1), RECOVER(OPP, 1000)])],  # Upstart
     66788016: [act(target=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1)],                               # Fissure
-                   resolve=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1), MOVE(2)])],
+                   resolve=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1), DESTROY(2)])],
     83764718: [act(target=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, GRAVE_MON_SS, tgt=True), CHOOSE(1, 0, 1)],  # Monster Reborn
                    resolve=[SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
     79571449: [act(target=[FILTER(0, MY_DECK), REQ(0, 3)],                                      # Graceful Charity
                    resolve=[DRAW(ME, 3), SHUFFLE_HAND(ME), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 2), MOVE(1)])],
-    18144506: [act(target=[FILTER(0, OPP_ST), REQ(0, 1)], resolve=[FILTER(0, OPP_ST), MOVE(0)])],  # Feather Duster
+    18144506: [act(target=[FILTER(0, OPP_ST), REQ(0, 1)], resolve=[FILTER(0, OPP_ST), DESTROY(0)])],  # Feather Duster
     74131780: [ignition(cost=[SELF(0), MOVE(0)],                                                # Exiled Force
                         target=[FILTER(1, F(me=Z_MZONE, op=Z_MZONE, not_self=1), tgt=True), CHOOSE(2, 1, 1)],
-                        resolve=[MOVE(2)])],
+                        resolve=[DESTROY(2)])],
     11384280: [ignition(cost=[FILTER(0, F(me=Z_MZONE)), CHOOSE(1, 0, 1), MOVE(1)],              # Cannon Soldier
                         resolve=[DAMAGE(OPP, 500)])],
     # jalon 3a : chaînes
     83968380: [act(target=[FILTER(0, MY_DECK), REQ(0, 1)], resolve=[DRAW(ME, 1)])],               # Jar of Greed
     24068492: [act(target=[FILTER(0, OPP_MON), REQ(0, 1)],                                       # Just Desserts
                    resolve=[FILTER(0, OPP_MON), DAMAGE(OPP, 500, per=0)])],
-    5318639: [act(target=[FILTER(0, FIELD_ST, tgt=True), CHOOSE(1, 0, 1)], resolve=[MOVE(1)])],            # Mystical Space Typhoon
+    5318639: [act(target=[FILTER(0, FIELD_ST, tgt=True), CHOOSE(1, 0, 1)], resolve=[DESTROY(1)])],            # Mystical Space Typhoon
     77414722: [act(cost=[COND_CHAIN(TYPE_SPELL), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1)],  # Magic Jammer
-                   resolve=[NEGATE(), CHAINCARD(0), MOVE(0)])],
-    3819470: [act(cost=[COND_CHAIN(TYPE_TRAP), PAY_LP(1000)], resolve=[NEGATE(), CHAINCARD(0), MOVE(0)])],  # Seven Tools
+                   resolve=[NEGATE(), CHAINCARD(0), DESTROY(0)])],
+    3819470: [act(cost=[COND_CHAIN(TYPE_TRAP), PAY_LP(1000)], resolve=[NEGATE(), CHAINCARD(0), DESTROY(0)])],  # Seven Tools
     # jalon 3b : pièges sur événement
     4206964: [act(on=ev(EV_SUMMON, EV_FLIP_SUMMON),                                              # Trap Hole
                   target=[COND_EVP(ev(EV_SUMMON, EV_FLIP_SUMMON), OPP), EVENT(0, ev(EV_SUMMON, EV_FLIP_SUMMON)),
                           FILTER(1, BIG_FACEUP, within=0, tgt=True), REQ(1, 1)],
-                  resolve=[FILTER(1, BIG_FACEUP, within=1), MOVE(1)])],
+                  resolve=[FILTER(1, BIG_FACEUP, within=1), DESTROY(1)])],
     53582587: [act(on=ev(EV_SUMMON, EV_FLIP_SUMMON, EV_SPSUMMON),                                # Torrential Tribute
-                   target=[FILTER(0, ALL_MON), REQ(0, 1)], resolve=[FILTER(0, ALL_MON), MOVE(0)])],
+                   target=[FILTER(0, ALL_MON), REQ(0, 1)], resolve=[FILTER(0, ALL_MON), DESTROY(0)])],
     56120475: [act(on=ev(EV_ATTACK), target=[COND_TURN(OPP), EVENT(0, ev(EV_ATTACK)),            # Sakuretsu Armor
-                                             FILTER(0, ALL_MON, within=0, tgt=True), REQ(0, 1)], resolve=[MOVE(0)])],
+                                             FILTER(0, ALL_MON, within=0, tgt=True), REQ(0, 1)], resolve=[DESTROY(0)])],
     44095762: [act(on=ev(EV_ATTACK), target=[COND_TURN(OPP), FILTER(0, OPP_ATK_MON), REQ(0, 1)],  # Mirror Force
-                   resolve=[FILTER(0, OPP_ATK_MON), MOVE(0)])],
+                   resolve=[FILTER(0, OPP_ATK_MON), DESTROY(0)])],
     26202165: [trigger(ev(EV_TO_GRAVE), opt=True, target=[COND_SELF(prev=ONFIELD)],                       # Sangan
                        resolve=[FILTER(0, SEARCH_ATK1500), CHOOSE(1, 0, 1, upto=True), MOVE(1, Z_HAND), LOCK(1)])],
     78010363: [trigger(ev(EV_TO_GRAVE), opt=True, target=[COND_SELF(prev=ONFIELD)],         # Witch of the Black Forest
                        resolve=[FILTER(0, SEARCH_DEF1500), CHOOSE(1, 0, 1, upto=True), MOVE(1, Z_HAND), LOCK(1)])],
     54652250: [trigger(ev(EV_FLIP), target=[FILTER(0, ALL_MON, tgt=True), CHOOSE(1, 0, 1, upto=True)],              # Man-Eater Bug
-                       resolve=[MOVE(1)])],
+                       resolve=[DESTROY(1)])],
     83011277: [trigger(ev(EV_BATTLE_DESTROYED), optional=True,                                               # Mystic Tomato
                        target=[COND_SELF(zone=Z_GRAVE), REQ_FREE(ME, Z_MZONE, 1), FILTER(0, DECK_DARK1500), REQ(0, 1)],
                        resolve=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, DECK_DARK1500), CHOOSE(1, 0, 1, upto=True),
@@ -194,7 +211,7 @@ CARDS = {
     24508238: [quick(Z_HAND, cost=[SELF(0), MOVE(0)],                                                       # D.D. Crow
                      target=[FILTER(1, F(op=Z_GRAVE), tgt=True), CHOOSE(2, 1, 1)], resolve=[MOVE(2, Z_REMOVED)])],
     59438930: [quick(Z_HAND | Z_MZONE, opt=True, cost=[COND_CHAIN_FIELD(), SELF(0), MOVE(0)],      # Ghost Ogre & Snow Rabbit
-                     target=[CHAINCARD(1, ONFIELD)], resolve=[MOVE(1)])],
+                     target=[CHAINCARD(1, ONFIELD)], resolve=[DESTROY(1)])],
     18430390: [quick(Z_MZONE, cost=[COND_CHAIN(TYPE_TRAP)],                                                  # Winged Rhynos
                      resolve=[SELF(0), FILTER(0, F(me=Z_MZONE, pos=P_FACEUP), within=0), MOVE(0, Z_HAND)])],
     # jalon 4, volet 1 : archétypes, effets continus de stats, modificateurs temporaires
@@ -255,9 +272,12 @@ CARDS = {
     55761792: ritual_spell(5405694, RIT_GREATER),                                                          # Black Luster Ritual
     8198712: ritual_spell(72426662, RIT_EQUAL),                                                            # End of the World
     72426662: [ignition(cost=[PAY_LP(2000)], target=[FILTER(0, F(me=ONFIELD, op=ONFIELD, not_self=1)), REQ(0, 1)],  # Demise
-                        resolve=[FILTER(0, F(me=ONFIELD, op=ONFIELD, not_self=1)), MOVE(0)])],
+                        resolve=[FILTER(0, F(me=ONFIELD, op=ONFIELD, not_self=1)), DESTROY(0)])],
     42364374: [cont(Z_MZONE, MC_SET_ATK, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0)),  # Arsenal Bug
                cont(Z_MZONE, MC_SET_DEF, 1000, cnt=(F(me=Z_MZONE, pos=P_FACEUP, race=RACE_INSECT, not_self=1), 0, 0))],
+    # jalon 5, volet e : Knightmare (co-liens)
+    2857636: knightmare(F(op=ONFIELD, typ=TYPE_SPELL | TYPE_TRAP), MC_INDES_BATTLE),                      # Knightmare Phoenix
+    75452921: knightmare(F(op=Z_MZONE, st=ST_SPSUM, zx=ZX_MAIN), MC_INDES_EFF),                         # Knightmare Cerberus
 }
 
 
@@ -323,15 +343,16 @@ def assemble(codes, cards=CARDS):
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             xmat[i], xct[i] = f, k
     lmat = np.zeros((c, len(F())), np.int32)
-    lmin, lmax, lneed = (np.zeros(c, np.int32) for _ in range(3))
+    lmin, lmax, lneed, ldiff = (np.zeros(c, np.int32) for _ in range(4))
     for i, code in enumerate(codes):
         if code in LINK:
-            f, lmin[i], lmax[i], lneed[i] = LINK[code]
+            f, lmin[i], lmax[i], lneed[i], *dd = LINK[code]
+            ldiff[i] = dd[0] if dd else 0
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             lmat[i] = f
     return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
                 fmat=fmat, fmn=fmn, erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct, lmat=lmat, lmin=lmin, lmax=lmax,
-                lneed=lneed)
+                lneed=lneed, ldiff=ldiff)
 
 
 def setcodes(sc):
@@ -405,11 +426,15 @@ LINK = {77637979: (MAT(), 2, 2, 0),                           # LANphorhynchus (
         # cartes fictives de test (driver.TEST_CARDS) : Extra Link
         990000001: (MAT(), 2, 2, 0),                          # Test Link TL-TR (lien 2)
         990000002: (MAT(), 2, 2, 0),                          # Test Link T-R
-        990000003: (MAT(), 2, 2, 0)}                          # Test Link L-T
+        990000003: (MAT(), 2, 2, 0),                          # Test Link L-T
+        # (filtre, min, max, un Link parmi eux, noms différents)
+        2857636: (MAT(), 2, 2, 0, 1),                         # Knightmare Phoenix (lien 2) : 2 monstres de noms différents
+        75452921: (MAT(), 2, 2, 0, 1)}                        # Knightmare Cerberus (lien 2)
 # (ATK, flèches, lien, attribut)
 LINK_STATS = {77637979: (1200, 5, 2, 0x10), 67598234: (2600, 42, 3, EARTH), 41248270: (1800, 7, 3, 0x20),
               5402805: (3000, 388, 3, 0x20), 990000001: (1500, 0x140, 2, 0x10), 990000002: (1400, 0xA0, 2, 0x10),
-              990000003: (1400, 0x88, 2, 0x10)}
+              990000003: (1400, 0x88, 2, 0x10), 2857636: (1900, 0xA0, 2, 0x4), 75452921: (1600, 0x88, 2, EARTH)}
+J5E = {2857636, 75452921}  # Link à effet (cartes de CARDS, mode kn de compare.py)
 EFFECT_MONSTERS = {74131780: (1000, 1000, 2), 11384280: (1400, 1300, 4),  # Exiled Force, Cannon Soldier
                    26202165: (1000, 600, 3), 78010363: (1100, 1200, 4),    # Sangan, Witch of the Black Forest
                    54652250: (450, 600, 2), 83011277: (1400, 1100, 4),     # Man-Eater Bug, Mystic Tomato

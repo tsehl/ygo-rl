@@ -472,3 +472,34 @@ L'oracle présente le choix du matériau à détacher en msg 15. Sa localisation
     - 2 271 Link en zone extra, 471 en case principale par flèche adverse, 47 par sa propre flèche.
   - Débit CPU : 331 décisions/s à B = 64 (334 avant).
   - Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent.
+
+**Jalon 5, volet e (fin) : Knightmare Phoenix / Cerberus (2026-11-01).** Ce que font les scripts (2857636, 75452921) et ygopro-core :
+- e1 : déclencheur optionnel EVENT_SPSUMMON_SUCCESS, une fois par tour par nom (`SetCountLimit(1,id)`), seulement si la carte est invoquée par lien (`IsLinkSummoned`). Coût : défausser 1 carte. Cible : une magie / piège adverse sur le terrain (Phoenix) ou un monstre adverse invoqué spécialement en case principale, `GetSequence() < 5` (Cerberus). À l'activation, `e:SetLabel(1)` si la carte est co-liée (`GetMutualLinkedGroupCount() > 0`). Résolution : `Duel.Destroy` sur la cible ; si une carte a été détruite, que le label vaut 1 et que `IsPlayerCanDraw(tp,1)` (deck non vide, libduel.cpp), question `SelectYesNo`, puis pioche 1 ;
+- e2 (continu) : les monstres co-liés de son contrôleur sont indestructibles au combat (Phoenix) ou par les effets (Cerberus, EFFECT_INDESTRUCTABLE_EFFECT) ;
+- matériaux : 2 monstres de noms différents (`GetClassCount(Card.GetCode) == #g`) ;
+- co-lien (`card::get_mutual_linked_zone`) : deux Link recto qui se désignent l'un l'autre, y compris par les flèches entre zones extra et cases adverses, comme pour l'Extra Link.
+
+Briques et moteur :
+- statuts ST_SPSUM et ST_LINKSUM (posés par `proc_place` et les invocations spéciales par effet, effacés quand la carte bouge), testés par OP_COND_SELF (3ᵉ argument) et F_ST ;
+- champ de filtre F_ZX (FW = 22) : ZX_COLINK (cache `cl_c`, calculé par `refresh` avec `colinked`, O(N + 144), à partir de `link_cells` extrait d'`extra_link`) et ZX_MAIN (case principale) ;
+- MC_INDES_EFF → FL_INDES_EFF. La destruction devient `DESTROY(r) = OP_MOVE(c = 1)` : les monstres indestructibles par les effets restent, et le registre ne garde que les cartes détruites (valeur de `Duel.Destroy`). Les 15 cartes qui appellent `Duel.Destroy` passent de MOVE à DESTROY ;
+- label de maillon : OP_LABEL (registre non vide → `ch_lab`, recopié dans `lk_lab` par `push_link`, rechargé par `load_link`) et OP_COND_LABEL ;
+- OP_YESNO : décision D_YESNO pendant la résolution. A_YES (nouvelle action spéciale, N_SPECIAL = 14) continue l'effet, A_PASS l'arrête (saut à l'OP_END final) ;
+- noms différents : `bank.ldiff`. `link_table` calcule `dup[128]` (deux matériaux de même code) sur les 21 paires de cases, sans O(N²).
+
+Mode `kn` de `compare.py` :
+- decks : 20 cartes tirées parmi 6 normaux de niveau ≤ 4 (pour avoir des noms en double), 6 autres normaux de niveau ≤ 4, 3 Monster Reborn, Dark Hole, Raigeki, 9 autres cartes ;
+- Extra Deck : 3 Phoenix, 3 Cerberus, 2 Gaia Saber, 2 Traffic Ghost, 2 LANphorhynchus ;
+- biais de la politique : activer le déclencheur (p = 0,9), invoquer un Knightmare quand un Link est déjà en zone extra (p = 0,8), le poser en case principale (p = 0,9), ne pas prendre un Link comme matériau (p = 0,8).
+
+Résultats :
+- kn 100/100 (graines 14000-14099). Sur ces 100 parties :
+  - 599 Phoenix et 598 Cerberus invoqués ; déclencheurs activés 140 fois (Phoenix) et 93 fois (Cerberus) ;
+  - 50 questions de pioche (26 oui, 24 non) ;
+  - 2 358 états avec un monstre co-lié ; 1 822 avec un monstre indestructible au combat par Phoenix, 1 536 par les effets par Cerberus ;
+  - 29 destructions activables face à un indestructible, 22 jouées ;
+  - 137 choix de matériaux avec deux monstres de même nom sur le terrain ;
+  - Link invoqués : 1 921 en zone extra, 342 en case principale par flèche adverse, 31 par leur propre flèche.
+  - Débit CPU : 340 décisions/s à B = 64 (331 avant, dans le bruit).
+  - Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent.
+- Le volet e (Link) est terminé. Suite : volet f (pendule), puis mesure du débit GPU de tout l'Extra Deck.

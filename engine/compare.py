@@ -12,7 +12,7 @@ les cartes du volet 3a (interdictions, protections) avec des cartes des autres v
 À chaque décision à plusieurs options de l'oracle : on compare l'état (zones, positions, ATK/DEF, LP, tour,
 phase) et l'ensemble des actions légales, puis on joue la même option aléatoire dans les deux moteurs.
 Les options « annuler » / « retirer » de l'oracle sont exclues (le moteur JAX n'en a pas).
-Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn|xyz]
+Usage : uv run --with jax python compare.py [n_parties] [seed0] [normal|mixed|chain|trig|quick|cont|dmg|ds|flag|neg|fus|rit|syn|xyz|lnk|xlk|kn]
 """
 import os
 import collections
@@ -123,8 +123,10 @@ def translate(dec, opt, s):
         return None
     if kind == "finish":  # sélection des matériaux Link terminée (ailleurs : jouée d'office, voir filtered)
         return [sp(core.A_PASS)] if int(s.psel) == core.PS_LINK else []
-    if kind == "pass":
+    if kind in ("pass", "no"):
         return [sp(core.A_PASS)]
+    if kind == "yes":
+        return [sp(core.A_YES)]
     raise Mismatch(f"option non gérée {opt}")
 
 
@@ -213,6 +215,28 @@ def xlink_cover(bank, s):
     return None
 
 
+KN_DESTROY = {12580477, 53129443, 66788016, 74131780, 5318639, 4206964, 53582587, 56120475, 44095762, 54652250,
+              59438930, 72426662}  # cartes qui détruisent des monstres (ou une carte ciblée)
+
+
+def kn_cover(bank, s, dec, idx):
+    """Couverture du mode kn : co-liens, protections, matériaux de même nom, activations de destruction face à un
+    monstre indestructible par les effets."""
+    zone, ctrl, cid = np.asarray(s.zone), np.asarray(s.ctrl), np.asarray(s.cid)
+    cl, fl, ib = np.asarray(s.cl_c), np.asarray(s.fl_c), np.asarray(s.ib_c)
+    COVER["kn: monstre co-lié sur le terrain"] += bool(cl.any())
+    indes = (fl & core.FL_INDES_EFF) != 0
+    COVER["kn: indestructible par les effets (Cerberus)"] += bool(indes.any())
+    COVER["kn: indestructible au combat (Phoenix)"] += bool((cl & (ib == 0)).any())
+    if dec.options[idx[0]][0] in ("activate", "chain") and indes.any():
+        COVER["kn: destruction activable face à un indestructible"] += sum(
+            dec.options[i][0] in ("activate", "chain") and dec.options[i][1] in KN_DESTROY for i in idx)
+    if int(s.psel) == core.PS_LINK and int(bank.code[cid[int(s.pend)]]) in cards.J5E:
+        p = int(s.dec_player)
+        codes = np.asarray(bank.code)[cid[(zone == core.Z_MZONE) & (ctrl == p)]]
+        COVER["kn: matériaux Knightmare, deux de même nom sur le terrain"] += len(set(codes.tolist())) < len(codes)
+
+
 BANK_CODE = None
 COVER = collections.Counter()  # options jouées (activations par carte, poses, mélanges…)
 NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée est jouée par le step de play()
@@ -226,7 +250,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
     # les effets rapides (volet 3) sont exclus des autres modes, pour que les graines anciennes rejouent les mêmes decks
-    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D  # cartes des jalons 4-5 : seulement dans leurs modes
+    new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D | cards.J5E  # cartes des jalons 4-5 : seulement dans leurs modes
     extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
     if mode == "chain":
@@ -306,11 +330,22 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             rng.shuffle(d)
         extra = [[990000001] * 3 + [990000002] * 2 + [990000003] * 2 + [41248270] * 2 + [77637979] * 3
                  + [67598234] * 2 for _ in range(2)]
+    elif mode == "kn":
+        # Knightmare : peu de noms différents parmi les monstres (matériaux de même nom refusés), des magies / pièges
+        # (cibles de Phoenix, destructions face à Cerberus) ; Extra Deck : Link dont les flèches du bas désignent les
+        # cases principales (pour y poser les Knightmare et former des co-liens)
+        low = [c for c in pool if (db.rows[c][6] & 0xFF) <= 4]
+        few = rng.sample(low, 6)
+        decks = [[rng.choice(few) for _ in range(20)] + [rng.choice(low) for _ in range(6)] + [83764718] * 3
+                 + [53129443, 12580477] + [rng.choice(base) for _ in range(9)] for _ in range(2)]
+        for d in decks:
+            rng.shuffle(d)
+        extra = [[2857636] * 3 + [75452921] * 3 + [67598234] * 2 + [41248270] * 2 + [77637979] * 2 for _ in range(2)]
     elif mode == "neg":
         j4d = sorted(cards.J4D)
         mons = sorted(set(cards.J4_MONSTERS + cards.J4B_MONSTERS + cards.J4C_MONSTERS)
                       | {c for c, effs in cards.CARDS.items() if effs[0][0] in (core.K_TRIG_F, core.K_TRIG_O, core.K_IGNITION)
-                    and c not in cards.J5B | cards.J5D})
+                    and c not in cards.J5B | cards.J5D | cards.J5E})
         decks = [[rng.choice(pool) for _ in range(14)] + [rng.choice(j4d) for _ in range(10)]
                  + [rng.choice(mons) for _ in range(12)] + [rng.choice(base) for _ in range(4)] for _ in range(2)]
         for d in decks:
@@ -384,7 +419,9 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                                                and dec.options[i][1] in cards.J4B_SPELLS)]
                 if keep and rng.random() < 0.9:
                     pick = keep
-            if mode in ("lnk", "xlk"):
+            if mode == "kn":
+                kn_cover(bank, s, dec, idx)
+            if mode in ("lnk", "xlk", "kn"):
                 # lnk : invocations par procédure plus fréquentes, et un Link gardé sur le terrain plus souvent (pour
                 # que le suivant se place selon ses flèches)
                 sps = [i for i in idx if dec.options[i][0] == "spsummon"]
@@ -393,10 +430,27 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                     pick = sps
                 elif sus and rng.random() < 0.6:
                     pick = sus
-                if int(s.psel) == core.PS_LINK and rng.random() < (0.85 if mode == "xlk" else 0.6):
+                if int(s.psel) == core.PS_LINK and rng.random() < (0.85 if mode == "xlk" else 0.6 if mode == "lnk" else 0.8):
                     keep = [i for i in idx if not (dec.options[i][0] == "pick" and int(
                         bank.ctype[bank_index(bank, dec.options[i][1][0])]) & core.TYPE_LINK)]
                     pick = keep or pick
+            if mode == "kn":
+                # kn : déclencheurs des Knightmare activés ; avec un Link à soi en zone extra, un Knightmare invoqué
+                # dans une case principale (sous sa flèche du bas : co-lien par la flèche du haut du Knightmare)
+                o0 = dec.options[idx[0]][0]
+                kact = [i for i in idx if dec.options[i][0] in ("chain", "activate") and dec.options[i][1] in cards.J5E]
+                ksp = [i for i in idx if dec.options[i][0] == "spsummon" and dec.options[i][1] in cards.J5E]
+                ct = np.asarray(bank.ctype)[np.asarray(s.cid)]
+                emz = bool(((np.asarray(s.zone) == core.Z_MZONE) & (np.asarray(s.ctrl) == int(s.dec_player))
+                            & (np.asarray(s.seq) >= 5) & ((ct & core.TYPE_LINK) != 0)).any())
+                if kact and rng.random() < 0.9:
+                    pick = kact
+                elif ksp and emz and rng.random() < 0.8:
+                    pick = ksp
+                elif o0 == "place" and int(s.zctx) == core.ZC_PROC and int(bank.code[int(s.cid[int(s.pend)])]) in cards.J5E:
+                    main = [i for i in idx if dec.options[i][3] < 5]
+                    if main and rng.random() < 0.9:
+                        pick = main
             if ready:
                 # xlk : chaîne de co-liens prête : invoquer par procédure, et prendre l'autre zone extra
                 e, x = ready
@@ -435,8 +489,11 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                     pick = z2
             i = rng.choice(pick)
             o = dec.options[i]
-            if mode in ("lnk", "xlk"):
+            if mode in ("lnk", "xlk", "kn"):
                 link_cover(bank, s, o)
+            if mode == "kn" and o[0] in ("activate", "chain") and o[1] in KN_DESTROY:
+                COVER["kn: destruction jouée face à un indestructible"] += bool(
+                    ((np.asarray(s.fl_c) & core.FL_INDES_EFF) != 0).any())
             COVER[(o[0], db.names.get(o[1], o[1]), o[3]) if o[0] in ("activate", "sset", "chain", "spsummon") else (dec.msg, o[0])] += 1
             if verbose:
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
@@ -448,7 +505,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 if not bool(legal(bank, s)[a]):
                     raise Mismatch(f"action {a} illégale côté JAX en cours de sélection {dec.options[i]}")
                 s = step(bank, s, a)
-            if mode in ("lnk", "xlk"):
+            if mode in ("lnk", "xlk", "kn"):
                 link_arrivals(bank, before, s)
             ndec += 1
     except Mismatch as e:

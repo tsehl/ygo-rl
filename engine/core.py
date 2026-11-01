@@ -51,11 +51,14 @@ ST_ON = 128  # magie/piège continue résolue : ses effets continus s'appliquent
 ST_CNT = 256  # ST_CNT << e : effet e déjà utilisé ce tour (SetCountLimit(1) sans code : par carte, effacé si elle bouge)
 ST_CNTN = 1024  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFFECT_FLAG_NO_TURN_RESET)
 ST_FLIP_TURN = 4096  # invoquée par flip ce tour (STATUS_FLIP_SUMMON_TURN)
+ST_SPSUM, ST_LINKSUM = 8192, 16384  # invoquée spécialement / par lien (IsSpecialSummoned, IsLinkSummoned) : tant
+# qu'elle reste sur le terrain
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | ST_CNT | (ST_CNT << 1) | ST_FLIP_TURN
 # phases (= PHASE_* d'ygopro-core, telles que vues aux décisions)
 PH_DRAW, PH_STANDBY, PH_MAIN1, PH_BATTLE, PH_MAIN2, PH_END = 0x1, 0x2, 0x4, 0x8, 0x100, 0x200
 # décisions en attente (D_RUN : effet en cours d'exécution, interne au moteur)
-D_NONE, D_IDLE, D_BATTLE, D_TRIBUTE, D_ZONE, D_TARGET, D_DISCARD, D_SELECT, D_POS, D_RUN, D_CHAIN, D_TRIG = range(12)
+D_NONE, D_IDLE, D_BATTLE, D_TRIBUTE, D_ZONE, D_TARGET, D_DISCARD, D_SELECT, D_POS, D_RUN, D_CHAIN, D_TRIG, D_YESNO = range(13)
+# D_YESNO : question oui / non pendant la résolution (Duel.SelectYesNo) : A_YES continue l'effet, A_PASS l'arrête
 # D_TRIG (interne) : déclencheurs en attente à tester, traité par settle hors de la boucle d'exécution
 # à quoi sert le choix de case en cours
 ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC = range(5)  # ZC_PROC : invocation par procédure (synchro, Xyz, Link)
@@ -103,12 +106,16 @@ PG_COST, PG_TARGET, PG_RESOLVE = range(3)
 CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/piège)
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
- OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT) = range(28)
-N_OPS = 28
+ OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT, OP_LABEL,
+ OP_COND_LABEL, OP_YESNO) = range(31)
+N_OPS = 31
+# OP_LABEL : le maillon retient si le registre a est non vide (e:SetLabel à l'activation) ; OP_COND_LABEL : condition
+# sur ce label à la résolution ; OP_YESNO : le joueur de l'effet choisit de continuer (D_YESNO)
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
-    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT = range(21)
-FW = 21  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX = range(22)
+FW = 22  # F_ZX : bits ZX_* (co-lié, case principale)
+ZX_COLINK, ZX_MAIN = 1, 2  # GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
@@ -120,8 +127,10 @@ MC_NONE, MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK, MC_DEF, MC_SET_DEF, MC_F
 MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP, MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP = range(9, 16)
 MC_NO_DIRECT = 17  # EFFECT_CANNOT_DIRECT_ATTACK
 MC_DISABLE = 16  # EFFECT_DISABLE : effets de la carte annulés (continus inactifs, pas d'activation, maillons annulés)
+MC_INDES_EFF = 18  # EFFECT_INDESTRUCTABLE_EFFECT : pas détruite par les effets (OP_MOVE avec destruction)
 FL_NO_ATTACK, FL_NO_BTARGET, FL_NO_ETARGET, FL_IMM_TRAP, FL_NO_SS, FL_DISABLED = 1, 2, 4, 8, 16, 32  # bits de fl_c
 FL_NO_DIRECT = 128  # pas d'attaque directe
+FL_INDES_EFF = 256  # indestructible par les effets
 FL_ONF = 64  # recto sur le terrain, effets actifs (STATUS_EFFECT_ENABLED) au calcul précédent
 PF_NO_TRAP = 1  # bits de pf_c
 # card::add_effect : un modificateur temporaire de ce code efface ceux de ces codes déjà sur la carte (masque de bits)
@@ -152,8 +161,8 @@ BIG = 1 << 20
 # actions : verbe × slot, puis actions spéciales
 V_SUMMON, V_MSET, V_REPOS, V_ATTACK, V_SELECT, V_SSET, V_ACT0 = range(7)
 NV = V_ACT0 + E
-A_TO_BP, A_TO_M2, A_TO_EP, A_ZONE0, A_POS_ATK, A_POS_DEF, A_PASS = 0, 1, 2, 3, 10, 11, 12  # A_ZONE0 + z
-N_SPECIAL = 13
+A_TO_BP, A_TO_M2, A_TO_EP, A_ZONE0, A_POS_ATK, A_POS_DEF, A_PASS, A_YES = 0, 1, 2, 3, 10, 11, 12, 13  # A_ZONE0 + z
+N_SPECIAL = 14  # A_YES : « oui » à D_YESNO (« non » : A_PASS)
 
 
 def n_actions(n):
@@ -195,11 +204,12 @@ class Bank(NamedTuple):
     lmin: jnp.ndarray   # [C] Link : nombre de matériaux, au moins
     lmax: jnp.ndarray   # [C] Link : au plus (0 : pas de procédure Link)
     lneed: jnp.ndarray  # [C] Link : les matériaux doivent comprendre un monstre Link
+    ldiff: jnp.ndarray  # [C] Link : matériaux de noms différents (GetClassCount(Card.GetCode) == #g)
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
               race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None,
-              smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None):
+              smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None, ldiff=None):
     """df : DEF, ou flèches pour un monstre Link (champ def de la base ygopro) : rangées dans lmark, DEF nulle."""
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
@@ -207,7 +217,7 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
     df = jnp.asarray(df, I32)
     return Bank(code=jnp.asarray(code, I32), atk=jnp.asarray(atk, I32), df=jnp.where(is_link, 0, df), tprog=test_prog(prog, c),
                 lmark=jnp.where(is_link, df, 0), lmat=i(lmat, (c, FW)), lmin=i(lmin, (c,)), lmax=i(lmax, (c,)),
-                lneed=i(lneed, (c,)),
+                lneed=i(lneed, (c,)), ldiff=i(ldiff, (c,)),
                 level=jnp.asarray(level, I32),
                 ctype=jnp.full(c, TYPE_MONSTER | TYPE_NORMAL, I32) if ctype is None else jnp.asarray(ctype, I32),
                 attr=i(attr, (c,)), race=i(race, (c,)),
@@ -258,6 +268,7 @@ class State(NamedTuple):
     ch_p: jnp.ndarray    # joueur qui active
     ch_k: jnp.ndarray    # index de son maillon (= n_chain pendant l'activation)
     ch_dis: jnp.ndarray  # activé par une carte sous EFFECT_DISABLE_EFFECT : le maillon sera annulé (DISABLE_CHAIN)
+    ch_lab: jnp.ndarray  # label de l'effet en cours (OP_LABEL)
     pg: jnp.ndarray      # programme en cours (PG_*)
     pc: jnp.ndarray      # instruction en cours
     reg: jnp.ndarray     # [R, N] registres ensembles
@@ -271,6 +282,7 @@ class State(NamedTuple):
     lk_reg: jnp.ndarray  # [CH, R, N] registres au moment de l'activation (une carte qui bouge en sort)
     lk_neg: jnp.ndarray  # [CH] activation niée
     lk_t: jnp.ndarray    # [CH] horloge de déplacement à l'activation
+    lk_lab: jnp.ndarray  # [CH] label (OP_LABEL)
     mv: jnp.ndarray      # [N] horloge du dernier déplacement de la carte
     clk: jnp.ndarray     # horloge de déplacement : une carte déplacée après l'activation sort de lk_reg (sans le recopier)
     en_t: jnp.ndarray    # [N] horloge à l'activation des effets continus de la carte (enable_field_effect : arrivée sur
@@ -326,6 +338,7 @@ class State(NamedTuple):
     sz_c: jnp.ndarray    # [N] monstre synchro de l'Extra Deck invocable maintenant (matériaux sur le terrain)
     xz_c: jnp.ndarray    # [N] monstre Xyz de l'Extra Deck invocable maintenant
     lz_c: jnp.ndarray    # [N] monstre Link de l'Extra Deck invocable maintenant
+    cl_c: jnp.ndarray    # [N] monstre Link co-lié (GetMutualLinkedGroupCount() > 0), calculé par refresh
     psel: jnp.ndarray    # sélection de matériaux d'une procédure en cours (D_TRIBUTE, carte pend) : PS_*, 0 sinon
     ov_par: jnp.ndarray  # [N] Z_OVERLAY : index du Xyz qui porte ce matériau (-1 sinon)
     uid: jnp.ndarray     # [N] ordre de création de la carte (cardid d'ygopro : deck 0, Extra 0, deck 1, Extra 1)
@@ -888,6 +901,8 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= (f[F_FUS] == 0) | s.fz_c
     m &= (f[F_RIT] == 0) | (((s.rz_c >> jnp.maximum(f[F_RIT] - 1, 0)) & 1) != 0)
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
+    m &= ((f[F_ZX] & ZX_COLINK) == 0) | s.cl_c
+    m &= ((f[F_ZX] & ZX_MAIN) == 0) | (s.seq < N_MAIN_ZONES)
     if targ:
         m &= ~untargetable(bank, s, h)
     # un monstre Link n'a pas de DEF (IsDefense* faux) : seulement un filtre sans borne
@@ -963,7 +978,7 @@ def stats(bank, s):
     craw &= ~(ctrap[:, None] & imm[None, :] & onf[None, :])
     fl = (jnp.where(dis, FL_DISABLED, 0) | jnp.where(onf & faceup, FL_ONF, 0)).astype(I32)
     for c, b in ((MC_NO_ATTACK, FL_NO_ATTACK), (MC_NO_BTARGET, FL_NO_BTARGET), (MC_NO_ETARGET, FL_NO_ETARGET),
-                 (MC_IMM_TRAP, FL_IMM_TRAP), (MC_NO_DIRECT, FL_NO_DIRECT)):
+                 (MC_IMM_TRAP, FL_IMM_TRAP), (MC_NO_DIRECT, FL_NO_DIRECT), (MC_INDES_EFF, FL_INDES_EFF)):
         fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0), b, 0)
     fl |= jnp.where((craw & (ccode == MC_NO_SS)[:, None]).any(0), FL_NO_SS, 0)  # carte visée, où qu'elle soit
     ib = jnp.where(ctgt & (ccode == MC_INDES_BATTLE)[:, None], cval[:, None], BIG).min(0)
@@ -1417,6 +1432,7 @@ def refresh_xyz(bank, s):
 
 
 SUB7 = [[(q >> z) & 1 == 1 for z in range(7)] for q in range(128)]  # sous-ensembles des 7 cases monstre
+PAIRS7 = ([i for i in range(7) for j in range(i + 1, 7)], [j for i in range(7) for j in range(i + 1, 7)])  # 21 paires de cases
 
 
 def link_arrows(bank, s, p):
@@ -1468,14 +1484,9 @@ def _swap12(m):
     return ((m & 0x1F) << 7) | ((m >> 7) & 0x1F) | (((m >> 5) & 1) << 6) | (((m >> 6) & 1) << 5)
 
 
-def extra_link(bank, s, p, sub):
-    """Extra Link (field::get_spsummonable_count_fromex_rule4, check_extra_link, card::is_extra_link_state), pour
-    chaque sous-ensemble sub [S, 7] de cases de p dont les monstres partent (matériaux). Si p occupe une seule zone
-    extra o et que l'autre zone e est libre (ni lui ni l'adversaire), un monstre Link posé en e y est permis quand sa
-    composante de co-liens contient o. Sans cette carte, la composante de o est fixe ; la carte la rejoint par un
-    voisin co-lié. Rend (e [S] : 5 ou 6, X [S] : masque des cases de la composante de o qui désignent e ; 0 si la
-    règle ne s'applique pas) ; la carte c est permise en e si arrows_at(lmark[c], e) & X ≠ 0. Cases de 12 bits vues
-    de p (voir arrows_at). O(N + S × 12 × 11)."""
+def link_cells(bank, s, p):
+    """Monstres Link recto du terrain sur les 12 cases vues de p (voir arrows_at) : case de chaque carte [N] (12 : aucune),
+    cases désignées par chaque case [12], cases tenues par un Link [12], voisins co-liés de chaque case [12] (masques)."""
     on = (s.zone == Z_MZONE) & ((bank.ctype[s.cid] & TYPE_LINK) != 0) & ((s.pos & P_FACEUP) != 0)
     mine = s.ctrl == p
     q = s.seq
@@ -1488,6 +1499,25 @@ def extra_link(bank, s, p, sub):
     j = jnp.arange(12)
     mut = (((pt[:, None] >> j[None, :]) & 1) != 0) & (((pt[None, :] >> j[:, None]) & 1) != 0)
     M = jnp.where(mut, 1 << j[None, :], 0).sum(1).astype(I32)          # [12] voisins co-liés
+    return cell, pt, lk, M
+
+
+def colinked(bank, s):
+    """[N] : monstres Link co-liés à au moins un autre (card::get_mutual_linked_cards non vide). O(N + 144)."""
+    cell, _, _, M = link_cells(bank, s, 0)
+    return (cell < 12) & (M[jnp.clip(cell, 0, 11)] != 0)
+
+
+def extra_link(bank, s, p, sub):
+    """Extra Link (field::get_spsummonable_count_fromex_rule4, check_extra_link, card::is_extra_link_state), pour
+    chaque sous-ensemble sub [S, 7] de cases de p dont les monstres partent (matériaux). Si p occupe une seule zone
+    extra o et que l'autre zone e est libre (ni lui ni l'adversaire), un monstre Link posé en e y est permis quand sa
+    composante de co-liens contient o. Sans cette carte, la composante de o est fixe ; la carte la rejoint par un
+    voisin co-lié. Rend (e [S] : 5 ou 6, X [S] : masque des cases de la composante de o qui désignent e ; 0 si la
+    règle ne s'applique pas) ; la carte c est permise en e si arrows_at(lmark[c], e) & X ≠ 0. Cases de 12 bits vues
+    de p (voir arrows_at). O(N + S × 12 × 11)."""
+    _, pt, lk, M = link_cells(bank, s, p)
+    j = jnp.arange(12)
     me, op = zone_used(s, p, Z_MZONE)[:7], zone_used(s, 1 - p, Z_MZONE)[:7]
     left = me[None, :] & ~sub                                             # [S, 7]
     l5, l6 = left[:, 5], left[:, 6]
@@ -1537,19 +1567,25 @@ def link_table(bank, s, p):
     hasl = (sub & islk[None, :]).any(1)
     base = ~(sub & ~ok[None, :]).any(1)
     ee, ex = extra_link(bank, s, p, sub)
-    return oh, sub.sum(1), m, hasl, zok & base, ee, jnp.where(base, ex, 0)
+    # deux matériaux de même nom (noms différents exigés : ldiff)
+    cc = jnp.where(oh, bank.code[s.cid][None, :], 0).sum(1)              # [7]
+    pi, pj = jnp.asarray(PAIRS7[0]), jnp.asarray(PAIRS7[1])
+    same = used[pi] & used[pj] & (cc[pi] == cc[pj])                       # [21]
+    dup = (sub[:, pi] & sub[:, pj] & same[None, :]).any(1)
+    return oh, sub.sum(1), m, hasl, zok & base, ee, jnp.where(base, ex, 0), dup
 
 
 def link_valid(bank, s, c, tab):
     """[128] : ensembles de matériaux valides pour le monstre Link c (Link.CheckGoal) : filtre, nombre de matériaux,
     somme égale au lien, un Link parmi eux si demandé, une case pour c."""
-    oh, cnt, m, hasl, zok, ee, ex = tab
+    oh, cnt, m, hasl, zok, ee, ex, dup = tab
     k = s.cid[c]
     mm = (oh & mat_mask(bank, s, bank.lmat[k])[None, :]).any(1)          # [7]
     sub = jnp.asarray(SUB7)
     zok = zok | ((arrows_at(bank.lmark[k], ee) & ex) != 0)               # Extra Link
     return (zok & ~(sub & ~mm[None, :]).any(1) & (cnt >= bank.lmin[k]) & (cnt <= bank.lmax[k])
-            & (((m >> jnp.clip(bank.level[k], 0, 15)) & 1) != 0) & ((bank.lneed[k] == 0) | hasl))
+            & (((m >> jnp.clip(bank.level[k], 0, 15)) & 1) != 0) & ((bank.lneed[k] == 0) | hasl)
+            & ((bank.ldiff[k] == 0) | ~dup))
 
 
 def link_ok(bank, s):
@@ -1601,6 +1637,7 @@ def refresh(bank, s, fus=True):
         s = lax.cond(has_synchro(bank, s), lambda s: refresh_syn(bank, s), lambda s: s._replace(sz_c=s.sz_c & False), s)
         s = lax.cond(has_xyz(bank, s), lambda s: refresh_xyz(bank, s), lambda s: s._replace(xz_c=s.xz_c & False), s)
         s = lax.cond(has_link(bank, s), lambda s: refresh_link(bank, s), lambda s: s._replace(lz_c=s.lz_c & False), s)
+    s = s._replace(cl_c=colinked(bank, s))
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
                       ovf=s.ovf | jnp.where(over, 1, 0).astype(I32))
@@ -1647,7 +1684,9 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     branches[OP_EVENT] = lambda: put((s.ev_g & evb[:, None]).any(axis=0))
     branches[OP_COND_TURN] = lambda: cond(s.tp == rel(p, a))
     branches[OP_COND_EVP] = lambda: cond((evm & s.ev_g.any(axis=1) & (s.ev_p == rel(p, b))).any())
-    branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0)))
+    branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0))
+                                          & ((c == 0) | ((s.st[h] & c) != 0)))
+    branches[OP_COND_LABEL] = lambda: cond(s.ch_lab != 0)
     branches[OP_COND_PHASE] = lambda: cond((s.phase & a) != 0)
     branches[OP_COND_ATK] = lambda: cond(jnp.where(a == 0, s.atk, s.atk_tgt) == h)  # la carte attaque / est attaquée
     branches[OP_ATTACKER] = lambda: put((jnp.arange(n) == s.atk) & (s.atk >= 0) & ((s.st & ST_BDES) == 0)
@@ -1683,7 +1722,7 @@ def begin_act(bank, s, c, e):
     # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
     # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
     tdis = (s.tm_m[:, c] & (s.mv[c] <= s.tm_t) & (s.tm_code == MC_DISABLE)).any() & (s.zone[c] == Z_MZONE)
-    return s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])), ch_dis=tdis,
+    return s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])), ch_dis=tdis, ch_lab=_i(0),
                       ch_src=_i(c), ch_eff=_i(e), ch_p=s.dec_player, ch_k=s.n_chain, pg=_i(PG_COST), pc=_i(0),
                       reg=jnp.zeros((R, n), bool), dec=_i(D_RUN), pend=_i(-1))
 
@@ -1693,7 +1732,8 @@ def push_link(bank, s):
     k, src = s.n_chain, s.ch_src
     s = s._replace(lk_src=s.lk_src.at[k].set(s.ch_src), lk_eff=s.lk_eff.at[k].set(s.ch_eff),
                    lk_p=s.lk_p.at[k].set(s.ch_p), lk_reg=s.lk_reg.at[k].set(s.reg),
-                   lk_neg=s.lk_neg.at[k].set(s.ch_dis), lk_t=s.lk_t.at[k].set(s.clk), n_chain=k + 1, ch_src=_i(-1))
+                   lk_neg=s.lk_neg.at[k].set(s.ch_dis), lk_t=s.lk_t.at[k].set(s.clk), lk_lab=s.lk_lab.at[k].set(s.ch_lab),
+                   n_chain=k + 1, ch_src=_i(-1))
     return _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tg=s.tg.at[src].set(False))),
                     lambda s: open_quick(s, 1 - s.ch_p), s)
 
@@ -1704,6 +1744,7 @@ def load_link(s, k):
     c = jnp.maximum(s.lk_src[k], 0)
     dis = ((s.fl_c[c] & FL_DISABLED) != 0) & (s.zone[c] == Z_MZONE) & (s.mv[c] <= s.lk_t[k])
     return s._replace(ch_k=k, ch_src=s.lk_src[k], ch_eff=s.lk_eff[k], ch_p=s.lk_p[k], reg=s.lk_reg[k] & (s.mv <= s.lk_t[k]),
+                      ch_lab=s.lk_lab[k],
                       pg=_i(PG_RESOLVE), pc=jnp.where(s.lk_neg[k] | dis, P - 1, 0).astype(I32), dec=_i(D_RUN),
                       ev_g=jnp.zeros_like(s.ev_g))
 
@@ -1750,10 +1791,14 @@ def exec_one(bank, s):
                         lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
     def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer), la main du propriétaire ou les bannies
+        # c = 1 : destruction (Duel.Destroy) : les cartes indestructibles par les effets restent ; le registre ne garde
+        # que les cartes détruites (Destroy(...) ~= 0)
+        t = target(s) & ~((c == 1) & ((s.fl_c & FL_INDES_EFF) != 0) & (s.zone == Z_MZONE))
+        s = s._replace(reg=jnp.where(c == 1, s.reg.at[ra].set(t), s.reg))
         return adv(_switch(jnp.where(b == Z_HAND, 1, jnp.where(b == Z_REMOVED, 2, 0)),
-                              [lambda s: group_to_grave(s, target(s)),
-                               lambda s: group_to_hand(bank, s, target(s)),
-                               lambda s: group_send(s, target(s), Z_REMOVED, P_GRAVE)], s))
+                              [lambda s: group_to_grave(s, t),
+                               lambda s: group_to_hand(bank, s, t),
+                               lambda s: group_send(s, t, Z_REMOVED, P_GRAVE)], s))
 
     def fusmat(s):  # matériaux du monstre fusion du registre b, choisis un par un par p (D_SELECT), rangés dans a
         f = jnp.argmax(s.reg[jnp.clip(b, 0, R - 1)])
@@ -1802,7 +1847,7 @@ def exec_one(bank, s):
     branches = [lambda s: s] * N_OPS
     branches[OP_END] = end
     for o in (OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_COND_CHAIN, OP_CHAINCARD, OP_EVENT, OP_COND_TURN,
-              OP_COND_EVP, OP_COND_SELF, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE):
+              OP_COND_EVP, OP_COND_SELF, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_COND_LABEL):
         branches[o] = pure
     branches[OP_CHOOSE] = choose
     branches[OP_LOCK] = lock
@@ -1817,6 +1862,8 @@ def exec_one(bank, s):
     branches[OP_SHUFFLE_HAND] = adv  # l'ordre de la main n'est pas observé : rien à faire
     branches[OP_NEGATE] = lambda s: adv(s._replace(lk_neg=s.lk_neg.at[jnp.clip(s.ch_k - 1, 0, CH - 1)].set(True)))
     branches[OP_PAY_LP] = lambda s: adv(damage(s, p, a))
+    branches[OP_LABEL] = lambda s: adv(s._replace(ch_lab=s.reg[ra].any().astype(I32)))
+    branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
     return _switch(op, branches, s)
 
 
@@ -1957,7 +2004,9 @@ def legal(bank, s, fus=True):
     sp = sp.at[A_POS_ATK].set((s.dec == D_POS) & ((pos_ok & P_FU_ATK) != 0))
     sp = sp.at[A_POS_DEF].set((s.dec == D_POS) & ((pos_ok & P_FU_DEF) != 0))
     sp = sp.at[A_PASS].set((chn & ~(trig_w & (s.tst < 2)))  # les déclencheurs obligatoires ne se refusent pas
-                           | ((s.dec == D_TRIBUTE) & (s.psel == PS_LINK) & lgoal))  # Link : « terminer » la sélection
+                           | ((s.dec == D_TRIBUTE) & (s.psel == PS_LINK) & lgoal)  # Link : « terminer » la sélection
+                           | (s.dec == D_YESNO))
+    sp = sp.at[A_YES].set(s.dec == D_YESNO)
     m = jnp.concatenate([verbs.reshape(-1), sp])
     return m & ~s.done & (s.dec != D_NONE)
 
@@ -2077,7 +2126,9 @@ def apply(bank, s, a):
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
         s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.tp)
-        s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN), pend=_i(-1))
+        lk = (bank.ctype[s.cid[c]] & TYPE_LINK) != 0
+        s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM | jnp.where(lk, ST_LINKSUM, 0)),
+                       pend=_i(-1))
         return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
 
     def position(s):
@@ -2092,13 +2143,15 @@ def apply(bank, s, a):
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
         s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.ch_p)
         s = s._replace(proc=s.proc.at[c].set(s.proc[c] | fromex))
-        return s._replace(st=s.st.at[c].set(ST_SUMMON_TURN), pc=s.pc + 1, dec=_i(D_RUN))
+        return s._replace(st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM), pc=s.pc + 1, dec=_i(D_RUN))
 
     def to_ep(s):
         return open_quick(s, 1 - s.tp, jnp.where(s.dec == D_BATTLE, R_TO_EPB, R_TO_EP), passed=True, chained=False)
 
     def spec(s):
-        return _switch(jnp.where(k < A_ZONE0, k, jnp.where(k < A_POS_ATK, 3, jnp.where(k < A_PASS, 4, 5))), [
+        yn = s.dec == D_YESNO  # oui : l'effet continue ; non (A_PASS) : il s'arrête (dernière instruction, OP_END)
+        return _switch(jnp.where(yn, jnp.where(k == A_YES, 6, 7),
+                                 jnp.where(k < A_ZONE0, k, jnp.where(k < A_POS_ATK, 3, jnp.where(k < A_PASS, 4, 5)))), [
             lambda s: open_quick(s, 1 - s.tp, R_TO_BP, passed=True, chained=False),
             lambda s: open_quick(s, 1 - s.tp, R_TO_M2B, passed=True, chained=False),
             to_ep, zone, position,
@@ -2106,6 +2159,8 @@ def apply(bank, s, a):
                             lambda s: selected_to_grave(s)._replace(dec=_i(D_ZONE), psel=_i(0)),
                             lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
                                             lambda s: pass_priority(bank, s), s), s),
+            lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
+            lambda s: s._replace(pc=_i(P - 1), dec=_i(D_RUN)),
         ], s)
 
     s = _cond((s.dec == D_IDLE) | (s.dec == D_BATTLE), clear_ev, lambda s: s, s)
@@ -2267,10 +2322,10 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0),
-              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, pg=_i(0),
+              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, ch_lab=_i(0), pg=_i(0),
               pc=_i(0), reg=jnp.zeros((R, n), bool), done=f, odraw=f, winner=_i(-1),
               lk_src=jnp.full(CH, -1, I32), lk_eff=jnp.zeros(CH, I32), lk_p=jnp.zeros(CH, I32),
-              lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
+              lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), lk_lab=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
@@ -2279,7 +2334,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
-              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), uid=uid)
+              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), uid=uid)
     s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):
