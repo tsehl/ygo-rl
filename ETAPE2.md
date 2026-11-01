@@ -541,5 +541,5 @@ Résultats :
 | Extra Deck de 15 (`--extra 15`, N = 110 ; fusion, synchro, Xyz, Link tirés au hasard) | 5 759 (10 699 après le volet a) | 3 062 | 144 s (190 s à B = 4096) |
 
 - Baisse depuis le volet a : −27 % sans Extra Deck, −46 % avec. Et avec Extra Deck, le débit **baisse** quand B augmente (1 283 ms/appel à B = 4096, soit ×7,5 pour ×4 parties), alors qu'il montait encore après le volet a. Un calcul grossit plus vite que le lot : à chercher (le compilateur signale des réductions [B, 2, 128, 5], c'est-à-dire l'énumération des 128 sous-ensembles de cases du Link, pour les deux joueurs).
-- Sur CPU, la baisse était peu visible (420 → 328 décisions/s à B = 64, sans Extra Deck) : le CPU ne montre pas ce coût, il faut profiler les volets b à f un par un.
+- Sur CPU, sans Extra Deck, la baisse se voyait déjà (420 → 328 décisions/s à B = 64, −22 %, étalée sur les volets b à f). Le bench CPU de référence tourne sans Extra Deck : il ne voyait pas le surcoût propre aux Extra Decks remplis. Il faut mesurer avec `--extra 15` aussi sur CPU, puis profiler les volets b à f un par un.
 - Coût de la mesure : 0,63 CU (une session L4, ~20 min dont ~8 de compilation et l'envoi du code par morceaux de 24 Ko : un `colab exec -f` de 93 Ko ne passe pas).
