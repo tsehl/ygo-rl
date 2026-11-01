@@ -1965,7 +1965,8 @@ def step(bank, s, a):
         s = settle(bank, refresh_if(bank, s, apply(bank, s, a)))
         return s, forced(bank, s), i + 1
 
-    s = settle(bank, s)
+    # pas de settle initial : s est toujours à une décision (sortie de step ou de new_game), et une seconde copie de
+    # settle doublerait presque la taille du programme compilé (≈ 40 % du HLO de step)
     s, _, _ = lax.while_loop(lambda c: (c[1] >= 0) & ~c[0].done & (c[2] < MAX_ITER), body, (s, _i(a), _i(0)))
     return s
 
@@ -2022,7 +2023,7 @@ def step_batch(bank, s, a, frac=0.0):
         pend = ((c[2] >= 0) & ~c[0].done).sum()
         return (pend > jnp.where(c[3] == 0, 0, frac * nb)) & (c[3] < MAX_ITER)
 
-    s = settle_b(s)
+    # pas de settle_b initial (les états d'entrée sont à une décision) : une seconde copie gonflerait le programme
     m = jnp.zeros((nb, n_actions(s.cid.shape[1])), bool)
     s, m, f, _ = lax.while_loop(more, body, (s, m, a.astype(I32), _i(0)))
     return s, m, f
@@ -2030,6 +2031,8 @@ def step_batch(bank, s, a, frac=0.0):
 def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     """deck0/deck1 : [D] index dans la banque, dans l'ordre d'ajout (dernier = dessus du deck).
     extra0/extra1 : [X] Extra Deck (même taille pour les deux joueurs ; None : aucun), dans l'ordre d'ajout.
+    Rend l'état au début du premier tour, dont la première décision peut être à option unique : l'appelant la joue
+    avec step (forced(bank, s) si >= 0), ou tire une action légale (alors la seule).
 
     key=None : ordre fixe, slots dans l'ordre des decks (pour coller à l'oracle en DUEL_PSEUDO_SHUFFLE).
     Avec une clé : decks mélangés et cartes réparties au hasard dans les slots, pour que ni l'ordre du deck
@@ -2075,7 +2078,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     for p in (0, 1):
         for _ in range(5):
             s = draw(s, p)
-    s = start_turn(s)
-    # la première décision peut elle aussi être à option unique
-    a = forced(bank, s)
-    return jax.lax.cond(a >= 0, lambda s: step(bank, s, a), lambda s: s, s)
+    # pas de step ici : il recompilerait tout le moteur une seconde fois (≈ 2 Go de compilation en plus). La première
+    # décision peut être à option unique (fenêtre de la Draw Phase) : l'appelant la joue avec son propre step
+    # (forced, ou une action légale tirée au hasard, qui est alors la seule)
+    return start_turn(s)

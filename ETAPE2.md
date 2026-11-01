@@ -419,3 +419,16 @@ L'oracle présente le choix du matériau à détacher en msg 15. Sa localisation
 - **MC_NO_DIRECT / FL_NO_DIRECT** (EFFECT_CANNOT_DIRECT_ATTACK) : un monstre sans attaque directe ne peut attaquer que s'il existe un monstre adverse qui peut être attaqué.
 - `ignition(..., opt=OPT_CARD)` (SetCountLimit(1) sans code). Leviathan est exclu des decks des anciens modes (J5D).
 - Mode `xyz` : 16 normaux de niveau 4, 10 de niveau 3, 4 autres ; Extra Deck : 2 Gem-Knight Pearl, 2 Gagagigo, 2 Leviathan. xyz 100/100 (graines 11000-11099 ; sur les 10 premières : 87 invocations Xyz, 38 activations de Leviathan). Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent.
+
+**Mémoire de compilation (2026-11-01).** Un `compare.py` montait à 3,6 Go, et 4 en parallèle dépassaient les 15 Go de la session. Mesures (taille du HLO, RSS après compilation) :
+- `new_game` finissait par `lax.cond(forced >= 0, step, …)` : tout le moteur était compilé une seconde fois dans `new_game` (HLO 20 Mo, +2,2 Go). Dans les boucles de test (`vmap_check`, `obs_check`), deux copies de `step` se trouvaient dans le même programme. `new_game` s'arrête maintenant après `start_turn`. La première décision, éventuellement à option unique (fenêtre de la Draw Phase), est jouée par le `step` de l'appelant : action forcée dans `compare.py`, action légale tirée au hasard (alors la seule) dans les boucles.
+- `step` commençait par un `settle` en plus de celui de sa boucle. Deux copies de `settle` (6,8 Mo chacune) représentaient 77 % du HLO. Les états d'entrée sont toujours à une décision (sortie de `step` ou de `new_game`), donc le `settle` initial est retiré. Même chose pour le `settle_b` initial de `step_batch`.
+- Résultats :
+
+  | | HLO avant | HLO après | Pic avant | Pic après |
+  |---|---|---|---|---|
+  | `step` | 17,6 Mo | 10,9 Mo | 3,3 Go (avec `new_game`) | 1,66 Go |
+  | `step_batch` (B = 64) | 33,7 Mo | 22,4 Mo | 3,1 Go | 2,25 Go |
+
+  `regress.sh` revient à 4 processus (pic total mesuré : 6,8 Go). Toute la non-régression reste verte ; `obs_check`, `vmap_check` et `sb_check` passent. Débit CPU inchangé (350 décisions/s à B = 64, contre 364 : dans le bruit). `new_game + legal` se compile en 23 s au lieu de plusieurs minutes.
+- Gardé : les deux copies de `refresh` dans `refresh_b` (lot complet / sous-lot des parties modifiées) coûtent 4,4 Mo de HLO, mais c'est l'optimisation qui avait doublé le débit.

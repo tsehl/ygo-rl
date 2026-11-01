@@ -157,8 +157,8 @@ def resync_hand(s, so, players):
 
 BANK_CODE = None
 COVER = collections.Counter()  # options jouées (activations par carte, poses, mélanges…)
-# compilé une fois : appelé hors jit, le lax.cond final de new_game recompilerait step à chaque partie (fuite mémoire)
-NEW_GAME = jax.jit(core.new_game)
+NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée est jouée par le step de play()
+FORCED = jax.jit(core.forced)
 
 
 def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None):
@@ -259,6 +259,9 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     duel = driver.Duel(db, decks[0], decks[1], seed=seed, extra0=extra[0], extra1=extra[1])
     ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
     s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
+    a0 = int(FORCED(bank, s))
+    if a0 >= 0:
+        s = step(bank, s, a0)
     ndec = 0
     try:
         while True:
