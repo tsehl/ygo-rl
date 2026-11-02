@@ -553,3 +553,20 @@ Résultats :
 CPU (B = 256, Extra Deck de 15, ms par appel de `step_batch`) : 1 630 → 1 115 (152 → 222 décisions/s). Pour comparaison, sans aucun cache d'Extra Deck : 1 032 ; moteur du volet a : 991. L4, mesure intermédiaire (arrêt anticipé et caches au point de décision, sans la restriction au joueur qui décide) : 7 709 décisions/s à B = 1024 (5 759 avant), 6 215 à B = 4096 (3 062 avant) ; le débit ne baisse plus quand B monte. Coût : 0,27 CU.
 
 Pistes restantes : fusion et rituel encore recalculés dans chaque `refresh_b` ; ~31 tours de `settle_b` par appel ; `group_send` (coûteux surtout sur CPU).
+
+**Décomposition sur L4 (2026-11-02).** Une seule session, 6 variantes du moteur (`bench/engine_bench.py` + cache de compilation persistant : compilations en parallèle, puis mesures une par une ; frac = 0,05, 30 appels, Extra Deck de 15). En décisions/s :
+
+| variante | B = 1024 | B = 4096 |
+|---|---|---|
+| E0 : avant (`4908453`) | 5 514 | 3 062 (session précédente) |
+| E1 : + caches synchro / Xyz / Link au point de décision | 7 060 (+28 %) | 4 677 (+53 %) |
+| E2 : + arrêt anticipé de `run_b` / `settle_b` | 7 801 (+10 %) | 6 255 (+34 %) |
+| E2b : + restriction au joueur qui décide et à D_IDLE (ancienne boucle `fori_loop` d'`extra_link`) | 9 366 (+20 %) | — |
+| E3 : + propagation déroulée (`32b77b3`, code actuel) | 9 413 (+0,5 %, bruit) | 7 003 (+12 % depuis E2) |
+| E3 sans arrêt anticipé | 7 765 | 5 085 |
+
+- Les trois changements de fond comptent : caches au point de décision, arrêt anticipé (+21 % / +38 % dans le code final : il compte d'autant plus que B est grand), restriction au joueur qui décide (+20 %).
+- La propagation déroulée d'`extra_link` n'apporte rien, ni sur L4 ni sur CPU (1 107 ms avec `fori_loop`, 1 115 déroulée). Elle corrigeait seulement la régression de la fermeture par `einsum`. On peut revenir au `fori_loop`, plus petit programme.
+- Total : ×1,71 à B = 1024, ×2,29 à B = 4096. Le débit baisse encore quand B monte (×5,4 de temps par appel pour ×4 parties), mais moins qu'avant (×7,5). Le volet a restait au-dessus (10 699 à B = 1024).
+- Bruit entre sessions : E0 à B = 1024 donne 5 514 ici, 5 759 dans la session précédente (−4 %) ; E2, 7 801 contre 7 709 (+1 %).
+- Coût : 1,06 CU, plus que prévu (~0,6) : 6 compilations en parallèle sur 12 vCPU prennent 5 à 7 min chacune, et il a fallu une seconde vague pour B = 4096 (~15 min de compilation en tout).
