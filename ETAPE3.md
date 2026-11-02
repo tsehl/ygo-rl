@@ -98,3 +98,11 @@ entraînement court sur des decks aléatoires (test de bout en bout) ; 4) arché
 - Le fuzz ne trouve que les erreurs de structure (plantages, états incohérents, blocages). Les erreurs de règle
   (le moteur joue autrement qu'ygopro) demandent l'étape 2 : compiler les cartes générées en Lua et lancer
   `compare.py` dessus.
+
+Résultats (2026-11-02, CPU, 32 parties × 800 décisions par graine, banques de 400 + 80 cartes) :
+- graines 0 à 9 : environ 50 tours par partie, au plus ~25 décisions dans un tour, 16 à 25 activations d'effets par
+  partie, aucun avertissement ;
+- un seul bug trouvé (graine 7) : un effet qui invoque spécialement en défense un monstre Link (Link remis en jeu
+  depuis le cimetière) laissait la décision de position sans action légale. ygopro place toujours un Link en attaque,
+  quelle que soit la position demandée (`special_summon_step`, operations.cpp). Corrigé dans `legal`.
+- Durée : ~350 s par graine sur les 4 cœurs (~750 s quand la non-régression tourne en même temps).

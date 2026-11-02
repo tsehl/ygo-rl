@@ -2105,7 +2105,8 @@ def legal(bank, s, fus=True):
     zok &= ~pact | (jnp.arange(7) == 0) | (jnp.arange(7) == 4)
     sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises
-    pos_ok &= jnp.where(is_lk, P_FU_ATK, -1)  # un Link est toujours en position d'attaque
+    # un Link est toujours en attaque, quelle que soit la position demandée (operations.cpp, special_summon_step)
+    pos_ok = jnp.where(is_lk, P_FU_ATK, pos_ok)
     sp = sp.at[A_POS_ATK].set((s.dec == D_POS) & ((pos_ok & P_FU_ATK) != 0))
     sp = sp.at[A_POS_DEF].set((s.dec == D_POS) & ((pos_ok & P_FU_DEF) != 0))
     sp = sp.at[A_PASS].set((chn & ~(trig_w & (s.tst < 2)))  # les déclencheurs obligatoires ne se refusent pas
