@@ -172,3 +172,58 @@ Fausse piste écartée : vider `ev_g` en fin de chaîne. ygopro vide les événe
 (`break_effect` dans `solve_chain`, déjà fait par `load_link`), mais garde ceux du dernier maillon résolu : un
 piège « quand » sans DELAY répond à une invocation faite par le maillon 1 (Torrential Tribute après Monster Reborn ;
 modes trig et quick de `compare.py`).
+
+## Implémentation, étape 3 : réseau et PPO self-play (2026-11-02)
+
+### Réseau (`train/model.py`)
+
+- Encodeur de cartes : chaque carte de la banque est lue depuis ses briques, jamais depuis un identifiant. Elle
+  donne ~91 tokens : en-tête, E effets, E×3×P instructions, E×NF filtres et 8 filtres de matériaux. Les entiers
+  sont encodés en symlog plus 16 bits de poids faible, pour comparer archétypes, zones et types entre cartes. Un
+  transformer par carte (2 couches) donne un vecteur [d] par carte.
+- Politique : les T=64 tokens de l'observation (`engine/obs.py`) reçoivent le vecteur de leur carte plus leur
+  état visible, et un token global s'y ajoute. Transformer (3 couches), puis logits verbe × token (NV=8) et 14
+  actions spéciales sur le token global. Valeur en tanh. `to_engine` traduit l'indice vers l'action du moteur.
+- d=128 : 1,19 M de paramètres. Jax pur, optax (clip 1.0 + adam 3e-4).
+
+### PPO (`train/ppo.py`)
+
+- Self-play : la même politique joue des deux côtés. GAE par joueur, avec des retenues [B,2] dans un scan inverse.
+  Récompense ±1 en fin de partie.
+- Rollout de `--steps` appels de `step_batch` sur B parties. Une partie finie est remplacée par une partie
+  d'une réserve à usage unique, régénérée quand plus de 25 % a servi.
+- Banque procédurale neuve toutes les 10 itérations. Mise à jour : 2 époques, minibatchs sur l'axe des parties,
+  encodage des cartes recalculé à chaque minibatch.
+- Évaluation : réseau contre une politique aléatoire, sur une banque jamais vue en entraînement (graine 1 000 000).
+  Le côté du réseau alterne d'une partie à l'autre.
+
+### Premier run (L4, 2026-11-02)
+
+`--b 1024 --steps 64 --mb 8`, d=128, 3 couches.
+- Compilation : ~8 min.
+- 22,5 s par itération (62,7k décisions) :
+  - rollout ~11 s, dont ~10,5 s pour le moteur et la politique ;
+  - mise à jour ~11 s.
+- Débit global : ~2,8k décisions/s. Le moteur plus la politique seuls font ~6k/s, la moitié des 12,4k du bench
+  aléatoire (cartes réelles, Extra Deck 15). Cartes procédurales plus chargées en effets ? À mesurer.
+- Mémoire GPU : 21 Go.
+
+| itération | contre l'aléatoire (≈1000 parties) | entropie |
+|---|---|---|
+| 9 | 66,3 % | 1,07 |
+| 19 | 81,1 % | 0,88 |
+| 49 | 87,7 % | — |
+
+- Le nombre de parties finies par itération passe de 33 à ~600 : les parties raccourcissent, la politique
+  gagne vite.
+- La session Colab a disparu vers 75 min, sans erreur dans le log. On a perdu la fin du log et les paramètres :
+  `params.pkl` était sur le disque de la VM. Prochain run : relever le log souvent et copier les paramètres
+  hors de la VM.
+
+Le pipeline fonctionne de bout en bout : il apprend et généralise à une banque nouvelle contre l'aléatoire.
+Mais battre l'aléatoire est un critère faible.
+
+Suite :
+1. Réduire le coût de la mise à jour (la moitié du temps).
+2. Comprendre l'écart de débit du moteur sur les cartes procédurales.
+3. Évaluer contre des versions passées de la politique et sur les vraies cartes (benchmark).
