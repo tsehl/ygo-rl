@@ -43,7 +43,7 @@ def dump(cset, s):
     import numpy as np
     zn = {v: k for k, v in compare.ZNAME.items() if k != "deck"}
     st = {k: np.asarray(v) for k, v in s._asdict().items() if hasattr(v, "shape")}
-    print(f"   tour {int(s.turn)} joueur du tour {int(s.tp)} phase {int(s.phase):#x} décide {int(s.dec_player)}")
+    print(f"   LP {[int(x) for x in s.lp]} tour {int(s.turn)} joueur du tour {int(s.tp)} phase {int(s.phase):#x} décide {int(s.dec_player)}")
     seen = set()
     for i in np.argsort(st["zone"] * 1000 + st["ctrl"] * 100 + st["seq"]):
         z = int(st["zone"][i])

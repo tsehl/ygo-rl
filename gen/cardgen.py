@@ -38,7 +38,7 @@ from core import (BIG, E, P, PT, NF, NSET, Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_G
                   EV_TO_GRAVE, EV_BATTLE_DESTROYED, EV_FLIP, OPT_NONE, OPT_NAME, OPT_CARD, PH_MAIN1, PH_MAIN2,
                   PH_BATTLE, MC_ATK, MC_DEF, MC_DISABLE, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, MC_INDES_EFF, MC_NO_DIRECT, DMG_STEP, DMG_STAT,
-                  RIT_GREATER, RIT_EQUAL, ST_SUMMON_TURN, ST_LINKSUM, LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T,
+                  RIT_GREATER, RIT_EQUAL, ST_SUMMON_TURN, ST_FLIP_TURN, ST_LINKSUM, LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T,
                   LM_TR)
 
 CODE0 = 600_000_000
@@ -333,7 +333,7 @@ class Gen:
                      tgt=self.qual(dict(op=Z_MZONE, typ=TYPE_MONSTER), 1, stats=False))
         elif r == "no_attack":
             c.update(code=MC_NO_ATTACK, tgt=self.pick([dict(op=Z_MZONE, lv=(self.pick([4, 5, 7]), BIG)),
-                                                      dict(op=Z_MZONE, st=ST_SUMMON_TURN),
+                                                      dict(op=Z_MZONE, st=ST_SUMMON_TURN | ST_FLIP_TURN),
                                                       dict(op=Z_MZONE, atk=(self.pick([1500, 2000]), BIG))]))
         elif r == "no_btarget":
             c.update(code=MC_NO_BTARGET, cnt=(dict(me=Z_MZONE), 2, BIG))
@@ -382,7 +382,10 @@ class Gen:
         for _ in range(20):
             effs, used = [], []
             for _ in range(n):
-                k = self.pick(kinds, [kinds_w[x] * (0.3 if x in used else 1) for x in kinds])
+                # au plus un déclencheur par carte : le moteur ne garde qu'un effet déclenché en attente par carte
+                # (tg / tg_e), ygopro les propose tous (deux événements simultanés : cimetière + détruit au combat)
+                k = self.pick(kinds, [kinds_w[x] * (0 if x == "trigger" and x in used else 0.3 if x in used else 1)
+                                      for x in kinds])
                 used.append(k)
                 effs.append(self.effect(k, c))
             v = sum(value(e) for e in effs)
