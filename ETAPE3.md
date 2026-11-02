@@ -46,3 +46,55 @@ Décidé le 2026-10-29. Document de travail : il évoluera avec le moteur.
 - Proportions du mélange structuré / aléatoire.
 - Quand introduire l'évolution des decks (dès le début, ou après un agent de base).
 - Taille du banc d'évaluation, et choix des vrais decks qui le composent (limités aux cartes que le moteur sait jouer à ce moment-là).
+
+## Implémentation, étape 1 : générateur minimal et robustesse (2026-11-02)
+
+Ordre de travail retenu (2026-11-02) : 1) générateur minimal et fuzz du moteur ; 2) compilateur vers Lua pour
+vérifier les cartes générées contre ygopro-core ; 3) encodage de l'arbre d'effets, réseau, PPO, premier
+entraînement court sur des decks aléatoires (test de bout en bout) ; 4) archétypes et decks structurés ;
+5) évolution des decks et banc d'évaluation.
+
+### Générateur (`gen/cardgen.py`)
+
+- Une carte est d'abord une **spécification** (dict Python), traduite ensuite en briques (`bricks`, puis
+  `cards.assemble` et `core.make_bank` dans `to_bank`). L'étape 2 ajoutera une seconde traduction, vers Lua, à
+  partir de la même spécification : c'est pour ça que le générateur ne tire pas directement des instructions.
+- Effet = genre (`act` pour les magies / pièges, `ignition`, `trigger`, `quick`, `cont`), événements, une fois par
+  tour, conditions, coût, puis 1 ou 2 clauses.
+- Clause = **verbe × sélecteur** (`destroy`, `banish`, `bounce`, `tograve`, `tohand`, `ss`, `atk`, `disable`, sur
+  `target` : cible à l'activation ; `all` : tout le filtre ; `pick` : choix à la résolution ; `event` : cartes de
+  l'événement ; `self` : la carte elle-même), ou action sans carte (`draw`, `damage`, `recover`, `burn_per`, `negate`,
+  `chain_destroy`). Une seconde clause (« puis ») ne s'applique que si la première a touché une carte.
+- Les gabarits de briques sont ceux des vraies cartes vérifiées (Pot of Greed, MST, Trap Hole, Monster Reborn,
+  Emergency Call, Back-Up Rider, Effect Veiler, Magic Jammer, Ghost Ogre…) ; seules leurs combinaisons sont
+  nouvelles. Registres : coût dans 2-3, sélection de la première clause dans 0-1 (la cible reste dans 1 jusqu'à la
+  résolution), refiltrage à la résolution dans 2.
+- Cadres : monstres normaux (dont Syntoniseurs et pendules normaux), monstres à effet, rituels avec leur sort,
+  magies normales / jeu-rapide / continues, sorts de fusion (gabarit de Polymerization, éventuellement limité à un
+  archétype), pièges normaux / continus / contre-pièges, monstres fusion / synchro / Xyz / Link (recettes par
+  filtres ; fusion parfois par nom de carte du deck principal).
+- Garde-fous : un effet d'ignition ou rapide sans coût qui consomme une carte est toujours « une fois par tour »
+  (sinon boucle infinie offerte à l'agent) ; un effet doit tenir dans les tableaux du moteur (`fits` : PT, P, NF).
+- **Budget grossier** (`value`, en cartes d'avantage) : valeur par clause × vitesse (rapide ×1,25, répétable ×1,3)
+  − coût − conditions ; une carte dépasse rarement `CARD_CAP` = 2,6 ; les stats d'un monstre à effet perdent
+  900 ATK+DEF par point de valeur (référence : `STAT_BUDGET` par niveau). À recalibrer sur les taux de victoire.
+- Archétypes : pour l'instant, 30 % des monstres reçoivent un setcode tiré parmi 8 (`SETS`), sans structure ;
+  l'étape 4 fera de vrais archétypes. Codes des cartes générées : `CODE0` = 600 000 000 et plus.
+- `to_bank` complète `tprog` à 2 × PT instructions : toutes les banques procédurales ont les mêmes formes, une seule
+  compilation sert pour toutes les graines (la banque est un argument de la fonction compilée).
+- `python gen/cardgen.py --seed S` affiche une banque en clair (`describe`).
+
+### Robustesse (`gen/fuzz.py`)
+
+- Parties aléatoires (actions légales uniformes, `vmap(step)`), B parties par graine de banque, decks de 40 cartes
+  + Extra Deck de 15 tirés sans structure (`random_decks`).
+- Après chaque décision, `check` vérifie : une action légale existe ; aucune case de terrain occupée deux fois ;
+  zones ordonnées contiguës ; matériaux Xyz rattachés à un Xyz du même contrôleur (exception : pendant l'invocation
+  Xyz, les matériaux sont attachés avant le choix de la case et de la position) ; pas de monstre de l'Extra Deck en
+  main ou dans le deck ; LP > 0 si la partie continue ; chaîne dans [0, CH] ; positions valides ; pas de décision
+  interne (D_RUN, D_TRIG) rendue à la politique ; contrôleur et propriétaire valides.
+- Avertissements (limites des tables, comportement alors approché) : KM, TM, EXK, tables par nom KO pleines,
+  plus de KC effets candidats.
+- Le fuzz ne trouve que les erreurs de structure (plantages, états incohérents, blocages). Les erreurs de règle
+  (le moteur joue autrement qu'ygopro) demandent l'étape 2 : compiler les cartes générées en Lua et lancer
+  `compare.py` dessus.

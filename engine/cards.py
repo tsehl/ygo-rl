@@ -287,8 +287,13 @@ CARDS = {
 }
 
 
-def assemble(codes, cards=CARDS):
-    """codes : [C] ids → (ekind [C,E], prog [C,E,3,P,4], filt [C,E,NF,FW]) en numpy."""
+def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None, ritual=None):
+    """codes : [C] ids → (ekind [C,E], prog [C,E,3,P,4], filt [C,E,NF,FW]) en numpy.
+    fusion / synchro / xyz / link / ritual : recettes (mêmes formats que FUSION, SYNCHRO, XYZ, LINK, RITUAL) ;
+    None : celles de ce module (cartes procédurales : gen/cardgen.py)."""
+    FUSION_, SYNCHRO_, XYZ_, LINK_, RITUAL_ = (FUSION if fusion is None else fusion, SYNCHRO if synchro is None else synchro,
+                                               XYZ if xyz is None else xyz, LINK if link is None else link,
+                                               RITUAL if ritual is None else ritual)
     c = len(codes)
     ekind = np.zeros((c, E), np.int32)
     prog = np.zeros((c, E, 3, P, 4), np.int32)
@@ -327,32 +332,32 @@ def assemble(codes, cards=CARDS):
     erl = np.zeros(c, np.int32)
     dflt = F()
     for i, code in enumerate(codes):
-        for j, f in enumerate(FUSION.get(code, ())):
+        for j, f in enumerate(FUSION_.get(code, ())):
             # recette : seuls les champs de core.MAT_FIELDS sont lus (la zone est la main et le terrain)
             assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             fmat[i, j] = f
-        fmn[i] = len(FUSION.get(code, ()))
-        erl[i] = int(code in FUSION or code in RITUAL or code in SYNCHRO or code in XYZ or code in LINK)
+        fmn[i] = len(FUSION_.get(code, ()))
+        erl[i] = int(code in FUSION_ or code in RITUAL_ or code in SYNCHRO_ or code in XYZ_ or code in LINK_)
     smat = np.zeros((c, 2, len(F())), np.int32)
     syn = np.zeros(c, np.int32)
     for i, code in enumerate(codes):
-        if code in SYNCHRO:
-            for j, f in enumerate(SYNCHRO[code]):
+        if code in SYNCHRO_:
+            for j, f in enumerate(SYNCHRO_[code]):
                 assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
                 smat[i, j] = f
             syn[i] = 1
     xmat = np.zeros((c, len(F())), np.int32)
     xct = np.zeros(c, np.int32)
     for i, code in enumerate(codes):
-        if code in XYZ:
-            f, k = XYZ[code]
+        if code in XYZ_:
+            f, k = XYZ_[code]
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             xmat[i], xct[i] = f, k
     lmat = np.zeros((c, len(F())), np.int32)
     lmin, lmax, lneed, ldiff = (np.zeros(c, np.int32) for _ in range(4))
     for i, code in enumerate(codes):
-        if code in LINK:
-            f, lmin[i], lmax[i], lneed[i], *dd = LINK[code]
+        if code in LINK_:
+            f, lmin[i], lmax[i], lneed[i], *dd = LINK_[code]
             ldiff[i] = dd[0] if dd else 0
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             lmat[i] = f
