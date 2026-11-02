@@ -79,7 +79,9 @@ EV_SUMMON, EV_FLIP_SUMMON, EV_SPSUMMON, EV_ATTACK, EV_TO_GRAVE, EV_BATTLE_DESTRO
 NEV = 8  # EV_PRE_DMG : EVENT_PRE_DAMAGE_CALCULATE (attaquant et cible, au début de la fenêtre du calcul des dommages)
 # suite d'une fenêtre W_QUICK fermée sans chaîne (`chained` : une chaîne s'est résolue depuis l'ouverture)
 R_IDLE, R_BATTLE, R_TO_BP, R_TO_EP, R_TO_M2B, R_TO_EPB, R_DP, R_PHASE, R_ATK1, R_ATK2, R_DMG1, R_DMG2, \
-    R_DS1, R_DS2, R_DS3 = range(15)
+    R_DS1, R_DS2, R_DS3, R_HAND = range(16)
+# R_HAND : après la défausse de fin de tour (PhaseEvent, étapes 21-22 : point d'événement, puis nouveau contrôle de la
+# limite de main ; les déclencheurs optionnels de la End Phase ne sont plus proposés, hand_adjusted)
 # damage step (BattleCommand d'ygopro, MR5) : R_DS1 début (étape 20), R_DS2 après le retournement de la cible (22),
 # R_DS3 calcul des dommages (24, PHASE_DAMAGE_CAL), puis R_DMG1 après le calcul (32) et R_DMG2 après l'envoi au
 # cimetière (34). dstep : DS_BEFORE (fenêtres 1-2), DS_CAL (3), DS_AFTER (après le calcul)
@@ -330,6 +332,7 @@ class State(NamedTuple):
     df_c: jnp.ndarray    # [N]
     batk_c: jnp.ndarray  # [N] ATK de base courante (GetBaseAttack)
     tm_code: jnp.ndarray  # [TM] MC_* (dans l'ordre de création ; table vidée en fin de tour)
+    tm_src: jnp.ndarray  # [TM] carte source du modificateur (propriétaire de l'effet)
     tm_m: jnp.ndarray    # [TM, N] cartes concernées (une carte déplacée depuis tm_t en sort, RESETS_STANDARD)
     tm_v: jnp.ndarray    # [TM, N] valeur par carte
     tm_t: jnp.ndarray    # [TM] horloge de déplacement à la création
@@ -700,7 +703,8 @@ def keep_perm(s):
     o = jnp.argsort(jnp.where(keep, 0, 1) * TM + jnp.arange(TM))
     k = keep[o]
     return s._replace(tm_code=jnp.where(k, s.tm_code[o], 0), tm_m=s.tm_m[o] & k[:, None], tm_v=s.tm_v[o],
-                      tm_t=s.tm_t[o], tm_dur=s.tm_dur[o], tm_rd=s.tm_rd[o], tm_n=keep.sum().astype(I32))
+                      tm_t=s.tm_t[o], tm_dur=s.tm_dur[o], tm_rd=s.tm_rd[o], tm_src=s.tm_src[o],
+                      tm_n=keep.sum().astype(I32))
 
 
 def start_turn(s):
@@ -836,6 +840,7 @@ def quick_end(bank, s):
         lambda s: ds_next(bank, s, lambda s: ds_flip(bank, s)),                     # R_DS1
         lambda s: ds_next(bank, s, lambda s: ds_cal(bank, s)),                      # R_DS2
         lambda s: ds_next(bank, s, lambda s: ds_damage(bank, s)),                   # R_DS3
+        end_phase,                                                                  # R_HAND
     ], clear_ev(s))
 
 
@@ -920,9 +925,14 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     nolv = (bank.ctype[s.cid] & (TYPE_XYZ | TYPE_LINK)) != 0  # sans niveau : seulement un filtre sans borne
     m &= jnp.where(nolv, (f[F_LV_LO] <= -BIG) & (f[F_LV_HI] >= BIG), (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI]))
     # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
-    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc))
-    m &= (f[F_FUS] == 0) | s.fz_c
-    m &= (f[F_RIT] == 0) | (((s.rz_c >> jnp.maximum(f[F_RIT] - 1, 0)) & 1) != 0)
+    # F_SPSUM = 2 : en défense seulement (IsCanBeSpecialSummoned(..., POS_FACEUP_DEFENSE)), jamais un Link
+    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc)
+                              & ~((f[F_SPSUM] == 2) & ((bank.ctype[s.cid] & TYPE_LINK) != 0)))
+    # fusion / rituel : SummonEffFilter et Ritual.Filter demandent aussi IsCanBeSpecialSummoned (fl_c est à jour ici,
+    # pas forcément quand fz_c / rz_c sont calculés)
+    nss = (s.fl_c & FL_NO_SS) == 0
+    m &= (f[F_FUS] == 0) | (s.fz_c & nss)
+    m &= (f[F_RIT] == 0) | ((((s.rz_c >> jnp.maximum(f[F_RIT] - 1, 0)) & 1) != 0) & nss)
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
     m &= ((f[F_ZX] & ZX_COLINK) == 0) | s.cl_c
     m &= ((f[F_ZX] & ZX_MAIN) == 0) | (s.seq < N_MAIN_ZONES)
@@ -995,6 +1005,10 @@ def stats(bank, s):
     ccode = jnp.where(off, MC_NONE, ccode)
     tm_m = s.tm_m & ~(s.tm_rd[:, None] & dis[None, :])  # RESET_DISABLE
     ttgt &= tm_m
+    # un modificateur posé par une carte sur elle-même est suspendu tant qu'elle est annulée (effect::is_available :
+    # owner == handler, pas EFFECT_FLAG_CANNOT_DISABLE)
+    ttgt &= ~((jnp.arange(s.cid.shape[0])[None, :] == s.tm_src[:, None]) & dis[None, :]
+              & (s.tm_code != MC_DISABLE)[:, None])
     # immunité : les effets continus de piège ne s'appliquent pas aux monstres immunisés
     imm = (ctgt & (ccode == MC_IMM_TRAP)[:, None]).any(0)
     ctgt &= ~(ctrap[:, None] & imm[None, :] & (ccode != MC_IMM_TRAP)[:, None] & (ccode != MC_DISABLE)[:, None])
@@ -1900,6 +1914,10 @@ def exec_one(bank, s):
                      lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
     def spsummon(s):
+        # un Link ne peut pas être invoqué sans la position d'attaque (field::is_player_can_spsummon : sumpos &=
+        # POS_FACEUP_ATTACK, puis refus si sumpos == 0) : il reste où il est
+        lk = (bank.ctype[s.cid] & TYPE_LINK) != 0
+        s = s._replace(reg=s.reg.at[ra].set(s.reg[ra] & ~(lk & ((b & P_FU_ATK) == 0))))
         return _cond(s.reg[ra].any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
 
     def lock(s):  # p ne peut plus activer les effets des cartes de ce nom ce tour
@@ -1924,7 +1942,7 @@ def exec_one(bank, s):
         return adv(s._replace(tm_code=s.tm_code.at[j].set(b & 31), tm_m=s.tm_m.at[j].set(m),
                               tm_rd=s.tm_rd.at[j].set(((b >> 13) & 1) != 0),
                               tm_v=s.tm_v.at[j].set(jnp.where(m, v, 0)), tm_t=s.tm_t.at[j].set(s.clk + 1), clk=s.clk + 1,
-                              tm_dur=s.tm_dur.at[j].set((b >> 9) & 15),
+                              tm_dur=s.tm_dur.at[j].set((b >> 9) & 15), tm_src=s.tm_src.at[j].set(h),
                               tm_n=jnp.minimum(s.tm_n + 1, TM), ovf=s.ovf | jnp.where(s.tm_n >= TM, 2, 0).astype(I32)))
 
     def damage_(s):
@@ -1981,7 +1999,8 @@ def act_cand(bank, s):
     pend_hand = in_hand & ((ct & TYPE_PENDULUM) != 0) & (~us[0] | ~us[4])  # vers une zone pendule libre
     faceup_mon = my_mon & ((s.pos & P_FACEUP) != 0)
     trig_w = chn & (s.wk == W_TRIG)
-    fast = bat | (chn & ~trig_w)                       # vitesse 2 minimum
+    # main ajustée en End Phase (hand_adjusted) : pas de fenêtre libre, seulement les réponses à une chaîne
+    fast = bat | (chn & ~trig_w & ~((s.wk == W_QUICK) & (s.ret == R_HAND) & (s.n_chain == 0)))  # vitesse 2 minimum
     top = jnp.clip(s.n_chain - 1, 0, CH - 1)
     top_spd = jnp.where(s.n_chain > 0, speed(bank, s.cid[jnp.maximum(s.lk_src[top], 0)], s.lk_eff[top]), 0)
     evb = ev_bits(s)
@@ -2069,8 +2088,8 @@ def legal(bank, s, fus=True):
     trib_ok = ((free_m > 0) | mainz | (mainz & ~unsel).any()
                | ((s.need >= 2) & (mainz & unsel).any()))
     idle, bat, chn = s.dec == D_IDLE, s.dec == D_BATTLE, s.dec == D_CHAIN
-    # invocation par procédure (synchro, Xyz, Link) : V_SUMMON sur le monstre de l'Extra Deck
-    can_syn = (s.zone == Z_EXTRA) & (s.ctrl == p) & (s.sz_c | s.xz_c | s.lz_c)
+    # invocation par procédure (synchro, Xyz, Link) : V_SUMMON sur le monstre de l'Extra Deck, sauf interdiction (FL_NO_SS)
+    can_syn = (s.zone == Z_EXTRA) & (s.ctrl == p) & (s.sz_c | s.xz_c | s.lz_c) & ((s.fl_c & FL_NO_SS) == 0)
     verbs = [
         idle & (can_ns | can_syn | ((jnp.arange(n) == pl) & can_pend)),
         idle & can_ns,
@@ -2105,8 +2124,7 @@ def legal(bank, s, fus=True):
     zok &= ~pact | (jnp.arange(7) == 0) | (jnp.arange(7) == 4)
     sp = sp.at[A_ZONE0:A_ZONE0 + 7].set((s.dec == D_ZONE) & zok)
     pos_ok = jnp.where(s.zctx == ZC_SPSUM, current_ins(bank, s)[2], P_FU_ATK | P_FU_DEF)  # positions permises
-    # un Link est toujours en attaque, quelle que soit la position demandée (operations.cpp, special_summon_step)
-    pos_ok = jnp.where(is_lk, P_FU_ATK, pos_ok)
+    pos_ok &= jnp.where(is_lk, P_FU_ATK, -1)  # un Link est toujours en position d'attaque
     sp = sp.at[A_POS_ATK].set((s.dec == D_POS) & ((pos_ok & P_FU_ATK) != 0))
     sp = sp.at[A_POS_DEF].set((s.dec == D_POS) & ((pos_ok & P_FU_DEF) != 0))
     sp = sp.at[A_PASS].set((chn & ~(trig_w & (s.tst < 2)))  # les déclencheurs obligatoires ne se refusent pas
@@ -2178,7 +2196,8 @@ def apply(bank, s, a):
 
         def discard(s):
             s = pick(s)
-            return _cond(s.need == 0, lambda s: start_turn(selected_to_grave(bank, s)), lambda s: s, s)
+            return _cond(s.need == 0, lambda s: trig_point(bank, open_quick(selected_to_grave(bank, s), s.tp, R_HAND,
+                                                                            chained=False)), lambda s: s, s)
 
         def eff_select(s):
             def done(s):
@@ -2277,7 +2296,9 @@ def apply(bank, s, a):
         fromex = (s.zone[c] == Z_EXTRA) | (current_ins(bank, s)[3] != 0)
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
-        s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.ch_p)
+        # Duel.SpecialSummon : EVENT_SPSUMMON_SUCCESS avec ep = PLAYER_NONE (operations.cpp, special_summon, étape 4) ;
+        # une procédure (proc_place, pend_next) donne ep = le joueur qui invoque
+        s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, _i(2))
         s = s._replace(proc=s.proc.at[c].set(s.proc[c] | fromex))
         return s._replace(st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM), pc=s.pc + 1, dec=_i(D_RUN))
 
@@ -2494,7 +2515,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, opt_cid=jnp.zeros((2, KO), I32),
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
-              tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_n=_i(0),
+              tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
               xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), ps_used=f, uid=uid)

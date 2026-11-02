@@ -103,6 +103,72 @@ Résultats (2026-11-02, CPU, 32 parties × 800 décisions par graine, banques de
 - graines 0 à 9 : environ 50 tours par partie, au plus ~25 décisions dans un tour, 16 à 25 activations d'effets par
   partie, aucun avertissement ;
 - un seul bug trouvé (graine 7) : un effet qui invoque spécialement en défense un monstre Link (Link remis en jeu
-  depuis le cimetière) laissait la décision de position sans action légale. ygopro place toujours un Link en attaque,
-  quelle que soit la position demandée (`special_summon_step`, operations.cpp). Corrigé dans `legal`.
+  depuis le cimetière) laissait la décision de position sans action légale. ygopro refuse une invocation spéciale
+  sans la position d'attaque pour un Link (`field::is_player_can_spsummon` : `sumpos &= POS_FACEUP_ATTACK`, refus
+  si `sumpos == 0`) : le Link reste où il est, et `IsCanBeSpecialSummoned(..., POS_FACEUP_DEFENSE)` est faux.
+  Corrigé dans `spsummon` (exec_one) et dans `filter_mask` (F_SPSUM = 2, en défense seulement : jamais un Link).
 - Durée : ~350 s par graine sur les 4 cœurs (~750 s quand la non-régression tourne en même temps).
+
+## Implémentation, étape 2 : cartes générées contre l'oracle (2026-11-02)
+
+### Compilation vers Lua (`gen/tolua.py`, `gen/procgen.lua`)
+
+- Chaque carte devient `c<code>.lua` : un en-tête (la description de `describe`), la spécification en table Lua
+  (`s.spec`), et `s.initial_effect` qui appelle `PG.init`. Toute la sémantique est dans une bibliothèque commune,
+  `gen/procgen.lua` (table `PG`, chargée par `Duel.LoadScript`), qui interprète la spécification comme le fait
+  `cardgen.bricks` côté moteur. Les gabarits Lua sont ceux des vraies cartes qui ont servi de modèle aux briques
+  (Trap Hole, Torrential Tribute, Magic Jammer, Ghost Ogre, Man-Eater Bug, Penguin Soldier, Banner of Courage,
+  Gravity Bind, Skill Drain, Polymerization par `Fusion.RegisterSummonEff`, rituels par
+  `Ritual.AddProcGreaterCode` / `AddProcEqualCode`, procédures `Fusion.AddProcMix`, `Synchro.AddProcedure`,
+  `Xyz.AddProcedure`, `Link.AddProcedure`, `Pendulum.AddProcedure`).
+- Correspondances à respecter :
+  - « puis » : la seconde clause ne passe que si la première a touché une carte (`Duel.Destroy(...)>0`, sinon
+    `#g>0`) ; une clause sans carte passe toujours ;
+  - une fois par tour : OPT_NAME → `SetCountLimit(1,id)` (le nom est partagé par tous les effets de la carte),
+    OPT_CARD → `SetCountLimit(1)` ;
+  - chaque effet porte la description `aux.Stringid(id, idx)` ; `compare.translate` en tire l'effet du moteur
+    (`desc >> 20 == code`, `desc & 0xFFFFF` = idx). Un déclencheur optionnel seul hors chaîne passe par
+    SelectEffectYesNo avec la description 221 (processor.cpp) : traduit vers l'effet K_TRIG_O de la carte ;
+  - un déclencheur optionnel a `EFFECT_FLAG_DELAY` (il ne « rate » pas son moment) ; un piège sur événement n'en a
+    pas (Trap Hole) ;
+  - matériau de fusion sans contrainte : `aux.TRUE` (un `nil` dans la liste variadique d'`AddProcMix` la coupe) ;
+  - filtre de matériau synchro appelé sans contexte d'invocation par `Synchro.NonTuner` : `IsAttribute` & co
+    sans argument d'invocation dans ce cas.
+- `cdb_rows` donne les lignes de `cards.cdb` (setcode packé sur 16 bits, `level | lsc << 24 | rsc << 16`) ;
+  `driver.CardDB.add` les ajoute, `driver.SCRIPTS` reçoit le dossier des scripts de la banque.
+
+### Comparaison (`gen/compare_gen.py`)
+
+- Pour chaque graine de banque : génération, écriture des scripts dans `/tmp/ygo-gen/<b>`, puis parties avec la
+  boucle de `engine/compare.py` (`play(..., mode="gen", given=decks)`), decks de 40 + Extra Deck de 15 tirés au
+  hasard dans la banque. `--dump` décrit les cartes en jeu au moment d'un écart.
+- Restriction du générateur : pas de filtre de stats dans la cible d'un modificateur continu d'ATK / DEF. ygopro
+  évalue la cible pendant le calcul de l'ATK (`GetAttack` y rend la valeur temporaire), le moteur sur les stats
+  de base ; reproduire ce point fixe ne vaut pas le coût.
+- Restriction du générateur : au plus un déclencheur par carte. Le moteur ne garde qu'un effet déclenché en
+  attente par carte (`tg` / `tg_e`) ; ygopro propose tous ceux dont l'événement est arrivé, y compris deux
+  événements simultanés (envoyé au cimetière + détruit au combat). À lever si les archétypes de l'étape 4 en
+  ont besoin (il faudrait `tg` en [E, N]).
+- Filtre « invoqué ce tour » (Big-Tusked Mammoth) : `st = ST_SUMMON_TURN | ST_FLIP_TURN`, comme la vraie carte
+  (le moteur ne pose que ST_FLIP_TURN lors d'une invocation par flip).
+
+Écarts trouvés et corrigés dans le moteur (règles réelles, vérifiées contre ygopro-core) :
+- **Interdiction d'invocation spéciale** (EFFECT_CANNOT_SPECIAL_SUMMON sur l'Extra Deck ou la main) : elle
+  bloquait les effets « invoquez spécialement » mais pas les sorts de fusion, les rituels ni les procédures
+  synchro / Xyz / Link. Ajoutée à F_FUS, F_RIT (`filter_mask`) et à `can_syn` (`legal`).
+- **Défausse de fin de tour** : ygopro ouvre un point d'événement après la défausse (PhaseEvent, étapes 21-22 :
+  déclencheurs « envoyé au cimetière », réponses à leur chaîne), sans fenêtre libre (`hand_adjusted`), puis
+  recontrôle la limite de main. Le moteur passait directement au tour suivant. Nouveau retour de fenêtre R_HAND.
+- **Modificateur posé par une carte sur elle-même** (« +300 ATK à vos monstres », la source comprise) : suspendu
+  tant que la carte est annulée (`effect::is_available` : owner == handler, sans EFFECT_FLAG_CANNOT_DISABLE ; il
+  revient si l'annulation cesse). Nouveau champ `tm_src` de la table des modificateurs temporaires.
+
+- **Joueur de l'événement d'une invocation spéciale par effet** : Duel.SpecialSummon lève EVENT_SPSUMMON_SUCCESS
+  avec `ep = PLAYER_NONE` (operations.cpp, `special_summon`, étape 4) ; seules les procédures (synchro / Xyz / Link,
+  pendule) donnent le joueur qui invoque. Un piège généré « quand l'adversaire invoque spécialement » (condition
+  `evp`, qui lit `ep`) ne répond donc qu'aux procédures. `eff_position` lève l'événement avec le joueur 2.
+
+Fausse piste écartée : vider `ev_g` en fin de chaîne. ygopro vide les événements au début de chaque maillon
+(`break_effect` dans `solve_chain`, déjà fait par `load_link`), mais garde ceux du dernier maillon résolu : un
+piège « quand » sans DELAY répond à une invocation faite par le maillon 1 (Torrential Tribute après Monster Reborn ;
+modes trig et quick de `compare.py`).
