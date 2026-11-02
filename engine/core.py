@@ -161,6 +161,7 @@ RIT_GREATER, RIT_EQUAL = 1, 2
 RIT_MON = TYPE_MONSTER | TYPE_RITUAL  # les sorts rituels ont aussi TYPE_RITUAL
 LVMAX, SMAX = 12, 26  # niveaux des matériaux ; sommes suivies (masques de bits) jusqu'à SMAX
 EXK = 32        # monstres fusion de l'Extra Deck évalués par refresh (fz_c)
+EXP = 16        # monstres synchro / Xyz / Link de l'Extra Deck du joueur qui décide évalués par refresh_ex (15 au plus)
 BIG = 1 << 20
 
 # actions : verbe × slot, puis actions spéciales
@@ -1094,12 +1095,6 @@ def refresh_b(bank, prev, s, frac=8):
         s = lax.cond(fus, lambda s: jax.vmap(lambda x: refresh_fus(bank, x))(s), lambda s: s, s)
         rit = jax.vmap(lambda x: has_ritual(bank, x))(s).any()
         s = lax.cond(rit, lambda s: jax.vmap(lambda x: refresh_rit(bank, x))(s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
-        syn = jax.vmap(lambda x: has_synchro(bank, x))(s).any()
-        s = lax.cond(syn, lambda s: jax.vmap(lambda x: refresh_syn(bank, x))(s), lambda s: s._replace(sz_c=s.sz_c & False), s)
-        xyz = jax.vmap(lambda x: has_xyz(bank, x))(s).any()
-        s = lax.cond(xyz, lambda s: jax.vmap(lambda x: refresh_xyz(bank, x))(s), lambda s: s._replace(xz_c=s.xz_c & False), s)
-        lnk = jax.vmap(lambda x: has_link(bank, x))(s).any()
-        s = lax.cond(lnk, lambda s: jax.vmap(lambda x: refresh_link(bank, x))(s), lambda s: s._replace(lz_c=s.lz_c & False), s)
         return jax.vmap(lambda x: refresh(bank, x, fus=False))(s)
 
     def sub(s):  # tout l'état est réécrit : ne réécrire que les champs de refresh est plus lent (mesuré sur CPU)
@@ -1378,9 +1373,9 @@ def synchro_ok(bank, s):
     non-Syntoniseurs (au moins un) de niveaux de somme exactement L - t. Les matériaux étant sur le terrain, une case
     se libère toujours. O(EXK × (N + LVMAX log SMAX))."""
     n = s.cid.shape[0]
-    want = (s.zone == Z_EXTRA) & (bank.syn[s.cid] != 0)
-    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
-    live = jnp.arange(EXK) < want.sum()
+    want = (s.zone == Z_EXTRA) & (bank.syn[s.cid] != 0) & (s.owner == s.dec_player)
+    idx = jnp.nonzero(want, size=EXP, fill_value=0)[0]
+    live = jnp.arange(EXP) < want.sum()
     lvs = jnp.arange(LVMAX + 1)
     lv = jnp.clip(bank.level[s.cid], 0, LVMAX)
 
@@ -1438,9 +1433,9 @@ def xyz_mats(bank, s, c):
 def xyz_ok(bank, s):
     """[N] xz_c : Xyz de l'Extra Deck invocables (au moins xct matériaux possibles). O(EXK × N)."""
     n = s.cid.shape[0]
-    want = (s.zone == Z_EXTRA) & (bank.xct[s.cid] > 0)
-    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
-    live = jnp.arange(EXK) < want.sum()
+    want = (s.zone == Z_EXTRA) & (bank.xct[s.cid] > 0) & (s.owner == s.dec_player)
+    idx = jnp.nonzero(want, size=EXP, fill_value=0)[0]
+    live = jnp.arange(EXP) < want.sum()
     oks = jax.vmap(lambda c, ok: ok & (xyz_mats(bank, s, c).sum() >= bank.xct[s.cid[c]]))(idx, live)
     return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(oks, mode="drop")
 
@@ -1591,13 +1586,13 @@ def extra_link(bank, s, p, sub):
     lkb = jnp.where(lk, 1 << j, 0).sum().astype(I32)
     subb = jnp.where(sub, 1 << jnp.arange(7), 0).sum(1).astype(I32)
     alive = lkb & ~subb                                                   # [S]
-    reach0 = (1 << o) & alive
-
-    def grow(_, r):
+    # composante de o parmi les cases vivantes : 11 tours de propagation déroulés (opérations élémentaires sur [S],
+    # fusionnables ; un fori_loop impose une boucle séquentielle, un produit matriciel entier est lent sur CPU)
+    reach = (1 << o) & alive
+    for _ in range(11):
         for a in range(12):
-            r = r | jnp.where(((r >> a) & 1) != 0, M[a], 0)
-        return r & alive
-    reach = lax.fori_loop(0, 11, grow, reach0)
+            reach = reach | jnp.where(((reach >> a) & 1) != 0, M[a], 0)
+        reach = reach & alive
     back = jnp.where(((pt[None, :] >> e[:, None]) & 1) != 0, 1 << j[None, :], 0).sum(1).astype(I32)  # [S] désignent e
     return e.astype(I32), jnp.where(pre, reach & back & alive, 0).astype(I32)
 
@@ -1653,15 +1648,14 @@ def link_valid(bank, s, c, tab):
 
 
 def link_ok(bank, s):
-    """[N] lz_c : monstres Link de l'Extra Deck invocables maintenant. O(EXK × (N + 128 × 7))."""
+    """[N] lz_c : monstres Link de l'Extra Deck du joueur qui décide invocables maintenant. O(EXP × (N + 128 × 7))."""
     n = s.cid.shape[0]
-    want = (s.zone == Z_EXTRA) & (bank.lmax[s.cid] > 0)
-    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
-    live = jnp.arange(EXK) < want.sum()
-    tabs = jax.vmap(lambda p: link_table(bank, s, p))(jnp.arange(2, dtype=I32))
+    want = (s.zone == Z_EXTRA) & (bank.lmax[s.cid] > 0) & (s.owner == s.dec_player)
+    idx = jnp.nonzero(want, size=EXP, fill_value=0)[0]
+    live = jnp.arange(EXP) < want.sum()
+    tab = link_table(bank, s, s.dec_player)
 
     def one(c, ok):
-        tab = jax.tree.map(lambda x: x[s.owner[c]], tabs)
         return ok & link_valid(bank, s, c, tab).any()
     oks = jax.vmap(one)(idx, live)
     return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(oks, mode="drop")
@@ -1690,17 +1684,45 @@ def refresh_link(bank, s):
     return s._replace(lz_c=link_ok(bank, s))
 
 
+def refresh_ex(bank, s):
+    """Caches des invocations par procédure depuis l'Extra Deck (synchro, Xyz, Link) : seul legal les lit, pour le
+    joueur qui décide et en décision libre (D_IDLE). Ils ne sont donc calculés qu'aux points de décision (fin de step /
+    step_batch, new_game), seulement en D_IDLE et pour l'Extra Deck du joueur qui décide (faux ailleurs)."""
+    idle = (s.dec == D_IDLE) & ~s.done
+    s = lax.cond(idle & has_synchro(bank, s), lambda s: refresh_syn(bank, s), lambda s: s._replace(sz_c=s.sz_c & False), s)
+    s = lax.cond(idle & has_xyz(bank, s), lambda s: refresh_xyz(bank, s), lambda s: s._replace(xz_c=s.xz_c & False), s)
+    return lax.cond(idle & has_link(bank, s), lambda s: refresh_link(bank, s), lambda s: s._replace(lz_c=s.lz_c & False), s)
+
+
+def refresh_ex_b(bank, s, mask, frac=8):
+    """refresh_ex au niveau du lot, pour les parties mask seulement (regroupées dans un sous-lot de B/frac s'il y en a
+    peu), chaque calcul seulement si l'une d'elles en a besoin."""
+    nb = s.done.shape[0]
+    k = max(1, nb // frac)
+
+    def ref(s, m):
+        for has, fn, fld in ((has_synchro, refresh_syn, "sz_c"), (has_xyz, refresh_xyz, "xz_c"), (has_link, refresh_link, "lz_c")):
+            h = jax.vmap(lambda x: has(bank, x))(s) & (s.dec == D_IDLE) & ~s.done
+            s = lax.cond((h & m).any(), lambda s: _where(h, jax.vmap(lambda x: fn(bank, x))(s), s), lambda s: s, s)
+            s = s._replace(**{fld: getattr(s, fld) & h[:, None]})
+        return s
+
+    def sub(s):
+        idx = jnp.nonzero(mask, size=k, fill_value=nb)[0]
+        part = ref(jax.tree.map(lambda x: x[jnp.minimum(idx, nb - 1)], s), idx < nb)
+        return jax.tree.map(lambda x, y: x.at[idx].set(y, mode="drop"), s, part)
+    full = lambda s: _where(mask, ref(s, mask), s)
+    return lax.cond(mask.sum() > k, full, lambda s: lax.cond(mask.any(), sub, lambda s: s, s), s)
+
+
 def refresh(bank, s, fus=True):
-    """Recalcule les caches (stats, drapeaux, fusions réalisables). fus=False : sans fz_c (refresh_b le fait au
+    """Recalcule les caches (stats, drapeaux, fusions réalisables ; pas ceux de refresh_ex). fus=False : sans fz_c (refresh_b le fait au
     niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
     s = drop_overlays(s)
     s = detach_fix(s)
     if fus:
         s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
         s = lax.cond(has_ritual(bank, s), lambda s: refresh_rit(bank, s), lambda s: s._replace(rz_c=s.rz_c * 0), s)
-        s = lax.cond(has_synchro(bank, s), lambda s: refresh_syn(bank, s), lambda s: s._replace(sz_c=s.sz_c & False), s)
-        s = lax.cond(has_xyz(bank, s), lambda s: refresh_xyz(bank, s), lambda s: s._replace(xz_c=s.xz_c & False), s)
-        s = lax.cond(has_link(bank, s), lambda s: refresh_link(bank, s), lambda s: s._replace(lz_c=s.lz_c & False), s)
     s = s._replace(cl_c=colinked(bank, s))
     atk, df, batk, fl, ib, pf, cav, cav_t, clk, tm_m, over = stats(bank, s)
     return s._replace(atk_c=atk, df_c=df, batk_c=batk, fl_c=fl, ib_c=ib, pf_c=pf, cav=cav, cav_t=cav_t, clk=clk, tm_m=tm_m,
@@ -2337,7 +2359,7 @@ def step(bank, s, a):
     de décision, pas à chaque instruction exécutée."""
     def body(carry):
         s, a, i = carry
-        s = settle(bank, refresh_if(bank, s, apply(bank, s, a)))
+        s = refresh_ex(bank, settle(bank, refresh_if(bank, s, apply(bank, s, a))))
         return s, forced(bank, s), i + 1
 
     # pas de settle initial : s est toujours à une décision (sortie de step ou de new_game), et une seconde copie de
@@ -2356,43 +2378,50 @@ def step_batch(bank, s, a, frac=0.0):
 
     Les boucles et les calculs rares (trig_eval) sont décidés au niveau du lot. La boucle des actions forcées s'arrête
     dès que la part des parties qui en ont encore une est <= frac : sinon tout le lot attend la plus lente. Les parties
-    arrêtées en route reprennent à l'appel suivant avec leur action forcée. frac = 0 : même résultat que vmap(step)."""
+    arrêtées en route reprennent à l'appel suivant avec leur action forcée. De même, les boucles d'exécution et de
+    settle s'arrêtent dès qu'il ne reste en cours que la part frac des parties qui jouent (sinon tout le lot attend
+    la traîne des longues résolutions, qui s'allonge avec B) : ces parties sont rendues en cours de résolution, avec
+    l'action forcée n_actions(N) (« continuer », sans apply). frac = 0 : même résultat que vmap(step)."""
     nb = s.done.shape[0]
+    na = n_actions(s.cid.shape[1])
 
     def todo(s):
         return ((s.dec == D_RUN) | (s.dec == D_TRIG) | jax.vmap(lambda s: auto_pass(bank, s))(s)) & ~s.done
 
-    def run_b(s):  # boucle d'exécution au niveau du lot : refresh seulement pour les parties modifiées
+    def run_b(s, thr):  # boucle d'exécution au niveau du lot : refresh seulement pour les parties modifiées
         def body(c):
             s, i = c
             r = (s.dec == D_RUN) & ~s.done
             return refresh_b(bank, s, _where(r, jax.vmap(lambda s: exec_one(bank, s))(s), s)), i + 1
-        return lax.while_loop(lambda c: ((c[0].dec == D_RUN) & ~c[0].done).any() & (c[1] < MAX_ITER), body,
+        return lax.while_loop(lambda c: (((c[0].dec == D_RUN) & ~c[0].done).sum() > thr) & (c[1] < MAX_ITER), body,
                               (s, _i(0)))[0]
 
     def settle_body(c):
-        s, i = c
-        s = run_b(s)
+        s, i, thr = c
+        s = run_b(s, thr)
         need = s.dec == D_TRIG
         s = lax.cond(need.any(), lambda s: _where(need, jax.vmap(lambda s: trig_eval(bank, s))(s), s),
                      lambda s: s, s)
         ap = jax.vmap(lambda s: auto_pass(bank, s))(s)
         s = lax.cond(ap.any(), lambda s: refresh_b(bank, s, _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s)),
                      lambda s: s, s)
-        return s, i + 1
+        return s, i + 1, thr
 
-    def settle_b(s):
-        return lax.while_loop(lambda c: todo(c[0]).any() & (c[1] < MAX_ITER), settle_body, (s, _i(0)))[0]
+    def settle_b(s, thr):
+        return lax.while_loop(lambda c: (todo(c[0]).sum() > thr) & (c[1] < MAX_ITER), settle_body, (s, _i(0), thr))[0]
 
     def body(carry):
         s, m, a, i = carry
         act = (a >= 0) & ~s.done
-        s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.maximum(a, 0))
-        s = _where(act, settle_b(refresh_b(bank, s, _where(act, s1, s))), s)
+        s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.clip(a, 0, na - 1))
+        s = _where(act, settle_b(refresh_b(bank, s, _where(act & (a < na), s1, s)), frac * act.sum()), s)
+        left = act & todo(s)                      # arrêtées en cours de résolution : « continuer » à l'appel suivant
+        s = refresh_ex_b(bank, s, act & ~left)
         lg = lax.cond((s.fsel | (s.rsel > 0) | (s.psel > 0)).any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
                       lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
         m = jnp.where(act[:, None], lg, m)
-        return s, m, jnp.where(act, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m), -1), i + 1
+        f = jnp.where(left, na, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m))
+        return s, m, jnp.where(act, f, -1), i + 1
 
     def more(c):
         pend = ((c[2] >= 0) & ~c[0].done).sum()
@@ -2456,4 +2485,4 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     # pas de step ici : il recompilerait tout le moteur une seconde fois (≈ 2 Go de compilation en plus). La première
     # décision peut être à option unique (fenêtre de la Draw Phase) : l'appelant la joue avec son propre step
     # (forced, ou une action légale tirée au hasard, qui est alors la seule)
-    return start_turn(s)
+    return refresh_ex(bank, start_turn(s))

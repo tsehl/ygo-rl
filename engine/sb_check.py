@@ -32,3 +32,62 @@ for t in range(T):
     m = legal(sa)
     assert np.array_equal(np.asarray(m & ~sa.done[:, None]), np.asarray(mb & ~sb.done[:, None])), f"t={t} : masques"
 print(f"ok : step_batch == vmap(step) sur {B} parties × {T} décisions ; {int(sa.done.sum())} finies")
+
+# frac > 0 : des parties sont rendues en route (action forcée en attente, ou « continuer » en cours de résolution) et
+# avancent à des rythmes différents. Avec une politique déterministe par partie (numéro de la partie, nombre de ses
+# décisions), chaque partie doit passer par les mêmes états et masques, décision après décision, que sous vmap(step).
+FRAC, K = 0.25, 60
+NA = core.n_actions(s0.cid.shape[1])
+
+
+def pick(m, g, k):
+    idx = np.nonzero(m)[0]
+    return int(idx[(g * 7919 + k * 104729) % len(idx)])
+
+
+def snap(s, g):
+    return [np.asarray(x[g]) for x in s]
+
+
+ref = [[] for _ in range(B)]                         # vmap(step) : (état, masque) à chaque décision
+s, m = s0, np.asarray(legal(s0))
+for k in range(K):
+    done = np.asarray(s.done)
+    for g in range(B):
+        if not done[g]:
+            ref[g].append((snap(s, g), m[g]))
+    a = jnp.asarray([0 if done[g] else pick(m[g], g, k) for g in range(B)], jnp.int32)
+    s2 = step_v(s, a)
+    s = jax.tree.map(lambda x, y: jnp.where(s.done.reshape((-1,) + (1,) * (x.ndim - 1)), x, y), s, s2)
+    m = np.asarray(legal(s))
+
+step_f = jax.jit(lambda s, a: core.step_batch(bank, s, a, FRAC))
+cnt = np.zeros(B, int)
+s, m, f = s0, np.asarray(legal(s0)), np.full(B, -1)
+n_cont = n_wait = 0
+for t in range(6 * K):
+    done = np.asarray(s.done)
+    a = np.zeros(B, int)
+    for g in range(B):
+        if done[g] or cnt[g] >= K:
+            a[g] = -1
+        elif f[g] >= 0:
+            a[g] = f[g]
+        else:                                           # décision de la politique
+            x, mx = ref[g][cnt[g]] if cnt[g] < len(ref[g]) else (None, None)
+            assert x is not None, f"partie {g} : décision {cnt[g]} en trop"
+            for name, u, v in zip(core.State._fields, x, snap(s, g)):
+                assert np.array_equal(u, v), f"frac={FRAC}, partie {g}, décision {cnt[g]} : champ {name} différent"
+            assert np.array_equal(mx, m[g]), f"frac={FRAC}, partie {g}, décision {cnt[g]} : masques"
+            a[g] = pick(m[g], g, cnt[g])
+            cnt[g] += 1
+    if (a < 0).all():
+        break
+    s, m, f = step_f(s, jnp.asarray(a, jnp.int32))
+    m, f = np.asarray(m), np.asarray(f)
+    n_cont += int((f == NA).sum())
+    n_wait += int(((f >= 0) & (f < NA)).sum())
+fin = sum(cnt[g] >= min(K, len(ref[g])) for g in range(B))
+assert fin == B, f"frac={FRAC} : {B - fin} parties n'ont pas fini leurs décisions"
+print(f"ok : step_batch(frac={FRAC}) suit vmap(step) décision par décision ({B} parties × {K} décisions ; "
+      f"{n_cont} parties rendues en cours de résolution, {n_wait} avec une action forcée en attente)")
