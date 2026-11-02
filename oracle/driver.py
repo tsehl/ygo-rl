@@ -112,6 +112,12 @@ class CardDB:
             assert code not in self.rows
             self.rows[code], self.names[code] = (code,) + row, name
 
+    def add(self, rows):
+        """Ajoute des cartes (même format que TEST_CARDS) : cartes procédurales du jalon 6 (gen/tolua.py cdb_rows),
+        dont les scripts sont dans un dossier ajouté en tête de SCRIPTS."""
+        for code, (row, name) in rows.items():
+            self.rows[code], self.names[code] = (code,) + tuple(int(x) for x in row), name
+
     def fill(self, code, out):
         r = self.rows.get(code)
         if r is None:

@@ -35,6 +35,7 @@ ZNAME = {"deck": core.Z_DECK, "hand": core.Z_HAND, "mzone": core.Z_MZONE, "szone
          "grave": core.Z_GRAVE, "removed": core.Z_REMOVED, "extra": core.Z_EXTRA}
 D = 40
 N = 2 * D
+GEN_CODE0 = 600_000_000  # cartes procédurales (gen/cardgen.py CODE0)
 
 
 class Mismatch(Exception):
@@ -98,6 +99,12 @@ def translate(dec, opt, s):
     if kind in ("summon", "mset", "repos", "attack", "sset", "activate", "chain"):
         verb = dict(summon=V_SUMMON, mset=V_MSET, repos=V_REPOS, attack=V_ATTACK, sset=V_SSET, activate=V_ACT0,
                     chain=V_ACT0)[kind]
+        if kind in ("activate", "chain") and opt[1] >= GEN_CODE0 and opt[5] >> 20 == opt[1]:
+            verb += opt[5] & 0xFFFFF  # carte procédurale : effet i décrit par aux.Stringid(id, i) (gen/procgen.lua)
+        elif kind == "chain" and opt[1] >= GEN_CODE0 and opt[5] == 221:
+            # déclencheur optionnel seul : oui / non (SelectEffectYesNo, description 221) : l'effet K_TRIG_O de la carte
+            ek = np.asarray(BANK.ekind[int(s.cid[slot(s, opt[2], opt[3], opt[4])])])
+            verb += int(np.argmax(ek == core.K_TRIG_O))
         return [verb * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck, ou pendule (échelle gauche) : V_SUMMON
         if opt[3] not in ("extra", "szone"):
@@ -129,6 +136,17 @@ def translate(dec, opt, s):
     if kind == "yes":
         return [sp(core.A_YES)]
     raise Mismatch(f"option non gérée {opt}")
+
+
+def decode(bank, s, acts):
+    """Actions → (verbe, code de la carte) pour les messages d'écart."""
+    n = N_(s)
+    names = ["summon", "mset", "repos", "attack", "select", "sset"] + [f"act{e}" for e in range(core.E)]
+    zn = {v: k for k, v in ZNAME.items()}
+    zn[core.Z_OVERLAY] = "overlay"
+    return [(names[a // n], int(bank.code[int(s.cid[a % n])]), int(s.ctrl[a % n]), zn.get(int(s.zone[a % n])),
+             int(s.seq[a % n]), int(s.pos[a % n]), hex(int(s.st[a % n]))) if a < NV * n else ("spécial", a - NV * n)
+            for a in sorted(acts)]
 
 
 def N_(s):
@@ -291,14 +309,17 @@ def pen_cover(bank, before, s, o):
 
 
 BANK_CODE = None
+LAST_LOG = []
+LAST_STATE = None  # dernier état JAX comparé (diagnostic)
 COVER = collections.Counter()  # options jouées (activations par carte, poses, mélanges…)
 NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée est jouée par le step de play()
 FORCED = jax.jit(core.forced)
 
 
-def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None):
-    global BANK_CODE
-    BANK_CODE = bank.code
+def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None, given=None):
+    """given : (decks, extra) imposés (cartes procédurales, gen/compare_gen.py) ; sinon tirés selon le mode."""
+    global BANK_CODE, BANK
+    BANK_CODE, BANK = bank.code, bank
     rng = random.Random(seed)
     pool = db.normal_monsters()
     mode = mode or ("mixed" if mixed else "normal")
@@ -306,7 +327,9 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     new = cards.J4 | cards.J4B | cards.J4C | cards.J4D | cards.J5A | cards.J5B | cards.J5C | cards.J5D | cards.J5E | cards.J5F  # cartes des jalons 4-5 : seulement dans leurs modes
     extra = [[], []]
     base = [c for c, effs in cards.CARDS.items() if effs[0][0] != core.K_QUICK and c not in new]
-    if mode == "chain":
+    if given is not None:
+        decks, extra = given
+    elif mode == "chain":
         fast = list(cards.ST_TYPES)
         decks = [[rng.choice(pool) for _ in range(22)] + [rng.choice(base) for _ in range(6)]
                  + [rng.choice(fast) for _ in range(12)] for _ in range(2)]
@@ -434,6 +457,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     else:
         decks = [[rng.choice(pool) for _ in range(D)] for _ in range(2)]
     duel = driver.Duel(db, decks[0], decks[1], seed=seed, extra0=extra[0], extra1=extra[1])
+    global LAST_LOG
+    LAST_LOG = duel.log  # messages de l'oracle (erreurs Lua des scripts)
     ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
     s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
     a0 = int(FORCED(bank, s))
@@ -454,6 +479,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 return dict(ok=True, decisions=ndec, turns=duel.turn, winner=duel.winner)
             if bool(s.done):
                 raise Mismatch(f"JAX fini (winner {int(s.winner)}) mais l'oracle demande {dec.msg} {dec.options}")
+            global LAST_STATE
+            LAST_STATE = s
             so = duel.snapshot()
             shuffled = {ev[1] for ev in duel.events if ev[0] == "shuffle_hand"}
             duel.events.clear()
@@ -466,7 +493,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             diff = [k for k in so if so[k] != sj[k]]
             if diff:
                 raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff)
-                               + f" | jax légales {np.where(np.asarray(legal(bank, s)))[0].tolist()}")
+                               + f" | jax légales {decode(bank, s, np.where(np.asarray(legal(bank, s)))[0].tolist())}")
             idx = filtered(dec, s)
             ready = mode == "xlk" and xlink_cover(bank, s)
             seqs = {i: translate(dec, dec.options[i], s) for i in idx}
@@ -475,7 +502,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             got = set(np.where(m)[0].tolist())
             if want != got:
                 raise Mismatch(f"actions légales : oracle {sorted(want)} / jax {sorted(got)} (msg {dec.msg}, "
-                               f"{[dec.options[i] for i in idx]})")
+                               f"{[dec.options[i] for i in idx]}) ; écart {decode(bank, s, want ^ got)}")
             pick = idx
             if mode == "ds" and int(s.dstep) == core.DS_NONE:
                 # ds : les cartes du volet 2 sont gardées pour le damage step

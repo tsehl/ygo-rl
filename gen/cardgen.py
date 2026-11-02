@@ -133,16 +133,18 @@ class Gen:
             f = self.mon(me=Z_GRAVE)  # récupération dans le cimetière
             return dict(verb="tohand", sel="target" if self.p(0.6) else "pick", f=f, k=1, v=0)
         if verb == "ss":
+            pos = self.pos()
+            sp = 1 if pos & P_FU_ATK else 2  # en défense seulement : jamais un Link (IsCanBeSpecialSummoned)
             if zone in (Z_GRAVE, Z_HAND) and self.p(0.5):  # la carte s'invoque elle-même
-                return dict(verb="ss", sel="self", f=dict(me=zone, spsum=1), k=1, v=0, pos=self.pos())
+                return dict(verb="ss", sel="self", f=dict(me=zone, spsum=sp), k=1, v=0, pos=pos)
             src = self.pick(["gy", "gy_any", "deck", "hand", "removed"], [3, 1, 2, 2, 1])
             base = {"gy": dict(me=Z_GRAVE), "gy_any": dict(me=Z_GRAVE, op=Z_GRAVE), "deck": dict(me=Z_DECK),
                     "hand": dict(me=Z_HAND, not_self=1), "removed": dict(me=Z_REMOVED)}[src]
-            f = self.mon(self.pick([1, 1, 2]), spsum=1, **base)
+            f = self.mon(self.pick([1, 1, 2]), spsum=sp, **base)
             if src in ("deck", "hand") and "lv" not in f and "atk" not in f:
                 f["lv"] = (-BIG, 4)
             sel = "target" if src in ("gy", "gy_any", "removed") and self.p(0.7) else "pick"
-            return dict(verb="ss", sel=sel, f=f, k=1, v=0, pos=self.pos())
+            return dict(verb="ss", sel=sel, f=f, k=1, v=0, pos=pos)
         if verb == "atk":
             r = self.rng.random()
             if zone == Z_MZONE and r < 0.25:
@@ -311,9 +313,11 @@ class Gen:
                       [4, 2 if mon else 0, 2, 1.5, 1 if mon else 0, 1 if mon else 0, 1, 1 if mon else 0, 1, 0.7,
                        0.5 if not mon else 0, 1, 0.5])
         c = dict(code=MC_ATK, val=0, tgt=None, per=None, cnt=None, tp=0, ph=0)
+        # modificateurs de stats : pas de filtre sur l'ATK / la DEF des cibles (ygopro évalue la cible pendant le calcul
+        # de l'ATK de la carte, GetAttack y rend la valeur partielle temp.attack : pas modélisé par le moteur)
         if r == "atk_field":
             c.update(code=self.pick([MC_ATK, MC_ATK, MC_DEF]), val=self.pick([200, 300, 400, 500]),
-                     tgt=self.mon(1, me=Z_MZONE))
+                     tgt=self.qual(dict(me=Z_MZONE, typ=TYPE_MONSTER), 1, stats=False))
             if self.p(0.2):
                 c["tp"], c["ph"] = ME + 1, PH_BATTLE
         elif r == "atk_self":
@@ -325,7 +329,8 @@ class Gen:
                 c["val"] = self.pick([500, 800, 1000])
                 c["cnt"] = (self.pick([dict(me=Z_MZONE, not_self=1), dict(op=Z_MZONE)]), self.pick([1, 2]), BIG)
         elif r == "debuff":
-            c.update(code=self.pick([MC_ATK, MC_DEF]), val=-self.pick([200, 300, 500]), tgt=self.mon(1, op=Z_MZONE))
+            c.update(code=self.pick([MC_ATK, MC_DEF]), val=-self.pick([200, 300, 500]),
+                     tgt=self.qual(dict(op=Z_MZONE, typ=TYPE_MONSTER), 1, stats=False))
         elif r == "no_attack":
             c.update(code=MC_NO_ATTACK, tgt=self.pick([dict(op=Z_MZONE, lv=(self.pick([4, 5, 7]), BIG)),
                                                       dict(op=Z_MZONE, st=ST_SUMMON_TURN),
