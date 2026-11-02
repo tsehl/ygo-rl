@@ -1,0 +1,278 @@
+"""PPO en self-play sur cartes et decks procéduraux (jalon 6, étape 3 ; ETAPE3.md).
+
+Boucle :
+- une banque procédurale (gen/cardgen.py) toutes les `--bank-every` itérations, decks de 40 + Extra Deck de 15 tirés
+  sans structure ; B parties en parallèle (`core.step_batch`) ; une partie finie est remplacée par une neuve ;
+- les deux joueurs jouent avec la même politique ; chaque décision est stockée avec son joueur. Les avantages (GAE)
+  sont calculés par joueur : en remontant le temps, chaque partie garde pour chacun des deux joueurs la valeur et
+  l'avantage de sa décision suivante ; la fin de partie donne +1 au gagnant, -1 au perdant (0 : nulle) ;
+- PPO (clip), minibatchs sur l'axe des parties ; l'encodage des cartes de la banque est recalculé dans chaque
+  minibatch (gradient jusqu'aux briques) ;
+- évaluation : le réseau (échantillonnage) contre la politique aléatoire uniforme, moitié des parties de chaque
+  côté, sur une banque tenue à l'écart (graine `--eval-bank`), jamais vue à l'entraînement.
+
+Usage (test CPU) : uv run --with jax --with optax python train/ppo.py --b 32 --steps 16 --iters 3 --d 64
+"""
+import argparse
+import os
+import sys
+import time
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "..", "gen"))
+sys.path.insert(0, os.path.join(HERE, "..", "engine"))
+
+import jax  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import optax  # noqa: E402
+
+import cardgen  # noqa: E402
+import core  # noqa: E402
+import model  # noqa: E402
+import obs as obsm  # noqa: E402
+
+if os.environ.get("YGO_JAX_CACHE"):
+    jax.config.update("jax_compilation_cache_dir", os.environ["YGO_JAX_CACHE"])
+
+
+def parse():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--b", type=int, default=256, help="parties en parallèle")
+    ap.add_argument("--steps", type=int, default=64, help="appels de step_batch par rollout")
+    ap.add_argument("--iters", type=int, default=100)
+    ap.add_argument("--d", type=int, default=128)
+    ap.add_argument("--layers", type=int, default=3)
+    ap.add_argument("--card-layers", type=int, default=2)
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--epochs", type=int, default=2)
+    ap.add_argument("--mb", type=int, default=4, help="minibatchs par époque")
+    ap.add_argument("--gamma", type=float, default=0.999)
+    ap.add_argument("--lam", type=float, default=0.95)
+    ap.add_argument("--clip", type=float, default=0.2)
+    ap.add_argument("--ent", type=float, default=0.01)
+    ap.add_argument("--vf", type=float, default=0.5)
+    ap.add_argument("--frac", type=float, default=0.05)
+    ap.add_argument("--bank-every", type=int, default=10)
+    ap.add_argument("--main", type=int, default=400)
+    ap.add_argument("--extra", type=int, default=80)
+    ap.add_argument("--eval-every", type=int, default=10)
+    ap.add_argument("--eval-b", type=int, default=0, help="parties d'évaluation (défaut : b)")
+    ap.add_argument("--eval-steps", type=int, default=400)
+    ap.add_argument("--eval-bank", type=int, default=1_000_000)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--save", default="")
+    return ap.parse_args()
+
+
+class Env:
+    """Fonctions compilées du moteur (la banque est un argument : une compilation pour toutes les banques)."""
+
+    def __init__(self, b, frac):
+        self.b = b
+        ng = jax.vmap(lambda bank, d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1]), in_axes=(None, 0, 0, 0))
+        lg = jax.vmap(lambda bank, s: core.legal(bank, s), in_axes=(None, 0))
+        self.new = jax.jit(lambda bank, d, x, k: (lambda s: (s, lg(bank, s)))(ng(bank, d, x, k)))
+        self.step = jax.jit(lambda bank, s, a: core.step_batch(bank, s, a, frac))
+
+    def games(self, bank, cset, rng, key):
+        d, x = cardgen.random_decks(cset, rng, self.b)
+        return self.new(bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, self.b))
+
+
+def bank_of(seed, a):
+    cset = cardgen.Gen(seed).make_set(a.main, a.extra)
+    return cset, cardgen.to_bank(cset)
+
+
+def _where(m, a, b):
+    return jax.tree.map(lambda x, y: jnp.where(m.reshape(m.shape + (1,) * (x.ndim - 1)), x, y), a, b)
+
+
+def make_fns(a, opt):
+    obs_b = jax.vmap(lambda bank, s, m, p: obsm.observe(bank, s, p, m), in_axes=(None, 0, 0, 0))
+
+    @jax.jit
+    def act(params, cemb, bank, s, m, f, key):
+        n = s.cid.shape[1]
+        o = obs_b(bank, s, m, s.dec_player)
+        logits, v = model.policy(params, cemb, o)
+        idx = jax.random.categorical(key, logits)
+        logp = jnp.take_along_axis(jax.nn.log_softmax(logits), idx[:, None], -1)[:, 0]
+        need = (f < 0) & ~s.done
+        ae = jnp.where(f >= 0, f, model.to_engine(o, n, idx))
+        return ae, dict(o=o, idx=idx, logp=logp, v=v, need=need, pl=s.dec_player)
+
+    @jax.jit
+    def values(params, cemb, bank, s, m):
+        vs = [model.policy(params, cemb, obs_b(bank, s, m, jnp.full_like(s.dec_player, p)))[1] for p in (0, 1)]
+        return jnp.stack(vs, -1)                                                       # [B, 2]
+
+    @jax.jit
+    def refill(s, m, f, s2, m2):
+        d = s.done
+        return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f)
+
+    @jax.jit
+    def gae(v, need, pl, done, win, last):
+        """v, need, pl, done, win : [S, B] ; last : [B, 2]. Rend (avantages, retours) [S, B]."""
+        g, lam = a.gamma, a.lam
+        pid = jnp.arange(2)
+
+        def body(c, x):
+            nv, adv, pend = c
+            v, need, pl, done, win = x
+            r = jnp.where(win[:, None] < 0, 0.0, jnp.where(win[:, None] == pid, 1.0, -1.0))
+            dd = done[:, None]
+            nv, adv, pend = jnp.where(dd, 0.0, nv), jnp.where(dd, 0.0, adv), jnp.where(dd, r, pend)
+            sel = (pid == pl[:, None]) & need[:, None]                                 # [B, 2]
+            pick = lambda t: (t * sel).sum(-1)
+            delta = pick(pend) + g * pick(nv) - v
+            A = delta + g * lam * pick(adv)
+            nv, adv, pend = jnp.where(sel, v[:, None], nv), jnp.where(sel, A[:, None], adv), jnp.where(sel, 0.0, pend)
+            return (nv, adv, pend), jnp.where(need, A, 0.0)
+        z = jnp.zeros_like(last)
+        _, A = jax.lax.scan(body, (last, z, z), (v, need, pl, done, win), reverse=True)
+        return A, A + v
+
+    def loss_fn(params, tok, msk, bt):
+        cemb = model.encode_cards(params["cards"], tok, msk)
+        logits, v = model.policy(params, cemb, bt["o"])
+        lp_all = jax.nn.log_softmax(logits)
+        lp = jnp.take_along_axis(lp_all, bt["idx"][..., None], -1)[..., 0]
+        w = bt["need"].astype(jnp.float32)
+        nw = jnp.maximum(w.sum(), 1.0)
+        A = bt["adv"]
+        ratio = jnp.exp(lp - bt["logp"])
+        pg = -jnp.minimum(ratio * A, jnp.clip(ratio, 1 - a.clip, 1 + a.clip) * A)
+        p_all = jnp.exp(lp_all)
+        ent = -(p_all * jnp.where(p_all > 0, lp_all, 0.0)).sum(-1)
+        vl = (v - bt["ret"]) ** 2
+        tot = ((pg + a.vf * vl - a.ent * ent) * w).sum() / nw
+        stats = dict(pg=(pg * w).sum() / nw, vl=(vl * w).sum() / nw, ent=(ent * w).sum() / nw,
+                     kl=((bt["logp"] - lp) * w).sum() / nw, clipfrac=((jnp.abs(ratio - 1) > a.clip) * w).sum() / nw)
+        return tot, stats
+
+    @jax.jit
+    def update(params, opt_state, tok, msk, bt):
+        (l, st), gr = jax.value_and_grad(loss_fn, has_aux=True)(params, tok, msk, bt)
+        up, opt_state = opt.update(gr, opt_state, params)
+        st["gnorm"] = optax.global_norm(gr)
+        return optax.apply_updates(params, up), opt_state, st
+
+    enc = jax.jit(lambda params, tok, msk: model.encode_cards(params["cards"], tok, msk))
+    return act, values, refill, gae, update, enc, obs_b
+
+
+def evaluate(a, env, fns, params, rng, key):
+    """Réseau contre aléatoire sur la banque d'évaluation : taux de victoire du réseau (parties finies)."""
+    act, values, refill, gae, update, enc, obs_b = fns
+    cset, bank = bank_of(a.eval_bank, a)
+    tok, msk = model.card_tokens(bank)
+    cemb = enc(params, tok, msk)
+    s, m = env.games(bank, cset, rng, key)
+    f = jnp.full(env.b, -1, jnp.int32)
+    side = jnp.arange(env.b) % 2                       # côté du réseau
+    na = core.n_actions(s.cid.shape[1])
+    fin = np.zeros(env.b, bool)
+    win = np.zeros(env.b, int)
+    for t in range(a.eval_steps):
+        key, k1, k2 = jax.random.split(key, 3)
+        ae, _ = act(params, cemb, bank, s, m, f, k1)
+        ar = jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32)
+        ar = jnp.where(f >= 0, f, ar)
+        aa = jnp.where(s.dec_player == side, ae, ar)
+        s, m, f = env.step(bank, s, aa)
+        d = np.asarray(s.done)
+        w = np.asarray(s.winner)
+        new = d & ~fin
+        win[new] = (w[new] == np.asarray(side)[new]).astype(int) - (w[new] == 1 - np.asarray(side)[new]).astype(int)
+        fin |= d
+        if fin.all():
+            break
+    return dict(eval_games=int(fin.sum()), eval_win=float((win[fin] == 1).mean()) if fin.any() else float("nan"),
+                eval_loss=float((win[fin] == -1).mean()) if fin.any() else float("nan"))
+
+
+def main():
+    a = parse()
+    a.eval_b = a.eval_b or a.b
+    key = jax.random.PRNGKey(a.seed)
+    rng = np.random.default_rng(a.seed)
+    print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; B={a.b} steps={a.steps} d={a.d}", flush=True)
+    params = model.init(jax.random.fold_in(key, 0), a.d, a.card_layers, a.layers)
+    print("paramètres :", sum(x.size for x in jax.tree.leaves(params)), flush=True)
+    opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
+    opt_state = opt.init(params)
+    env = Env(a.b, a.frac)
+    eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
+    fns = act, values, refill, gae, update, enc, obs_b = make_fns(a, opt)
+    bank_seed = a.seed * 100_000
+    tot_dec, tot_games = 0, 0
+    for it in range(a.iters):
+        t0 = time.time()
+        if it % a.bank_every == 0:
+            cset, bank = bank_of(bank_seed, a)
+            bank_seed += 1
+            tok, msk = model.card_tokens(bank)
+            key, k = jax.random.split(key)
+            s, m = env.games(bank, cset, rng, k)
+            f = jnp.full(a.b, -1, jnp.int32)
+        key, k = jax.random.split(key)
+        pool, pm = env.games(bank, cset, rng, k)
+        cemb = enc(params, tok, msk)
+        buf, dones, wins = [], [], []
+        t_env = 0.0
+        for t in range(a.steps):
+            key, k = jax.random.split(key)
+            ae, tr = act(params, cemb, bank, s, m, f, k)
+            t1 = time.time()
+            s, m, f = env.step(bank, s, ae)
+            jax.block_until_ready(f)
+            t_env += time.time() - t1
+            buf.append(tr)
+            dones.append(s.done)
+            wins.append(s.winner)
+            if bool(s.done.any()):
+                s, m, f = refill(s, m, f, pool, pm)
+                key, k = jax.random.split(key)
+                pool, pm = env.games(bank, cset, rng, k)   # réserve neuve (une partie de la réserve ne sert qu'une fois)
+        last = values(params, cemb, bank, s, m)
+        bt = jax.tree.map(lambda *x: jnp.stack(x), *buf)
+        done, win = jnp.stack(dones), jnp.stack(wins)
+        adv, ret = gae(bt["v"], bt["need"], bt["pl"], done, win, last)
+        need = bt["need"]
+        nd = int(need.sum())
+        mu = (adv * need).sum() / max(nd, 1)
+        sd = jnp.sqrt((((adv - mu) * need) ** 2).sum() / max(nd, 1)) + 1e-8
+        bt["adv"], bt["ret"] = (adv - mu) / sd, ret
+        t_roll = time.time() - t0
+        st = None
+        for ep in range(a.epochs):
+            key, k = jax.random.split(key)
+            perm = jax.random.permutation(k, a.b)
+            for chunk in jnp.split(perm, a.mb):
+                mb = jax.tree.map(lambda x: x[:, chunk], bt)
+                params, opt_state, st = update(params, opt_state, tok, msk, mb)
+        jax.block_until_ready(params)
+        ng = int(done.sum())
+        tot_dec += nd
+        tot_games += ng
+        line = (f"it {it} : {nd} décisions, {ng} parties finies ({time.time() - t0:.1f} s ; rollout {t_roll:.1f} s dont "
+                f"moteur {t_env:.1f} s) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
+        if a.eval_every and (it + 1) % a.eval_every == 0:
+            key, k = jax.random.split(key)
+            ev = evaluate(a, eval_env, fns, params, np.random.default_rng(12345), k)
+            line += " | " + " ".join(f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in ev.items())
+        print(line, flush=True)
+        if a.save:
+            import pickle
+            with open(a.save, "wb") as fh:
+                pickle.dump(jax.device_get(params), fh)
+    print(f"total : {tot_dec} décisions, {tot_games} parties", flush=True)
+
+
+if __name__ == "__main__":
+    main()

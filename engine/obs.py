@@ -50,8 +50,8 @@ def _count(s, zone, p):
     return ((s.zone == zone) & (s.ctrl == p)).sum().astype(I32)
 
 
-def observe(bank, s, p=None):
-    """Observation du joueur p (par défaut celui qui doit décider)."""
+def observe(bank, s, p=None, m=None):
+    """Observation du joueur p (par défaut celui qui doit décider). m : masque légal déjà calculé (step_batch)."""
     p = s.dec_player if p is None else jnp.asarray(p, I32)
     n = s.cid.shape[0]
     mine = s.ctrl == p
@@ -61,7 +61,7 @@ def observe(bank, s, p=None):
     # les pendules recto de l'Extra Deck sont publics
     public = (s.zone == core.Z_GRAVE) | (s.zone == core.Z_REMOVED) | ovl | ((s.zone == core.Z_EXTRA) & faceup)
     vseq = jnp.where(ovl, s.seq[jnp.clip(s.ov_par, 0, n - 1)] * 8 + s.seq, s.seq)
-    m = core.legal(bank, s)
+    m = core.legal(bank, s) if m is None else m
     act_slot = m[:NV * n].reshape(NV, n).T            # [N, NV]
     acted = act_slot.any(1)
     # p n'observe ses actions que si c'est lui qui décide
