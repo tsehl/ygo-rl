@@ -111,9 +111,10 @@ def make_fns(a, opt):
         return jnp.stack(vs, -1)                                                       # [B, 2]
 
     @jax.jit
-    def refill(s, m, f, s2, m2):
-        d = s.done
-        return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f)
+    def refill(s, m, f, s2, m2, used):
+        """Parties finies remplacées par la partie de la réserve de même indice, si elle n'a pas déjà servi."""
+        d = s.done & ~used
+        return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f), used | d
 
     @jax.jit
     def gae(v, need, pl, done, win, last):
@@ -222,6 +223,7 @@ def main():
             f = jnp.full(a.b, -1, jnp.int32)
         key, k = jax.random.split(key)
         pool, pm = env.games(bank, cset, rng, k)
+        used = jnp.zeros(a.b, bool)
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
         t_env = 0.0
@@ -236,9 +238,11 @@ def main():
             dones.append(s.done)
             wins.append(s.winner)
             if bool(s.done.any()):
-                s, m, f = refill(s, m, f, pool, pm)
-                key, k = jax.random.split(key)
-                pool, pm = env.games(bank, cset, rng, k)   # réserve neuve (une partie de la réserve ne sert qu'une fois)
+                s, m, f, used = refill(s, m, f, pool, pm, used)
+                if float(used.mean()) > 0.25:                 # réserve neuve : chaque partie de la réserve ne sert qu'une fois
+                    key, k = jax.random.split(key)
+                    pool, pm = env.games(bank, cset, rng, k)
+                    used = jnp.zeros(a.b, bool)
         last = values(params, cemb, bank, s, m)
         bt = jax.tree.map(lambda *x: jnp.stack(x), *buf)
         done, win = jnp.stack(dones), jnp.stack(wins)
@@ -260,7 +264,8 @@ def main():
         ng = int(done.sum())
         tot_dec += nd
         tot_games += ng
-        line = (f"it {it} : {nd} décisions, {ng} parties finies ({time.time() - t0:.1f} s ; rollout {t_roll:.1f} s dont "
+        line = (f"it {it} : {nd} décisions ({nd / (time.time() - t0):.0f}/s), {ng} parties finies ({time.time() - t0:.1f} s ; "
+                f"rollout {t_roll:.1f} s dont "
                 f"moteur {t_env:.1f} s) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
         if a.eval_every and (it + 1) % a.eval_every == 0:
             key, k = jax.random.split(key)
