@@ -570,3 +570,26 @@ Pistes restantes : fusion et rituel encore recalculés dans chaque `refresh_b` ;
 - Total : ×1,71 à B = 1024, ×2,29 à B = 4096. Le débit baisse encore quand B monte (×5,4 de temps par appel pour ×4 parties), mais moins qu'avant (×7,5). Le volet a restait au-dessus (10 699 à B = 1024).
 - Bruit entre sessions : E0 à B = 1024 donne 5 514 ici, 5 759 dans la session précédente (−4 %) ; E2, 7 801 contre 7 709 (+1 %).
 - Coût : 1,06 CU, plus que prévu (~0,6) : 6 compilations en parallèle sur 12 vCPU prennent 5 à 7 min chacune, et il a fallu une seconde vague pour B = 4096 (~15 min de compilation en tout).
+
+**Optimisation, deuxième passe (2026-11-02).** Constats sur CPU (B = 256 et 1024, Extra Deck de 15) :
+- `settle_b` fait ~31 tours par appel, dont la plupart ne servent qu'à des passes imposées (`auto_pass`) : ~19 parties sur 256 par tour, en majorité dans les fenêtres de phase (pioche, standby, combat, fin). Chaque fenêtre demande deux passes, donc deux tours ;
+- après le premier tour de la boucle principale, il reste 30 %, puis 12 %, puis 6,5 % des parties avec une action forcée, mais chaque tour recalcule tout le lot (apply, settle, `legal`, `refresh_ex_b`) ;
+- `refresh_b` : médiane de 14 parties changées sur 1 024 (10 % des appels au-dessus de B/8).
+
+Changements de `step_batch` (`step` est inchangé) :
+- double passe : dans un tour de `settle_b`, si le premier joueur passe sans pouvoir rien faire et que l'adversaire ne peut rien faire non plus, la seconde passe est jouée tout de suite (même suite d'états que `settle`, la passe « autre joueur » ne change aucune entrée de `stats`). `settle_b` : 30,9 → 17,3 tours par appel ;
+- tours des actions forcées en sous-lot : après le premier tour sur tout le lot, la boucle ne traite que les parties qui ont une action forcée, dans un sous-lot de B/4 (les autres attendent le tour suivant). `rnd` est donc compilé deux fois : compilation ~2× plus longue (CPU, B = 256 : 161 → 327 s ; L4 : ~11 min pour deux compilations en parallèle) et pic de mémoire ~2× (5,8 Go au lieu de 3,1 sur CPU, B = 64).
+
+Mesures (décisions/s ; L4 : 30 appels, frac = 0,05, Extra Deck de 15 ; CPU : B = 256, 15 appels en milieu de partie) :
+
+| variante | CPU | L4, B = 1024 | L4, B = 4096 |
+|---|---|---|---|
+| code de `32b77b3` | 165 | 9 413 | 7 003 |
+| x1 : + double passe | 173 (+5 %) | 10 068 (+7 %) | 7 066 (+1 %) |
+| x4 : x1 + `refresh_b` à deux niveaux (B/32 puis B/8) | 191 (+10 %) | 9 641 (−4 %) | 6 965 (−1 %) |
+| x5 : x4 + tours forcés en sous-lot | 257 (+35 %) | 12 392 (+29 %) | 12 604 (+81 %) |
+
+- Le sous-lot des tours forcés est le gros gain, et le débit ne baisse plus quand B monte (12,4k → 12,6k). On dépasse le volet a (10,7k avec Extra Deck).
+- `refresh_b` à deux niveaux : gagnant sur CPU, perdant sur L4 (un `cond` de plus par appel, sous-lots trop petits pour occuper le GPU). Retiré : le code commité est x5 sans lui (x6 : 243 décisions/s sur CPU), non remesuré sur L4. D'après x1 / x4, il devrait faire un peu mieux que x5.
+- Essais rejetés sur CPU : au moins un tour d'exécution par tour de `settle_b` (−8 %) ; fusion et rituel recalculés seulement si leurs entrées (zone, statut, contrôleur, case) ont changé (−5 % : dans un sous-lot, il y a presque toujours une partie qui en a besoin, donc le calcul se fait quand même, avec un `_where` de plus).
+- Coût : 0,65 CU (une session L4, 3 variantes compilées en parallèle).

@@ -2381,7 +2381,11 @@ def step_batch(bank, s, a, frac=0.0):
     arrêtées en route reprennent à l'appel suivant avec leur action forcée. De même, les boucles d'exécution et de
     settle s'arrêtent dès qu'il ne reste en cours que la part frac des parties qui jouent (sinon tout le lot attend
     la traîne des longues résolutions, qui s'allonge avec B) : ces parties sont rendues en cours de résolution, avec
-    l'action forcée n_actions(N) (« continuer », sans apply). frac = 0 : même résultat que vmap(step)."""
+    l'action forcée n_actions(N) (« continuer », sans apply). frac = 0 : même résultat que vmap(step).
+
+    Après le premier tour (lot complet), les tours des actions forcées ne portent que sur un sous-lot de B/4 parties
+    (celles qui ont une action forcée, les autres attendent le tour suivant). Dans settle, quand le premier joueur passe
+    sans pouvoir rien faire, la seconde passe (adversaire qui ne peut rien faire non plus) est jouée dans le même tour."""
     nb = s.done.shape[0]
     na = n_actions(s.cid.shape[1])
 
@@ -2403,15 +2407,19 @@ def step_batch(bank, s, a, frac=0.0):
         s = lax.cond(need.any(), lambda s: _where(need, jax.vmap(lambda s: trig_eval(bank, s))(s), s),
                      lambda s: s, s)
         ap = jax.vmap(lambda s: auto_pass(bank, s))(s)
-        s = lax.cond(ap.any(), lambda s: refresh_b(bank, s, _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s)),
-                     lambda s: s, s)
+
+        def passes(s):  # première passe, puis la seconde tout de suite si l'adversaire ne peut rien faire non plus
+            s1 = _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s)
+            ap2 = ap & ~s.cw_passed & jax.vmap(lambda s: auto_pass(bank, s))(s1)
+            s2 = lax.cond(ap2.any(), lambda s1: _where(ap2, jax.vmap(lambda s: pass_priority(bank, s))(s1), s1), lambda s1: s1, s1)
+            return refresh_b(bank, s, s2)
+        s = lax.cond(ap.any(), passes, lambda s: s, s)
         return s, i + 1, thr
 
     def settle_b(s, thr):
         return lax.while_loop(lambda c: (todo(c[0]).sum() > thr) & (c[1] < MAX_ITER), settle_body, (s, _i(0), thr))[0]
 
-    def body(carry):
-        s, m, a, i = carry
+    def rnd(s, m, a):  # un tour : actions a (>= 0) appliquées, résolution, masques et actions forcées suivantes
         act = (a >= 0) & ~s.done
         s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.clip(a, 0, na - 1))
         s = _where(act, settle_b(refresh_b(bank, s, _where(act & (a < na), s1, s)), frac * act.sum()), s)
@@ -2421,15 +2429,26 @@ def step_batch(bank, s, a, frac=0.0):
                       lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
         m = jnp.where(act[:, None], lg, m)
         f = jnp.where(left, na, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m))
-        return s, m, jnp.where(act, f, -1), i + 1
+        return s, m, jnp.where(act, f, -1)
+
+    ks = max(1, nb // 4)
+
+    def body(carry):  # tours suivants : seulement les parties qui ont une action forcée, dans un sous-lot de B/4 (les
+        s, m, f, i = carry  # autres attendent le tour suivant ; après le premier tour, ~30 % des parties en ont une)
+        idx = jnp.nonzero((f >= 0) & ~s.done, size=ks, fill_value=nb)[0]
+        g = lambda x: x[jnp.minimum(idx, nb - 1)]
+        ss, ms, fs = rnd(jax.tree.map(g, s), g(m), jnp.where(idx < nb, g(f), -1))
+        put = lambda x, y: x.at[idx].set(y, mode="drop")
+        return jax.tree.map(put, s, ss), put(m, ms), put(f, fs), i + 1
 
     def more(c):
         pend = ((c[2] >= 0) & ~c[0].done).sum()
-        return (pend > jnp.where(c[3] == 0, 0, frac * nb)) & (c[3] < MAX_ITER)
+        return (pend > frac * nb) & (c[3] < MAX_ITER)
 
-    # pas de settle_b initial (les états d'entrée sont à une décision) : une seconde copie gonflerait le programme
-    m = jnp.zeros((nb, n_actions(s.cid.shape[1])), bool)
-    s, m, f, _ = lax.while_loop(more, body, (s, m, a.astype(I32), _i(0)))
+    # pas de settle_b initial (les états d'entrée sont à une décision). rnd est compilé deux fois (lot complet, sous-lot) :
+    # compilation ~2× plus longue et pic de mémoire ~2× (5,8 Go sur CPU), pour ~+30 % de débit sur L4
+    s, m, f = rnd(s, jnp.zeros((nb, n_actions(s.cid.shape[1])), bool), a.astype(I32))
+    s, m, f, _ = lax.while_loop(more, body, (s, m, f, _i(1)))
     return s, m, f
 
 def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
