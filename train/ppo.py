@@ -66,6 +66,7 @@ def parse():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
     ap.add_argument("--bf16", action="store_true", help="calcul du réseau en bfloat16 (paramètres et optimiseur en f32)")
+    ap.add_argument("--prof", type=int, default=0, help="à la fin : chronométrer act, step_batch, act_step... X fois sur l'état du rollout")
     return ap.parse_args()
 
 
@@ -321,6 +322,38 @@ def main():
             with open(a.save, "wb") as fh:
                 pickle.dump(jax.device_get(params), fh)
     print(f"total : {tot_dec} décisions, {tot_games} parties", flush=True)
+    if a.prof:
+        profile(a, fns, params, bank, tok, msk, s, m, f, pool, pm, used, key)
+
+
+def profile(a, fns, params, bank, tok, msk, s, m, f, pool, pm, used, key):
+    """Chaque morceau d'un appel du rollout chronométré seul, a.prof fois sur le même état (fonctions pures) : l'état de
+    fin de rollout (milieu de partie) et la réserve (débuts de partie)."""
+    act, values, act_step, gae, update, enc, obs_b = fns
+    cemb = enc(params, tok, msk)
+    sb = jax.jit(lambda bank, s, x: core.step_batch(bank, s, x, a.frac))
+    side = jnp.full(a.b, -1, jnp.int32)
+    opp0 = (params, cemb, jnp.asarray(False))
+
+    def tm(name, fn, *xs):
+        r = fn(*xs)
+        jax.block_until_ready(r)
+        t0 = time.time()
+        for _ in range(a.prof):
+            r = fn(*xs)
+        jax.block_until_ready(r)
+        print(f"prof {name:45s} {1000 * (time.time() - t0) / a.prof:7.1f} ms", flush=True)
+        return r
+
+    for lab, (s1, m1) in (("milieu", (s, m)), ("début", (pool, pm))):
+        f1 = f if lab == "milieu" else jnp.full(a.b, -1, jnp.int32)
+        print(f"prof {lab} de partie : tour moyen {float(s1.turn.mean()):.1f}, finies {int(s1.done.sum())}", flush=True)
+        ae, _ = tm(f"{lab} act", act, params, cemb, bank, s1, m1, f1, key)
+        rnd = jax.jit(lambda k, m, f: jnp.where(f >= 0, f, jax.random.categorical(k, jnp.where(m, 0.0, -1e9)).astype(jnp.int32)))
+        ar = rnd(key, m1, f1)
+        tm(f"{lab} step_batch (actions du réseau)", sb, bank, s1, ae)
+        tm(f"{lab} step_batch (actions aléatoires)", sb, bank, s1, ar)
+        tm(f"{lab} act_step", act_step, params, cemb, bank, s1, m1, f1, key, side, pool, pm, used, opp0)
 
 
 if __name__ == "__main__":
