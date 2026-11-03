@@ -20,6 +20,8 @@ ap.add_argument("--calls", type=int, default=60)
 ap.add_argument("--old-cards", action="store_true")
 ap.add_argument("--compile-only", action="store_true", help="compile seulement (remplit le cache YGO_JAX_CACHE de core.py)")
 ap.add_argument("--extra", type=int, default=0, help="Extra Deck de X monstres fusion par joueur (cards.test_decks)")
+ap.add_argument("--bank-arg", action="store_true", help="banque passée en argument de step_batch (comme train/ppo.py) "
+                "au lieu d'une constante de compilation")
 ap.add_argument("--proc", type=int, default=-1, help="banque procédurale de graine X (gen/cardgen.py, 400 + 80 cartes, "
                 "decks aléatoires de 40 + 15) au lieu des vraies cartes")
 args = ap.parse_args()
@@ -72,7 +74,12 @@ def run(b):
     else:
         ng = jax.jit(jax.vmap(lambda d, k: core.new_game(bank, d[0], d[1], k)))
     legal = jax.jit(jax.vmap(lambda s: core.legal(bank, s)))
-    sb = jax.jit(lambda s, a: core.step_batch(bank, s, a, args.frac))
+    if args.bank_arg:
+        sb0 = jax.jit(lambda bk, s, a: core.step_batch(bk, s, a, args.frac))
+        sb = lambda s, a: sb0(bank, s, a)
+        sb.lower = lambda *x: sb0.lower(bank, *x)
+    else:
+        sb = jax.jit(lambda s, a: core.step_batch(bank, s, a, args.frac))
     if args.compile_only:
         t0 = time.time()
         d = decks(jax.random.fold_in(key, 1), b)

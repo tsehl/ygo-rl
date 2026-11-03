@@ -237,20 +237,35 @@ def main():
     tot_dec, tot_games = 0, 0
     for it in range(a.iters):
         t0 = time.time()
+        t_games = 0.0                         # parties neuves : decks NumPy + new_game + legal (hors boucle comprise)
+
+        def games(k, prev):
+            """env.games chronométré à part : on attend d'abord le travail GPU déjà en file (prev), sinon il serait compté."""
+            jax.block_until_ready(prev)
+            t1 = time.time()
+            r = env.games(bank, cset, rng, k)
+            jax.block_until_ready(r)
+            return r, time.time() - t1
+
         if it % a.bank_every == 0:
             cset, bank = bank_of(bank_seed, a)
             bank_seed += 1
             tok, msk = model.card_tokens(bank)
             key, k = jax.random.split(key)
-            s, m = env.games(bank, cset, rng, k)
+            (s, m), dt = games(k, params)
+            t_games += dt
             f = jnp.full(a.b, -1, jnp.int32)
         key, k = jax.random.split(key)
-        pool, pm = env.games(bank, cset, rng, k)
+        (pool, pm), dt = games(k, params)
+        t_games += dt
         used = jnp.zeros(a.b, bool)
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
         side = jnp.full(a.b, -1, jnp.int32)
         opp0 = (params, cemb, jnp.asarray(False))
+        jax.block_until_ready(cemb)
+        t1 = time.time()
+        t_in = 0.0                            # parties neuves pendant la boucle (à retrancher de la boucle)
         for t in range(a.steps):
             key, k = jax.random.split(key)
             s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used, opp0)
@@ -259,8 +274,12 @@ def main():
             wins.append(w)
             if t % 8 == 7 and float(used.mean()) > 0.25:      # réserve neuve : chaque partie de la réserve ne sert qu'une fois
                 key, k = jax.random.split(key)
-                pool, pm = env.games(bank, cset, rng, k)
+                (pool, pm), dt = games(k, f)
+                t_in += dt
                 used = jnp.zeros(a.b, bool)
+        jax.block_until_ready(f)
+        t_games += t_in
+        t_loop = time.time() - t1 - t_in      # les 64 appels d'act_step seuls (+ les synchronisations tous les 8 appels)
         last = values(params, cemb, bank, s, m)
         bt = jax.tree.map(lambda *x: jnp.stack(x), *buf)
         done, win = jnp.stack(dones), jnp.stack(wins)
@@ -283,7 +302,8 @@ def main():
         tot_dec += nd
         tot_games += ng
         line = (f"it {it} : {nd} décisions ({nd / (time.time() - t0):.0f}/s), {ng} parties finies ({time.time() - t0:.1f} s ; "
-                f"rollout {t_roll:.1f} s) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
+                f"rollout {t_roll:.1f} s, dont parties neuves {t_games:.1f} s, act_step {t_loop:.1f} s = "
+                f"{1000 * t_loop / a.steps:.0f} ms/appel) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
         if a.eval_every and (it + 1) % a.eval_every == 0:
             key, k = jax.random.split(key)
             ev = evaluate(a, eval_env, fns, params, np.random.default_rng(12345), k)
