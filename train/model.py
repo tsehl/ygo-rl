@@ -53,8 +53,16 @@ def dense_init(k, i, o, scale=1.0):
     return dict(w=jax.random.normal(k, (i, o)) * scale / jnp.sqrt(i), b=jnp.zeros(o))
 
 
+CDT = jnp.float32   # type de calcul (jnp.bfloat16 : précision mixte, paramètres en f32) ; voir set_compute
+
+
+def set_compute(bf16):
+    global CDT
+    CDT = jnp.bfloat16 if bf16 else jnp.float32
+
+
 def dense(p, x):
-    return x @ p["w"] + p["b"]
+    return x.astype(CDT) @ p["w"].astype(CDT) + p["b"].astype(CDT)
 
 
 def ln_init(d):
@@ -62,9 +70,10 @@ def ln_init(d):
 
 
 def ln(p, x):
+    x = x.astype(jnp.float32)
     m = x.mean(-1, keepdims=True)
     v = ((x - m) ** 2).mean(-1, keepdims=True)
-    return (x - m) * jax.lax.rsqrt(v + 1e-5) * p["g"] + p["b"]
+    return ((x - m) * jax.lax.rsqrt(v + 1e-5) * p["g"] + p["b"]).astype(CDT)
 
 
 def block_init(k, d, h):
@@ -81,8 +90,8 @@ def block(p, x, mask, h):
     sh = lambda t: t.reshape(t.shape[:-1] + (h, d // h))
     q, k, v = sh(q), sh(k), sh(v)
     att = jnp.einsum("...qhc,...khc->...hqk", q, k) / jnp.sqrt(d // h)
-    att = jnp.where(mask[..., None, None, :], att, -1e9)
-    y = jnp.einsum("...hqk,...khc->...qhc", jax.nn.softmax(att, -1), v).reshape(x.shape)
+    att = jnp.where(mask[..., None, None, :], att.astype(jnp.float32), -1e9)
+    y = jnp.einsum("...hqk,...khc->...qhc", jax.nn.softmax(att, -1).astype(CDT), v).reshape(x.shape)
     x = x + dense(p["o"], y)
     return x + dense(p["f2"], jax.nn.gelu(dense(p["f1"], ln(p["ln2"], x))))
 
@@ -132,8 +141,20 @@ def card_enc_init(k, d, layers):
                 blocks=[block_init(ks[12 + i], d, 4) for i in range(layers)], out=ln_init(d))
 
 
+LC = 48   # tokens utiles gardés par carte (en-tête compris) ; ~8 en moyenne, 33 au plus sur 30 banques, 26 vraies cartes
+
+
+def n_tokens(msk):
+    """Tokens utiles par carte (en-tête compris), [C] : doit rester <= LC (voir `encode_cards`)."""
+    C = msk["eff"].shape[0]
+    return 1 + sum(v.reshape(C, -1).sum(1) for v in msk.values())
+
+
 def encode_cards(p, tok, msk, heads=4):
-    """[C, d] : un vecteur par carte (sortie du token d'en-tête)."""
+    """[C, d] : un vecteur par carte (sortie du token d'en-tête).
+    Sur les 91 tokens possibles, ~8 sont utiles : ils sont regroupés en tête (tri stable, l'en-tête reste premier) et la
+    séquence est coupée à LC avant le transformer. Les positions sont ajoutées avant ; le résultat est le même que sur
+    les 91 tokens tant qu'aucune carte n'a plus de LC tokens utiles."""
     C = tok["head"].shape[0]
     pe = p["pos_e"]
     x_head = dense(p["head"], tok["head"])[:, None]
@@ -146,9 +167,12 @@ def encode_cards(p, tok, msk, heads=4):
                          x_mat], 1)
     m = jnp.concatenate([jnp.ones((C, 1), bool), msk["eff"], msk["ins"].reshape(C, -1), msk["filt"].reshape(C, -1),
                          msk["mat"]], 1)
+    order = jnp.argsort(~m, axis=1, stable=True)[:, :LC]
+    x = jnp.take_along_axis(x, order[..., None], 1)
+    m = jnp.take_along_axis(m, order, 1)
     for b in p["blocks"]:
         x = block(b, x, m, heads)
-    return ln(p["out"], x[:, 0])
+    return ln(p["out"], x[:, 0]).astype(jnp.float32)
 
 
 # ---------------------------------------------------------------------------------------------------- politique
@@ -197,8 +221,8 @@ def policy(p, cemb, o, heads=4):
     ls = dense(p["spec"], x[..., 0, :])                               # [.., N_SPECIAL]
     logits = jnp.concatenate([la.reshape(la.shape[:-2] + (-1,)), ls], -1)
     legal = jnp.concatenate([o.act.reshape(o.act.shape[:-2] + (-1,)), o.special], -1)
-    logits = jnp.where(legal, logits, -1e9)
-    v = jnp.tanh(dense(p["v2"], jax.nn.gelu(dense(p["v1"], x[..., 0, :])))[..., 0])
+    logits = jnp.where(legal, logits.astype(jnp.float32), -1e9)
+    v = jnp.tanh(dense(p["v2"], jax.nn.gelu(dense(p["v1"], x[..., 0, :])))[..., 0].astype(jnp.float32))
     return logits, v
 
 

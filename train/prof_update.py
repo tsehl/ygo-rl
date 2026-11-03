@@ -30,8 +30,12 @@ ap.add_argument("--d", type=int, default=128)
 ap.add_argument("--layers", type=int, default=3)
 ap.add_argument("--card-layers", type=int, default=2)
 ap.add_argument("--n", type=int, default=5)
+ap.add_argument("--bf16", action="store_true")
+ap.add_argument("--no-act", action="store_true", help="sans la mesure de act (évite de compiler new_game)")
 a = ap.parse_args()
-print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; {a.g} parties × {a.steps} steps, d={a.d}", flush=True)
+model.set_compute(a.bf16)
+print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; {a.g} parties × {a.steps} steps, d={a.d}, "
+      f"{'bf16' if a.bf16 else 'f32'}", flush=True)
 
 cset = cardgen.Gen(0).make_set(400, 80)
 bank = cardgen.to_bank(cset)
@@ -113,3 +117,15 @@ def feats(o):
 timeit("features d'entrée", feats, o)
 mb = jax.jit(lambda bt, ch: jax.tree.map(lambda x: x[:, ch], bt))
 timeit("extraction d'un minibatch (x[:, chunk])", mb, bt, jnp.arange(G))
+
+# act (observation + politique) sur B parties réelles, comme à chaque appel du rollout
+if a.no_act:
+    sys.exit()
+B = S * G if S * G <= 4096 else 1024
+dd, xx = cardgen.random_decks(cset, np.random.default_rng(2), B)
+env = ppo.Env(B, 0.05)
+s, m = env.new(bank, jnp.asarray(dd), jnp.asarray(xx), jax.random.split(jax.random.PRNGKey(3), B))
+f = jnp.full(B, -1, jnp.int32)
+S, G = 1, B
+timeit(f"observe seul (B={B})", jax.jit(lambda s, m: obs_b(bank, s, m, s.dec_player)), s, m)
+timeit(f"act (B={B})", act, params, cemb, bank, s, m, f, jax.random.PRNGKey(4))

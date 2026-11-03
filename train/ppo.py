@@ -64,6 +64,7 @@ def parse():
     ap.add_argument("--eval-bank", type=int, default=1_000_000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
+    ap.add_argument("--bf16", action="store_true", help="calcul du réseau en bfloat16 (paramètres et optimiseur en f32)")
     return ap.parse_args()
 
 
@@ -84,7 +85,10 @@ class Env:
 
 def bank_of(seed, a):
     cset = cardgen.Gen(seed).make_set(a.main, a.extra)
-    return cset, cardgen.to_bank(cset)
+    bank = cardgen.to_bank(cset)
+    nt = int(model.n_tokens(model.card_tokens(bank)[1]).max())
+    assert nt <= model.LC, f"banque {seed} : une carte a {nt} tokens utiles > model.LC = {model.LC}"
+    return cset, bank
 
 
 def _where(m, a, b):
@@ -200,6 +204,7 @@ def evaluate(a, env, fns, params, rng, key):
 def main():
     a = parse()
     a.eval_b = a.eval_b or a.b
+    model.set_compute(a.bf16)
     key = jax.random.PRNGKey(a.seed)
     rng = np.random.default_rng(a.seed)
     print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; B={a.b} steps={a.steps} d={a.d}", flush=True)
