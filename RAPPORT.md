@@ -203,8 +203,7 @@ générateur, réseau). Un banc de vrais decks devra s'en passer, ou attendre ce
   - fusionner les fonctions n'a rien changé.
 
   - mesure L4 découpée (2026-11-03) : la banque en argument (87,7 ms contre 88,4 en constante) et les parties neuves (0 s) ne coûtent rien ; `act` prend 13,4 ms. Il reste ~65 ms par appel.
-
-  Prochaine mesure : `act`, `step_batch` et `act_step` séparément, sur les mêmes états de rollout (milieu de partie).
+  - explication (`ppo.py --prof`) : en milieu de partie (tour moyen 33), `step_batch` coûte 133 ms, contre 53 ms en début de partie ; `act_step` = act 13 + moteur 133 + ~14 ms de remplacement. Le bench, qui part des débuts de partie, sous-estimait le moteur. Les `while_loop` du lot font plus de tours en milieu de partie.
 - À ce débit (4k décisions/s), une heure de L4 donne ~14 M de décisions pour ~2 CU. Le budget mensuel restant
   (~186 CU) permet donc ~90 h de L4, ou moins d'A100 (non mesuré).
 

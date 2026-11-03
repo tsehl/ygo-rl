@@ -255,7 +255,17 @@ Mesures de `train/prof_update.py` (observations synthétiques aux formes réelle
     | parties neuves (`env.games`) pendant le rollout | 0 s par itération |
   - La banque en argument ne coûte rien, et les parties neuves non plus (le chronomètre ne les compte plus dans `act_step`). Le reste du rollout (values, stack, gae) tient en ~0,1 s.
   - act + moteur = ~102 ms. Il reste ~65 ms par appel d'`act_step` sans explication. Candidats : les positions du rollout sont en milieu de partie, alors que le bench part des positions initiales sur 40 appels (+20 % sur CPU entre le tour 4 et le tour 26) ; ou la fusion en une seule fonction compile moins bien que les morceaux séparés.
-  - Mesure suivante : chronométrer `act`, `step_batch` et `act_step` séparément sur les mêmes états de rollout.
+  - **Explication** (`ppo.py --prof 10`, L4, 2026-11-03) : chaque morceau chronométré seul, 10 fois sur le même état. Deux cas : l'état de fin de rollout après 3 itérations (milieu de partie, tour moyen 33) et la réserve (débuts de partie).
+    | ms par appel | milieu de partie | début de partie |
+    |---|---|---|
+    | `act` | 13,4 | 13,4 |
+    | `step_batch`, actions du réseau | 133,1 | 53,4 |
+    | `step_batch`, actions aléatoires | 126,6 | 48,3 |
+    | `act_step` | 160,2 | 74,8 |
+  - L'écart vient de la position : en milieu de partie, le moteur coûte 2,5 fois plus qu'au début. Le bench (40 appels depuis le début de partie, 88 ms) le sous-estimait donc. Les actions du réseau coûtent ~5 % de plus que des actions aléatoires. Le remplacement et la colle autour d'`act_step` coûtent ~14 ms.
+  - Pourquoi : les boucles de `step_batch` (exécution, settle, actions forcées) sont des `while_loop` au niveau du lot. Leur nombre de tours dépend de l'état (plus de cartes, de chaînes et d'actions forcées en milieu de partie), alors que le coût d'un tour, lui, est fixe.
+  - Les parties sont longues : seules 24-123 parties sur 1024 finissent par itération de 64 appels.
+  - Pistes : compter les tours de chaque boucle par appel en milieu de partie, pour savoir laquelle grossit ; faire tourner le bench du moteur sur des états de milieu de partie, sinon il ne représente pas l'entraînement.
 
 ### Deuxième run (L4, 2026-11-03)
 
