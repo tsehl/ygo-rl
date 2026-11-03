@@ -98,8 +98,7 @@ def _where(m, a, b):
 def make_fns(a, opt):
     obs_b = jax.vmap(lambda bank, s, m, p: obsm.observe(bank, s, p, m), in_axes=(None, 0, 0, 0))
 
-    @jax.jit
-    def act(params, cemb, bank, s, m, f, key):
+    def _act(params, cemb, bank, s, m, f, key):
         n = s.cid.shape[1]
         o = obs_b(bank, s, m, s.dec_player)
         logits, v = model.policy(params, cemb, o)
@@ -109,16 +108,31 @@ def make_fns(a, opt):
         ae = jnp.where(f >= 0, f, model.to_engine(o, n, idx))
         return ae, dict(o=o, idx=idx, logp=logp, v=v, need=need, pl=s.dec_player)
 
+    act = jax.jit(_act)
+
     @jax.jit
     def values(params, cemb, bank, s, m):
         vs = [model.policy(params, cemb, obs_b(bank, s, m, jnp.full_like(s.dec_player, p)))[1] for p in (0, 1)]
         return jnp.stack(vs, -1)                                                       # [B, 2]
 
-    @jax.jit
     def refill(s, m, f, s2, m2, used):
         """Parties finies remplacées par la partie de la réserve de même indice, si elle n'a pas déjà servi."""
         d = s.done & ~used
         return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f), used | d
+
+    @jax.jit
+    def act_step(params, cemb, bank, s, m, f, key, side, pool, pm, used):
+        """Un appel du rollout, en une seule fonction compilée (pas de synchronisation hôte) : politique, step_batch,
+        puis remplacement des parties finies par la réserve. side [B] : -1 = le réseau joue les deux côtés ; sinon le
+        réseau joue le joueur `side`, l'autre joue au hasard (évaluation, avec used = vrai : pas de remplacement).
+        Rend aussi done / winner juste après step_batch (avant remplacement)."""
+        k1, k2 = jax.random.split(key)
+        ae, tr = _act(params, cemb, bank, s, m, f, k1)
+        ar = jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
+        s, m, f = core.step_batch(bank, s, jnp.where((side < 0) | (s.dec_player == side), ae, ar), a.frac)
+        done, win = s.done, s.winner
+        s, m, f, used = refill(s, m, f, pool, pm, used)
+        return s, m, f, used, tr, done, win
 
     @jax.jit
     def gae(v, need, pl, done, win, last):
@@ -168,30 +182,25 @@ def make_fns(a, opt):
         return optax.apply_updates(params, up), opt_state, st
 
     enc = jax.jit(lambda params, tok, msk: model.encode_cards(params["cards"], tok, msk))
-    return act, values, refill, gae, update, enc, obs_b
+    return act, values, act_step, gae, update, enc, obs_b
 
 
 def evaluate(a, env, fns, params, rng, key):
     """Réseau contre aléatoire sur la banque d'évaluation : taux de victoire du réseau (parties finies)."""
-    act, values, refill, gae, update, enc, obs_b = fns
+    act, values, act_step, gae, update, enc, obs_b = fns
     cset, bank = bank_of(a.eval_bank, a)
     tok, msk = model.card_tokens(bank)
     cemb = enc(params, tok, msk)
     s, m = env.games(bank, cset, rng, key)
     f = jnp.full(env.b, -1, jnp.int32)
     side = jnp.arange(env.b) % 2                       # côté du réseau
-    na = core.n_actions(s.cid.shape[1])
     fin = np.zeros(env.b, bool)
     win = np.zeros(env.b, int)
+    used = jnp.ones(env.b, bool)                       # pas de remplacement des parties finies
     for t in range(a.eval_steps):
-        key, k1, k2 = jax.random.split(key, 3)
-        ae, _ = act(params, cemb, bank, s, m, f, k1)
-        ar = jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32)
-        ar = jnp.where(f >= 0, f, ar)
-        aa = jnp.where(s.dec_player == side, ae, ar)
-        s, m, f = env.step(bank, s, aa)
-        d = np.asarray(s.done)
-        w = np.asarray(s.winner)
+        key, k = jax.random.split(key)
+        s, m, f, used, _, d, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used)
+        d, w = np.asarray(d), np.asarray(w)
         new = d & ~fin
         win[new] = (w[new] == np.asarray(side)[new]).astype(int) - (w[new] == 1 - np.asarray(side)[new]).astype(int)
         fin |= d
@@ -214,7 +223,7 @@ def main():
     opt_state = opt.init(params)
     env = Env(a.b, a.frac)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
-    fns = act, values, refill, gae, update, enc, obs_b = make_fns(a, opt)
+    fns = act, values, act_step, gae, update, enc, obs_b = make_fns(a, opt)
     bank_seed = a.seed * 100_000
     tot_dec, tot_games = 0, 0
     for it in range(a.iters):
@@ -231,23 +240,17 @@ def main():
         used = jnp.zeros(a.b, bool)
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
-        t_env = 0.0
+        side = jnp.full(a.b, -1, jnp.int32)
         for t in range(a.steps):
             key, k = jax.random.split(key)
-            ae, tr = act(params, cemb, bank, s, m, f, k)
-            t1 = time.time()
-            s, m, f = env.step(bank, s, ae)
-            jax.block_until_ready(f)
-            t_env += time.time() - t1
+            s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used)
             buf.append(tr)
-            dones.append(s.done)
-            wins.append(s.winner)
-            if bool(s.done.any()):
-                s, m, f, used = refill(s, m, f, pool, pm, used)
-                if float(used.mean()) > 0.25:                 # réserve neuve : chaque partie de la réserve ne sert qu'une fois
-                    key, k = jax.random.split(key)
-                    pool, pm = env.games(bank, cset, rng, k)
-                    used = jnp.zeros(a.b, bool)
+            dones.append(d)
+            wins.append(w)
+            if t % 8 == 7 and float(used.mean()) > 0.25:      # réserve neuve : chaque partie de la réserve ne sert qu'une fois
+                key, k = jax.random.split(key)
+                pool, pm = env.games(bank, cset, rng, k)
+                used = jnp.zeros(a.b, bool)
         last = values(params, cemb, bank, s, m)
         bt = jax.tree.map(lambda *x: jnp.stack(x), *buf)
         done, win = jnp.stack(dones), jnp.stack(wins)
@@ -270,8 +273,7 @@ def main():
         tot_dec += nd
         tot_games += ng
         line = (f"it {it} : {nd} décisions ({nd / (time.time() - t0):.0f}/s), {ng} parties finies ({time.time() - t0:.1f} s ; "
-                f"rollout {t_roll:.1f} s dont "
-                f"moteur {t_env:.1f} s) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
+                f"rollout {t_roll:.1f} s) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
         if a.eval_every and (it + 1) % a.eval_every == 0:
             key, k = jax.random.split(key)
             ev = evaluate(a, eval_env, fns, params, np.random.default_rng(12345), k)
