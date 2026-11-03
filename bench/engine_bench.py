@@ -20,6 +20,8 @@ ap.add_argument("--calls", type=int, default=60)
 ap.add_argument("--old-cards", action="store_true")
 ap.add_argument("--compile-only", action="store_true", help="compile seulement (remplit le cache YGO_JAX_CACHE de core.py)")
 ap.add_argument("--extra", type=int, default=0, help="Extra Deck de X monstres fusion par joueur (cards.test_decks)")
+ap.add_argument("--proc", type=int, default=-1, help="banque procédurale de graine X (gen/cardgen.py, 400 + 80 cartes, "
+                "decks aléatoires de 40 + 15) au lieu des vraies cartes")
 args = ap.parse_args()
 sys.path.insert(0, args.engine)
 
@@ -32,7 +34,15 @@ import core  # noqa: E402
 
 D, C = 40, 670
 key = jax.random.PRNGKey(0)
-bank = cards.test_bank(key, C)
+if args.proc >= 0:
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gen"))
+    import cardgen  # noqa: E402
+    cset = cardgen.Gen(args.proc).make_set(400, 80)
+    bank = cardgen.to_bank(cset)
+    args.extra = args.extra or 15
+else:
+    bank = cards.test_bank(key, C)
 codes = np.asarray(bank.code)
 new = set()
 for name in ("J4", "J4B", "J4C", "J4D"):
@@ -44,6 +54,9 @@ print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; banque {len(codes
 
 
 def decks(k, b):
+    if args.proc >= 0:
+        d, x = cardgen.random_decks(cset, np.random.default_rng(int(jax.random.randint(k, (), 0, 1 << 30))), b, D, args.extra)
+        return jnp.asarray(d), jnp.asarray(x)
     if args.extra:
         return cards.test_decks(k, bank, b, D, C, 0.3, args.extra)
     k1, k2, k3 = jax.random.split(k, 3)
