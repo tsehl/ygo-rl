@@ -59,6 +59,7 @@ def parse():
     ap.add_argument("--main", type=int, default=400)
     ap.add_argument("--extra", type=int, default=80)
     ap.add_argument("--eval-every", type=int, default=10)
+    ap.add_argument("--old-lag", type=int, default=50, help="évaluation aussi contre la politique d'il y a X itérations")
     ap.add_argument("--eval-b", type=int, default=0, help="parties d'évaluation (défaut : b)")
     ap.add_argument("--eval-steps", type=int, default=400)
     ap.add_argument("--eval-bank", type=int, default=1_000_000)
@@ -121,14 +122,19 @@ def make_fns(a, opt):
         return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f), used | d
 
     @jax.jit
-    def act_step(params, cemb, bank, s, m, f, key, side, pool, pm, used):
+    def act_step(params, cemb, bank, s, m, f, key, side, pool, pm, used, opp=None):
         """Un appel du rollout, en une seule fonction compilée (pas de synchronisation hôte) : politique, step_batch,
         puis remplacement des parties finies par la réserve. side [B] : -1 = le réseau joue les deux côtés ; sinon le
-        réseau joue le joueur `side`, l'autre joue au hasard (évaluation, avec used = vrai : pas de remplacement).
-        Rend aussi done / winner juste après step_batch (avant remplacement)."""
+        réseau joue le joueur `side` et l'adversaire l'autre (évaluation, avec used = vrai : pas de remplacement).
+        opp = (paramètres, cemb, use) : adversaire réseau si use (scalaire), sinon aléatoire uniforme ; lax.cond sur un
+        scalaire hors vmap : une seule branche calculée. Rend aussi done / winner juste après step_batch."""
         k1, k2 = jax.random.split(key)
         ae, tr = _act(params, cemb, bank, s, m, f, k1)
-        ar = jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
+        rnd = lambda: jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
+        if opp is None:
+            ar = rnd()
+        else:
+            ar = jax.lax.cond(opp[2], lambda: _act(opp[0], opp[1], bank, s, m, f, k2)[0], rnd)
         s, m, f = core.step_batch(bank, s, jnp.where((side < 0) | (s.dec_player == side), ae, ar), a.frac)
         done, win = s.done, s.winner
         s, m, f, used = refill(s, m, f, pool, pm, used)
@@ -185,12 +191,14 @@ def make_fns(a, opt):
     return act, values, act_step, gae, update, enc, obs_b
 
 
-def evaluate(a, env, fns, params, rng, key):
-    """Réseau contre aléatoire sur la banque d'évaluation : taux de victoire du réseau (parties finies)."""
+def evaluate(a, env, fns, params, rng, key, oparams=None):
+    """Réseau contre aléatoire (oparams None) ou contre une autre version du réseau, sur la banque d'évaluation : taux
+    de victoire du réseau (parties finies)."""
     act, values, act_step, gae, update, enc, obs_b = fns
     cset, bank = bank_of(a.eval_bank, a)
     tok, msk = model.card_tokens(bank)
     cemb = enc(params, tok, msk)
+    opp = (params, cemb, jnp.asarray(False)) if oparams is None else (oparams, enc(oparams, tok, msk), jnp.asarray(True))
     s, m = env.games(bank, cset, rng, key)
     f = jnp.full(env.b, -1, jnp.int32)
     side = jnp.arange(env.b) % 2                       # côté du réseau
@@ -199,7 +207,7 @@ def evaluate(a, env, fns, params, rng, key):
     used = jnp.ones(env.b, bool)                       # pas de remplacement des parties finies
     for t in range(a.eval_steps):
         key, k = jax.random.split(key)
-        s, m, f, used, _, d, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used)
+        s, m, f, used, _, d, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used, opp)
         d, w = np.asarray(d), np.asarray(w)
         new = d & ~fin
         win[new] = (w[new] == np.asarray(side)[new]).astype(int) - (w[new] == 1 - np.asarray(side)[new]).astype(int)
@@ -221,6 +229,7 @@ def main():
     print("paramètres :", sum(x.size for x in jax.tree.leaves(params)), flush=True)
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt_state = opt.init(params)
+    snaps = {0: params}                                # versions passées pour l'évaluation (itération → paramètres)
     env = Env(a.b, a.frac)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
     fns = act, values, act_step, gae, update, enc, obs_b = make_fns(a, opt)
@@ -241,9 +250,10 @@ def main():
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
         side = jnp.full(a.b, -1, jnp.int32)
+        opp0 = (params, cemb, jnp.asarray(False))
         for t in range(a.steps):
             key, k = jax.random.split(key)
-            s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used)
+            s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used, opp0)
             buf.append(tr)
             dones.append(d)
             wins.append(w)
@@ -278,6 +288,13 @@ def main():
             key, k = jax.random.split(key)
             ev = evaluate(a, eval_env, fns, params, np.random.default_rng(12345), k)
             line += " | " + " ".join(f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in ev.items())
+            # contre la version d'il y a --old-lag itérations (ou la plus ancienne gardée, au début : l'initialisation)
+            old = max([i for i in snaps if i <= it + 1 - a.old_lag] or [min(snaps)])
+            key, k = jax.random.split(key)
+            ev = evaluate(a, eval_env, fns, params, np.random.default_rng(54321), k, snaps[old])
+            line += f" | contre it {old} : win {ev['eval_win']:.3f} loss {ev['eval_loss']:.3f}"
+            snaps[it + 1] = params
+            snaps = {i: q for i, q in snaps.items() if i >= it + 1 - 2 * a.old_lag}
         print(line, flush=True)
         if a.save:
             import pickle
