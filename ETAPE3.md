@@ -227,3 +227,50 @@ Suite :
 1. Réduire le coût de la mise à jour (la moitié du temps).
 2. Comprendre l'écart de débit du moteur sur les cartes procédurales.
 3. Évaluer contre des versions passées de la politique et sur les vraies cartes (benchmark).
+
+### Débit : où part le temps (2026-11-03)
+
+Mesures de `train/prof_update.py` (observations synthétiques aux formes réelles) et de `bench/engine_bench.py --proc` (moteur seul, banque procédurale) :
+- **Encodeur de cartes** : ~8 tokens utiles sur 91 (33 au plus sur 30 banques, 26 pour les vraies cartes).
+  - Les tokens utiles sont regroupés en tête et coupés à `LC = 48` : même sortie (écart 1e-6), avant + arrière 1,5 → 0,9 s sur CPU.
+  - Sur L4, il ne coûte de toute façon que 6,5 ms (avant + arrière) : la mise à jour, c'est la politique.
+- **Politique** :
+  - En f32, un minibatch de 128 parties × 64 steps demande 15 Go.
+  - En bf16 (`--bf16` : calcul en bf16, paramètres, LayerNorm, softmax et pertes en f32), 400 ms par minibatch.
+  - Mise à jour complète : 11 → 7 s par itération.
+- **Tokens d'observation** : 37 valides sur 64 en moyenne, mais 56 au 99e centile et 61 au maximum. Compacter ne gagnerait presque rien.
+- **Moteur seul, banque procédurale** (L4, B=1024) : 10,3k décisions/s, 96 ms par appel. Les vraies cartes donnent 12,4k : les cartes procédurales ne coûtent que 15-20 % de plus (même écart sur CPU).
+- **Rollout PPO** : 169 ms par appel, contre 96 ms pour le moteur seul.
+  - Sur CPU, le choix du réseau ajoute 18 % au moteur, et le moteur coûte autant avec les actions du réseau qu'avec des actions aléatoires.
+  - Le coût monte de ~20 % entre le tour 4 et le tour 26.
+  - Fusionner politique, step_batch et remplacement en une fonction (`act_step`, sans synchronisation hôte) n'a pas changé le temps du rollout.
+  - Reste à mesurer `act` seul sur GPU.
+
+### Deuxième run (L4, 2026-11-03)
+
+`--b 1024 --steps 64 --iters 200 --mb 8 --bf16 --eval-every 20 --old-lag 60`, d=128.
+- Compilation : ~8 min.
+- 17-18 s par itération, puis ~16 s, soit 3,5k → 4,0k décisions/s.
+- 12,5 M de décisions, 92 500 parties, ~70 min de calcul, 2,7 CU.
+- Paramètres finaux (f16, gzip) : `train/ckpt/run2_it200_f16.pkl.gz`. Ils sont rapatriés par `colab exec` en base64 (2,9 Mo de sortie, ça passe).
+- Cette fois, la session a tenu 95 min.
+
+| itération | contre l'aléatoire | contre l'itération −60 | entropie |
+|---|---|---|---|
+| 19 | 82,5 % | 82,6 % (it 0) | 0,83 |
+| 59 | 89,0 % | 91,1 % (it 0) | 0,55 |
+| 79 | 92,7 % | 70,2 % (it 20) | 0,56 |
+| 99 | 94,7 % | 61,4 % (it 40) | 0,48 |
+| 139 | 97,1 % | 59,6 % (it 80) | 0,46 |
+| 179 | 97,7 % | 60,1 % (it 120) | 0,50 |
+| 199 | 97,6 % | 53,6 % (it 140) | 0,42 |
+
+Environ 1000 parties par évaluation, sur une banque jamais vue.
+- Contre la version d'il y a 60 itérations, l'avantage passe de 70 % à ~60 %, puis à 54 % sur la fin : les progrès ralentissent.
+- Avec des decks aléatoires sans structure, une partie du résultat tient au tirage. Il faut un plafond de référence : par exemple, rejouer une partie avec les decks échangés.
+
+Pistes :
+- Plus de self-play contre des versions passées (pool d'adversaires).
+- Des decks structurés (archétypes, étape 4).
+- Évaluer sur les vraies cartes (benchmark).
+- Mesurer `act` sur GPU.
