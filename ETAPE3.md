@@ -244,7 +244,18 @@ Mesures de `train/prof_update.py` (observations synthétiques aux formes réelle
   - Sur CPU, le choix du réseau ajoute 18 % au moteur, et le moteur coûte autant avec les actions du réseau qu'avec des actions aléatoires.
   - Le coût monte de ~20 % entre le tour 4 et le tour 26.
   - Fusionner politique, step_batch et remplacement en une fonction (`act_step`, sans synchronisation hôte) n'a pas changé le temps du rollout.
-  - Reste à mesurer `act` seul sur GPU.
+  - Mesure découpée sur L4 (2026-11-03, B=1024, banque procédurale 0, bf16) :
+    | mesure | ms par appel |
+    |---|---|
+    | moteur seul, banque en constante de compilation (`engine_bench.py --proc 0`) | 88,4 |
+    | moteur seul, banque en argument (`--bank-arg`) | 87,7 |
+    | `act` seul (observation + politique, `prof_update.py`) | 13,4 |
+    | dont `observe` | 0,4 |
+    | `act_step` dans le rollout PPO (it 1-5) | 162-170 |
+    | parties neuves (`env.games`) pendant le rollout | 0 s par itération |
+  - La banque en argument ne coûte rien, et les parties neuves non plus (le chronomètre ne les compte plus dans `act_step`). Le reste du rollout (values, stack, gae) tient en ~0,1 s.
+  - act + moteur = ~102 ms. Il reste ~65 ms par appel d'`act_step` sans explication. Candidats : les positions du rollout sont en milieu de partie, alors que le bench part des positions initiales sur 40 appels (+20 % sur CPU entre le tour 4 et le tour 26) ; ou la fusion en une seule fonction compile moins bien que les morceaux séparés.
+  - Mesure suivante : chronométrer `act`, `step_batch` et `act_step` séparément sur les mêmes états de rollout.
 
 ### Deuxième run (L4, 2026-11-03)
 

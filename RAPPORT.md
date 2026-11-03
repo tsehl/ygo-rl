@@ -192,7 +192,7 @@ générateur, réseau). Un banc de vrais decks devra s'en passer, ou attendre ce
 
 | Poste | Temps par itération | Remarque |
 |---|---|---|
-| Rollout (64 appels) | ~10,8 s | 169 ms par appel, contre 96 ms pour le moteur seul |
+| Rollout (64 appels) | ~10,6 s | ~165 ms par appel d'`act_step`, contre 88 ms pour le moteur seul (banque procédurale 0) et 13 ms pour `act` |
 | Mise à jour (2 époques × 8 minibatchs) | ~7 s | 11 s en f32 ; en f32, un minibatch demande 15 Go |
 | Encodeur de cartes | négligeable | 6,5 ms, avant + arrière |
 
@@ -202,7 +202,9 @@ générateur, réseau). Un banc de vrais decks devra s'en passer, ou attendre ce
   - la fin de partie coûte ~20 % de plus que le début ;
   - fusionner les fonctions n'a rien changé.
 
-  Prochaine mesure : `act` seul sur GPU.
+  - mesure L4 découpée (2026-11-03) : la banque en argument (87,7 ms contre 88,4 en constante) et les parties neuves (0 s) ne coûtent rien ; `act` prend 13,4 ms. Il reste ~65 ms par appel.
+
+  Prochaine mesure : `act`, `step_batch` et `act_step` séparément, sur les mêmes états de rollout (milieu de partie).
 - À ce débit (4k décisions/s), une heure de L4 donne ~14 M de décisions pour ~2 CU. Le budget mensuel restant
   (~186 CU) permet donc ~90 h de L4, ou moins d'A100 (non mesuré).
 
