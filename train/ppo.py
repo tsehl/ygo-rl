@@ -54,7 +54,7 @@ def parse():
     ap.add_argument("--clip", type=float, default=0.2)
     ap.add_argument("--ent", type=float, default=0.01)
     ap.add_argument("--vf", type=float, default=0.5)
-    ap.add_argument("--frac", type=float, default=0.05)
+    ap.add_argument("--frac", type=float, default=0.1, help="arrêt anticipé de step_batch (optimum mesuré sur L4 le 2026-11-04)")
     ap.add_argument("--bank-every", type=int, default=10)
     ap.add_argument("--main", type=int, default=400)
     ap.add_argument("--extra", type=int, default=80)

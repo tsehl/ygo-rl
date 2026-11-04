@@ -296,6 +296,19 @@ Ce qui reste :
 - Chaque tour paie exec_one et refresh sur tout le lot, pour ~47 parties actives en moyenne sur 1024.
 - Un sous-lot pour la traîne de settle n'avait rien gagné, et avait coûté 70 % de compilation en plus.
 
+Réglage de `frac` (arrêt anticipé de `step_batch`), PPO de bout en bout (L4, B=1024, 64 appels, `--mb 8 --bf16`, itérations 2-9) :
+
+| frac | décisions par itération | ms par appel d'`act_step` | décisions/s (rollout + mise à jour) |
+|---|---|---|---|
+| 0,05 | 64,3k | ~148 | ~3 870 |
+| 0,1 | 60,6k | ~125 | ~4 030 |
+| 0,2 | 55,1k | ~118 | ~3 770 |
+
+- Un `frac` plus grand rend la main plus tôt : la traîne des longues résolutions continue à l'appel suivant, en même temps que le travail des autres parties.
+- Les parties rendues en cours de résolution ne produisent pas de décision à cet appel, mais leur case du tampon coûte quand même dans la mise à jour (~7 s par itération, fixe).
+- Optimum vers 0,1 (+4 %) : c'est la nouvelle valeur par défaut de `ppo.py`.
+- Les données ne changent pas : une partie suit la même suite de décisions quel que soit `frac` (`sb_check.py`).
+
 ### Deuxième run (L4, 2026-11-03)
 
 `--b 1024 --steps 64 --iters 200 --mb 8 --bf16 --eval-every 20 --old-lag 60`, d=128.
