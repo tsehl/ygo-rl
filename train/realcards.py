@@ -92,6 +92,7 @@ def build(path=PATH):
         out["bank_" + k] = np.concatenate([x, np.repeat(x[:1], C_PAD - len(codes), 0)])
     names = sorted(DECKS)
     out["deck_names"] = np.array(names)
+    out["card_names"] = np.array([db.names[c] for c in codes] + [""] * (C_PAD - len(codes)))
     out["main"] = np.array([[cmap[by_name[n]] for n in _expand(DECKS[d]["main"])] for d in names], np.int32)
     out["extra"] = np.array([[cmap[by_name[n]] for n in _expand(DECKS[d]["extra"])] for d in names], np.int32)
     np.savez_compressed(path, **out)
@@ -99,12 +100,17 @@ def build(path=PATH):
 
 
 def load(path=PATH):
-    """→ (core.Bank, noms des decks, main [D, 40], extra [D, 15])."""
+    """→ (core.Bank, noms des decks, main [D, 40], extra [D, 15]) ; noms des cartes : card_names(path)."""
     import jax.numpy as jnp
     import core
     z = np.load(path)
     bank = core.Bank(**{k: jnp.asarray(z["bank_" + k]) for k in core.Bank._fields})
     return bank, list(z["deck_names"]), z["main"], z["extra"]
+
+
+def card_names(path=PATH):
+    """Nom de chaque carte de la banque ("" pour le remplissage)."""
+    return list(np.load(path)["card_names"])
 
 
 if __name__ == "__main__":

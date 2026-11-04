@@ -121,11 +121,11 @@ def heuristic(bank, s, m, f, key):
 def make_fns(a, opt):
     obs_b = jax.vmap(lambda bank, s, m, p: obsm.observe(bank, s, p, m), in_axes=(None, 0, 0, 0))
 
-    def _act(params, cemb, bank, s, m, f, key):
+    def _act(params, cemb, bank, s, m, f, key, greedy=False):
         n = s.cid.shape[1]
         o = obs_b(bank, s, m, s.dec_player)
         logits, v = model.policy(params, cemb, o)
-        idx = jax.random.categorical(key, logits)
+        idx = jnp.where(greedy, jnp.argmax(logits, -1), jax.random.categorical(key, logits))  # greedy : évaluation
         logp = jnp.take_along_axis(jax.nn.log_softmax(logits), idx[:, None], -1)[:, 0]
         need = (f < 0) & ~s.done
         ae = jnp.where(f >= 0, f, model.to_engine(o, n, idx))
@@ -144,7 +144,7 @@ def make_fns(a, opt):
         return _where(d, s2, s), _where(d, m2, m), jnp.where(d, -1, f), used | d
 
     @jax.jit
-    def act_step(params, cemb, bank, s, m, f, key, side, pool, pm, used, opp=None):
+    def act_step(params, cemb, bank, s, m, f, key, side, pool, pm, used, opp=None, greedy=False):
         """Un appel du rollout, en une seule fonction compilée (pas de synchronisation hôte) : politique, step_batch,
         puis remplacement des parties finies par la réserve. side [B] : -1 = le réseau joue les deux côtés ; sinon le
         réseau joue le joueur `side` et l'adversaire l'autre (évaluation, avec used = vrai : pas de remplacement).
@@ -152,7 +152,7 @@ def make_fns(a, opt):
         lax.switch sur un scalaire hors vmap : une seule branche calculée. Rend aussi done / winner juste après
         step_batch."""
         k1, k2 = jax.random.split(key)
-        ae, tr = _act(params, cemb, bank, s, m, f, k1)
+        ae, tr = _act(params, cemb, bank, s, m, f, k1, greedy)
         rnd = lambda: jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
         if opp is None:
             ar = rnd()
@@ -224,7 +224,7 @@ def paired(d, x):
     return D, X, np.tile([0, 1, 0, 1], len(d))
 
 
-def play_eval(a, env, fns, params, bank, d, x, side, key, kind, oparams=None):
+def play_eval(a, env, fns, params, bank, d, x, side, key, kind, oparams=None, greedy=False):
     """Parties d [B, 2, 40], x [B, 2, 15] ; le réseau joue le joueur side[b], l'adversaire est aléatoire (kind 0), le
     réseau oparams (1) ou l'heuristique (2). Rend (finies [B], résultat [B] : 1 victoire, -1 défaite, 0 nul / pas fini)."""
     act, values, act_step, gae, update, enc, obs_b = fns
@@ -240,7 +240,7 @@ def play_eval(a, env, fns, params, bank, d, x, side, key, kind, oparams=None):
     used = jnp.ones(env.b, bool)                       # pas de remplacement des parties finies
     for t in range(a.eval_steps):
         key, k = jax.random.split(key)
-        s, m, f, used, _, dn, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used, opp)
+        s, m, f, used, _, dn, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used, opp, jnp.asarray(greedy))
         dn, w = np.asarray(dn), np.asarray(w)
         new = dn & ~fin
         res[new] = (w[new] == sd[new]).astype(int) - (w[new] == 1 - sd[new]).astype(int)
@@ -256,18 +256,18 @@ def summary(fin, res, pre="eval"):
             f"{pre}_loss": float((res[fin] == -1).sum() / n)}
 
 
-def evaluate(a, env, fns, params, key, kind, oparams=None, pre="eval"):
+def evaluate(a, env, fns, params, key, kind, oparams=None, pre="eval", greedy=False):
     """Banque procédurale d'évaluation (jamais vue), decks aléatoires joués par paires (voir paired), graine fixe."""
     cset, bank = bank_of(a.eval_bank, a)
     d, x = cardgen.random_decks(cset, np.random.default_rng(12345), env.b // 4)
     D, X, side = paired(d, x)
-    return summary(*play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams), pre)
+    return summary(*play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams, greedy), pre)
 
 
 _REAL = {}
 
 
-def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real"):
+def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real", greedy=False):
     """Vraies cartes (train/realcards.py) : toutes les rencontres (deck du réseau, deck adverse, côté), répétées pour
     remplir le lot. Rend le taux de victoire global et par deck du réseau."""
     import realcards
@@ -281,7 +281,7 @@ def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real"):
     p0, p1 = np.where(side == 0, i, j), np.where(side == 0, j, i)
     D = np.stack([main[p0], main[p1]], 1)
     X = np.stack([extra[p0], extra[p1]], 1)
-    fin, res = play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams)
+    fin, res = play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams, greedy)
     out = summary(fin, res, pre)
     for k, nm in enumerate(names):
         sel = fin & (i == k)
@@ -343,7 +343,7 @@ def main():
         t_in = 0.0                            # parties neuves pendant la boucle (à retrancher de la boucle)
         for t in range(a.steps):
             key, k = jax.random.split(key)
-            s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used, opp0)
+            s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used, opp0, jnp.asarray(False))
             buf.append(tr)
             dones.append(d)
             wins.append(w)
@@ -430,7 +430,7 @@ def profile(a, fns, params, bank, tok, msk, s, m, f, pool, pm, used, key):
         ar = rnd(key, m1, f1)
         tm(f"{lab} step_batch (actions du réseau)", sb, bank, s1, ae)
         tm(f"{lab} step_batch (actions aléatoires)", sb, bank, s1, ar)
-        tm(f"{lab} act_step", act_step, params, cemb, bank, s1, m1, f1, key, side, pool, pm, used, opp0)
+        tm(f"{lab} act_step", act_step, params, cemb, bank, s1, m1, f1, key, side, pool, pm, used, opp0, jnp.asarray(False))
 
 
 if __name__ == "__main__":
