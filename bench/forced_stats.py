@@ -32,6 +32,19 @@ d, x = cardgen.random_decks(cset, np.random.default_rng(1), a.b)
 ng = jax.jit(jax.vmap(lambda d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1])))
 
 
+def cheap_ok(s):
+    """[E, N] : parties bon marché d'act_ok (verrou de nom, une fois par tour par nom / par carte)."""
+    p = s.dec_player
+    rows = []
+    for e in range(core.E):
+        rows.append(~core.name_in(s.lock_cid[p], s.cid) & ~((bank.eopt[s.cid, e] == core.OPT_NAME) & core.name_in(s.opt_cid[p], s.cid))
+                    & ~((bank.eopt[s.cid, e] >= core.OPT_CARD) & ((s.st & ((core.ST_CNT | core.ST_CNTN) << e)) != 0)))
+    return jnp.stack(rows)
+
+
+diag = jax.jit(jax.vmap(lambda s: ((core.act_cand(bank, s) & cheap_ok(s)).any(), core.act_cand(bank, s).sum())))
+
+
 @jax.jit
 def it(s, f, key):
     m = jax.vmap(lambda s: core.legal(bank, s))(s)
@@ -55,7 +68,11 @@ for t in range(a.iters):
     bucket = np.where(turn <= 5, 0, np.where(turn <= 15, 1, 2))
     fo = np.asarray(f) >= 0
     dec, wk, ret = np.asarray(s.dec), np.asarray(s.wk), np.asarray(s.ret)
+    cheap, ncand = (np.asarray(z) for z in diag(s))
     for g in np.nonzero(live)[0]:
+        if fo[g] and DN[dec[g]] == "CHAIN":
+            cnt[bucket[g]][("cheap_ok vide" if not cheap[g] else "test_ok", -1, -1)] += 1
+            cnt[bucket[g]][(f"ncand={min(int(ncand[g]), 5)}", -2, -1)] += 1
         if fo[g]:
             cnt[bucket[g]][(DN[dec[g]], int(wk[g]), int(ret[g]) if DN[dec[g]] == "CHAIN" else -1)] += 1
         else:

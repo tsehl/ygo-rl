@@ -106,6 +106,7 @@ PT = 6          # instructions testées par programme de coût / cible (test_ok)
 R = 4           # registres ensembles
 NF = 4          # filtres par effet
 KC = 24         # (carte, effet) candidats à l'activation testés par legal (main + terrain du joueur qui décide)
+KA = 2          # candidats testés par auto_pass (au-delà : pas de passe automatique, legal décide)
 K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK, K_CONT = range(7)  # déclencheur obligatoire / optionnel ;
 # K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng ; K_CONT : effet continu, appliqué
 # tant que sa carte est recto dans les zones erng (et résolue, pour une magie/piège)
@@ -2035,8 +2036,15 @@ def act_cand(bank, s):
 
 def auto_pass(bank, s):
     """Fenêtre de réponse où le joueur ne peut rien activer : passer est la seule action (jouée par settle, sans
-    passer par legal + apply). Les fenêtres W_TRIG ne sont ouvertes que s'il y a un déclencheur activable."""
-    return (s.dec == D_CHAIN) & (s.wk != W_TRIG) & ~s.done & ~act_cand(bank, s).any()
+    passer par legal + apply). Les fenêtres W_TRIG ne sont ouvertes que s'il y a un déclencheur activable.
+    Avec au plus KA candidats, leur coût et leur cible sont testés (act_ok, comme legal) : en milieu de partie, la
+    plupart des fenêtres ont un ou deux candidats qui ne passent pas act_ok, et la passe, seule action légale, prenait
+    sinon un tour complet de step (apply, settle, legal, forced). Même partie : A_PASS joue aussi pass_priority."""
+    cand = act_cand(bank, s)
+    nc = cand.sum()
+    ce, ch = jnp.nonzero(cand, size=KA, fill_value=0)
+    okc = jax.vmap(lambda h, e: act_ok(bank, s, h, e, s.dec_player))(ch, ce) & (jnp.arange(KA) < nc)
+    return (s.dec == D_CHAIN) & (s.wk != W_TRIG) & ~s.done & ((nc == 0) | ((nc <= KA) & ~okc.any()))
 
 
 def legal(bank, s, fus=True):
@@ -2394,7 +2402,7 @@ def _where(m, a, b):
     return jax.tree.map(lambda x, y: jnp.where(m.reshape(m.shape + (1,) * (x.ndim - 1)), x, y), a, b)
 
 
-def step_batch(bank, s, a, frac=0.0):
+def step_batch(bank, s, a, frac=0.0, stats=False):
     """Version lot de step, pour l'entraînement : a[b] = action de la partie b (politique, ou l'action forcée rendue
     par l'appel précédent). Rend (états, masques légaux, actions forcées en attente ou -1).
 
@@ -2404,6 +2412,9 @@ def step_batch(bank, s, a, frac=0.0):
     settle s'arrêtent dès qu'il ne reste en cours que la part frac des parties qui jouent (sinon tout le lot attend
     la traîne des longues résolutions, qui s'allonge avec B) : ces parties sont rendues en cours de résolution, avec
     l'action forcée n_actions(N) (« continuer », sans apply). frac = 0 : même résultat que vmap(step).
+    stats : rend aussi un compteur int32[11] (diagnostic du débit) : tours de la boucle externe, de settle_b, de run_b,
+    trig_eval pris, passes prises, secondes passes prises, legal avec fusion ; puis la somme sur les tours du nombre de
+    parties actives : run_b, trig_eval, première passe, seconde passe.
 
     Après le premier tour (lot complet), les tours des actions forcées ne portent que sur un sous-lot de B/4 parties
     (celles qui ont une action forcée, les autres attendent le tour suivant). Dans settle, quand le premier joueur passe
@@ -2411,57 +2422,80 @@ def step_batch(bank, s, a, frac=0.0):
     nb = s.done.shape[0]
     na = n_actions(s.cid.shape[1])
 
-    def todo(s):
-        return ((s.dec == D_RUN) | (s.dec == D_TRIG) | jax.vmap(lambda s: auto_pass(bank, s))(s)) & ~s.done
+    def apb(s, mask, prev):
+        """auto_pass recalculé seulement pour les parties mask (sous-lot de B/8, ou tout le lot s'il y en a plus),
+        prev ailleurs : auto_pass teste act_ok, trop cher pour tout le lot à chaque tour de settle."""
+        n = s.done.shape[0]
+        ks = max(1, n // 8)
+        full = lambda s: jax.vmap(lambda s: auto_pass(bank, s))(s)
+
+        def sub(s):
+            idx = jnp.nonzero(mask, size=ks, fill_value=n)[0]
+            part = full(jax.tree.map(lambda x: x[jnp.minimum(idx, n - 1)], s))
+            return jnp.zeros(n, bool).at[idx].set(part, mode="drop")
+        r = lax.cond(mask.sum() > ks, full, lambda s: lax.cond(mask.any(), sub, lambda s: jnp.zeros(n, bool), s), s)
+        return jnp.where(mask, r, prev)
+
+    def todo(s, ap):  # ap : auto_pass(s) à jour pour toutes les parties
+        return ((s.dec == D_RUN) | (s.dec == D_TRIG) | ap) & ~s.done
 
     def run_b(s, thr):  # boucle d'exécution au niveau du lot : refresh seulement pour les parties modifiées
         def body(c):
-            s, i = c
+            s, i, n = c
             r = (s.dec == D_RUN) & ~s.done
-            return refresh_b(bank, s, _where(r, jax.vmap(lambda s: exec_one(bank, s))(s), s)), i + 1
-        return lax.while_loop(lambda c: (((c[0].dec == D_RUN) & ~c[0].done).sum() > thr) & (c[1] < MAX_ITER), body,
-                              (s, _i(0)))[0]
+            return refresh_b(bank, s, _where(r, jax.vmap(lambda s: exec_one(bank, s))(s), s)), i + 1, n + r.sum()
+        c = lax.while_loop(lambda c: (((c[0].dec == D_RUN) & ~c[0].done).sum() > thr) & (c[1] < MAX_ITER), body,
+                           (s, _i(0), _i(0)))
+        return c[0], c[1], c[2]
 
-    def settle_body(c):
-        s, i, thr = c
-        s = run_b(s, thr)
+    def settle_body(c):  # invariant : ap == auto_pass(s) pour toutes les parties, à l'entrée et à la sortie
+        s, i, thr, k, ap = c
+        r0 = ((s.dec == D_RUN) | (s.dec == D_TRIG)) & ~s.done   # seules parties que run_b et trig_eval modifient
+        s, nr, ar = run_b(s, thr)
         need = s.dec == D_TRIG
+        k = k + jnp.array([0, 1, nr, need.any(), 0, 0, 0, ar, need.sum(), 0, 0], I32)
         s = lax.cond(need.any(), lambda s: _where(need, jax.vmap(lambda s: trig_eval(bank, s))(s), s),
                      lambda s: s, s)
-        ap = jax.vmap(lambda s: auto_pass(bank, s))(s)
+        ap = apb(s, r0 | need, ap)
 
         def passes(s):  # première passe, puis la seconde tout de suite si l'adversaire ne peut rien faire non plus
             s1 = _where(ap, jax.vmap(lambda s: pass_priority(bank, s))(s), s)
-            ap2 = ap & ~s.cw_passed & jax.vmap(lambda s: auto_pass(bank, s))(s1)
+            ap2 = ap & ~s.cw_passed & apb(s1, ap & ~s.cw_passed, jnp.zeros_like(ap))
             s2 = lax.cond(ap2.any(), lambda s1: _where(ap2, jax.vmap(lambda s: pass_priority(bank, s))(s1), s1), lambda s1: s1, s1)
-            return refresh_b(bank, s, s2)
-        s = lax.cond(ap.any(), passes, lambda s: s, s)
-        return s, i + 1, thr
+            s2 = refresh_b(bank, s, s2)
+            return s2, apb(s2, ap, ap & False), ap2.sum()
+        s, ap_new, p2 = lax.cond(ap.any(), passes, lambda s: (s, ap, _i(0)), s)
+        return s, i + 1, thr, k + jnp.array([0, 0, 0, 0, ap.any(), p2 > 0, 0, 0, 0, ap.sum(), p2], I32), ap_new
 
-    def settle_b(s, thr):
-        return lax.while_loop(lambda c: (todo(c[0]).sum() > thr) & (c[1] < MAX_ITER), settle_body, (s, _i(0), thr))[0]
+    def settle_b(s, thr, k, ap):
+        c = lax.while_loop(lambda c: (todo(c[0], c[4]).sum() > thr) & (c[1] < MAX_ITER), settle_body,
+                           (s, _i(0), thr, k, ap))
+        return c[0], c[3], c[4]
 
-    def rnd(s, m, a):  # un tour : actions a (>= 0) appliquées, résolution, masques et actions forcées suivantes
+    def rnd(s, m, a, k):  # un tour : actions a (>= 0) appliquées, résolution, masques et actions forcées suivantes
         act = (a >= 0) & ~s.done
         s1 = jax.vmap(lambda s, a: apply(bank, s, a))(s, jnp.clip(a, 0, na - 1))
-        s = _where(act, settle_b(refresh_b(bank, s, _where(act & (a < na), s1, s)), frac * act.sum()), s)
-        left = act & todo(s)                      # arrêtées en cours de résolution : « continuer » à l'appel suivant
+        s2 = refresh_b(bank, s, _where(act & (a < na), s1, s))
+        s2, k, ap = settle_b(s2, frac * act.sum(), k, apb(s2, act, jnp.zeros_like(act)))
+        s = _where(act, s2, s)
+        left = act & todo(s, ap)                  # arrêtées en cours de résolution : « continuer » à l'appel suivant
         s = refresh_ex_b(bank, s, act & ~left)
-        lg = lax.cond((s.fsel | (s.rsel > 0) | (s.psel > 0)).any(), lambda s: jax.vmap(lambda s: legal(bank, s))(s),
+        fl = (s.fsel | (s.rsel > 0) | (s.psel > 0)).any()
+        lg = lax.cond(fl, lambda s: jax.vmap(lambda s: legal(bank, s))(s),
                       lambda s: jax.vmap(lambda s: legal(bank, s, fus=False))(s), s)
         m = jnp.where(act[:, None], lg, m)
         f = jnp.where(left, na, jax.vmap(lambda s, m: forced_m(bank, s, m))(s, m))
-        return s, m, jnp.where(act, f, -1)
+        return s, m, jnp.where(act, f, -1), k + jnp.array([1, 0, 0, 0, 0, 0, fl, 0, 0, 0, 0], I32)
 
     ks = max(1, nb // 4)
 
     def body(carry):  # tours suivants : seulement les parties qui ont une action forcée, dans un sous-lot de B/4 (les
-        s, m, f, i = carry  # autres attendent le tour suivant ; après le premier tour, ~30 % des parties en ont une)
+        s, m, f, i, k = carry  # autres attendent le tour suivant ; après le premier tour, ~30 % des parties en ont une)
         idx = jnp.nonzero((f >= 0) & ~s.done, size=ks, fill_value=nb)[0]
         g = lambda x: x[jnp.minimum(idx, nb - 1)]
-        ss, ms, fs = rnd(jax.tree.map(g, s), g(m), jnp.where(idx < nb, g(f), -1))
+        ss, ms, fs, k = rnd(jax.tree.map(g, s), g(m), jnp.where(idx < nb, g(f), -1), k)
         put = lambda x, y: x.at[idx].set(y, mode="drop")
-        return jax.tree.map(put, s, ss), put(m, ms), put(f, fs), i + 1
+        return jax.tree.map(put, s, ss), put(m, ms), put(f, fs), i + 1, k
 
     def more(c):
         pend = ((c[2] >= 0) & ~c[0].done).sum()
@@ -2469,9 +2503,9 @@ def step_batch(bank, s, a, frac=0.0):
 
     # pas de settle_b initial (les états d'entrée sont à une décision). rnd est compilé deux fois (lot complet, sous-lot) :
     # compilation ~2× plus longue et pic de mémoire ~2× (5,8 Go sur CPU), pour ~+30 % de débit sur L4
-    s, m, f = rnd(s, jnp.zeros((nb, n_actions(s.cid.shape[1])), bool), a.astype(I32))
-    s, m, f, _ = lax.while_loop(more, body, (s, m, f, _i(1)))
-    return s, m, f
+    s, m, f, k = rnd(s, jnp.zeros((nb, n_actions(s.cid.shape[1])), bool), a.astype(I32), jnp.zeros(11, I32))
+    s, m, f, _, k = lax.while_loop(more, body, (s, m, f, _i(1), k))
+    return (s, m, f, k) if stats else (s, m, f)
 
 def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     """deck0/deck1 : [D] index dans la banque, dans l'ordre d'ajout (dernier = dessus du deck).

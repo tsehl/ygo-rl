@@ -267,6 +267,35 @@ Mesures de `train/prof_update.py` (observations synthétiques aux formes réelle
   - Les parties sont longues : seules 24-123 parties sur 1024 finissent par itération de 64 appels.
   - Pistes : compter les tours de chaque boucle par appel en milieu de partie, pour savoir laquelle grossit ; faire tourner le bench du moteur sur des états de milieu de partie, sinon il ne représente pas l'entraînement.
 
+### Milieu de partie : tours de boucle (2026-11-04)
+
+Outils :
+- `bench/loop_stats.py` : `step_batch(..., stats=True)` rend un compteur int32[11]. Le script affiche, par fenêtre d'appels, les tours de chaque boucle (externe, settle, run, trig, passes) et le nombre de parties actives par tour. `--prof-at` chronomètre chaque brique vmappée sur tout le lot.
+- `bench/forced_stats.py` : actions forcées par type de décision, selon l'avancement de la partie.
+
+Diagnostic :
+- En milieu de partie, la moitié des actions forcées étaient des passes en fenêtre de chaîne (D_CHAIN hors déclencheurs) sans aucune activation possible.
+- `auto_pass` se fiait à `act_cand`, qui surestime ce qui est activable. Ces passes n'étaient donc pas jouées dans settle : chacune coûtait un tour complet de la boucle externe (legal, forced_m, apply).
+- Briques sur L4 (lot de 1024) : exec_one 2,7 ms, trig_eval 3,2, legal 2,7, refresh 1,9, pass_priority 1,8.
+
+Corrections :
+- `auto_pass` exact : quand il y a au plus `KA = 2` candidats, il les teste avec `act_ok`. Au-delà, pas de passe automatique et `legal` décide.
+  - Le résultat de la partie ne change pas : l'action forcée A_PASS appelle le même `pass_priority`.
+- Dans `step_batch`, `auto_pass` (devenu plus cher) n'est plus recalculé pour tout le lot à chaque tour de settle. Il est gardé dans la boucle et recalculé seulement pour les parties que run, trig_eval ou les passes viennent de modifier (sous-lot de B/8).
+
+Résultats (L4, B=1024, banque procédurale 0, actions aléatoires) :
+
+| version | début de partie (appels 0-24), ms | milieu de partie (appels 100-124), ms | tours externes / settle / run, milieu de partie |
+|---|---|---|---|
+| avant | 101 | 129 | 8,3 / 35 / 22,6 |
+| auto_pass exact | 93 | 118 | 2,8 / 17,8 / 16,8 |
+| + auto_pass en sous-lot | 91 | 113 | 2,8 / 17,8 / 16,8 |
+
+Ce qui reste :
+- Surtout la boucle d'exécution, avec ~17 tours par appel.
+- Chaque tour paie exec_one et refresh sur tout le lot, pour ~47 parties actives en moyenne sur 1024.
+- Un sous-lot pour la traîne de settle n'avait rien gagné, et avait coûté 70 % de compilation en plus.
+
 ### Deuxième run (L4, 2026-11-03)
 
 `--b 1024 --steps 64 --iters 200 --mb 8 --bf16 --eval-every 20 --old-lag 60`, d=128.
