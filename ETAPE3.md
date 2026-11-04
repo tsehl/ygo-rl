@@ -369,3 +369,49 @@ Lecture :
 - Le réseau généralise aux vraies cartes : il perd seulement ~2 points par rapport à la banque procédurale, alors qu'il n'a jamais vu ces cartes et que certaines de leurs briques (négation, fusion, rituel, Knightmare) sont rares ou absentes des banques d'entraînement.
 - Contre l'heuristique, il ne gagne que ~65 % : elle est bien plus discriminante que l'aléatoire, et il y a encore beaucoup de marge.
 - Le deck rituel / fusion est le moins bien joué (59 %) : ce sont les procédures les plus longues (sort + matériaux).
+
+### Le réseau maîtrise-t-il le jeu de base ? (2026-11-04)
+
+Deux mesures sur le run 2, itération 200 (L4, B=1024).
+
+**Politique déterministe** (argmax au lieu du tirage ; `ppo.play_eval(..., greedy=True)`, `BENCH_GREEDY=1 python train/bench_eval.py CKPT`). Résultats contre l'heuristique :
+
+| | politique tirée | politique déterministe |
+|---|---|---|
+| banque procédurale | 66,2 % | 69,1 % |
+| vraies cartes | 64,7 % | 65,0 % |
+
+Contre l'aléatoire, en procédural, les deux politiques font ~98 %. Jouer l'argmax ne gagne presque rien : la politique n'est pas « bonne mais bruitée ».
+
+**Tests de comportement** (`train/behavior.py CKPT`). Le joueur testé affronte l'heuristique avec les 4 decks de référence (toutes les rencontres). À chacune de ses décisions, on compte les occasions et les erreurs de jeu de base (`PROBES`). On compte aussi, par carte, les activations et les fins de tour où elle restait activable en main. Les références sont l'heuristique (47 % contre elle-même) et l'aléatoire (11 %). `BEHAV_WHO=reseau,aleatoire` restreint les joueurs testés : sur CPU, chacun recompile `tick`.
+
+Erreurs, en % des occasions :
+
+| sonde | réseau | réseau dét. | heuristique | aléatoire |
+|---|---|---|---|---|
+| attaque perdue d'avance (tous les monstres adverses recto ATK plus forts) | 17,0 | 17,6 | 29,2 | 31,9 |
+| attaque directe ratée (terrain adverse vide, quitte le combat) | 0,8 | 0,1 | 0,0 | 64,2 |
+| fin de tour sans invoquer / poser alors que possible | 7,2 | 5,7 | — | 28,0 |
+| invoque depuis la main un monstre moins fort qu'un autre invocable | 21,5 | 19,7 | 4,7 | 39,0 |
+| fin de tour avec une magie activable en main | 6,3 | 1,2 | — | 18,6 |
+| Dark Hole en étant devant en ATK | 22,7 | 17,5 | 46,8 | 44,7 |
+| MST sans cible | 26,3 | (1 occasion) | 32,1 | 20,8 |
+| Monster Reborn : pas le plus fort | 74,6 | 72,6 | 71,2 | 83,7 |
+| passe alors que Mirror Force / Sakuretsu / Trap Hole est activable | 11,0 | 7,7 | 0,0 | 48,5 |
+| pose en défense un monstre plus fort que tout le terrain adverse | 5,7 | 5,5 | — | 45,0 |
+
+(Les cibles d'attaque comptent trop peu d'occasions pour conclure : le moteur choisit seul quand il n'y a qu'une cible.)
+
+Lecture :
+- **Acquis** : attaquer directement quand le terrain est vide, poser ses magies, Pot of Greed / Upstart / Graceful Charity / Raigeki joués quasi systématiquement, pièges défensifs activés dans ~90 % des cas, Dark Hole mieux utilisé que par l'heuristique.
+- **Approximatif** :
+  - 17 % d'attaques suicide ;
+  - 20 % d'invocations d'un monstre moins fort. Une partie est légitime (Syntoniseur, Mystic Tomato), mais l'écart avec l'heuristique (5 %) est grand ;
+  - 6-7 % de fins de tour sans invoquer.
+- **Pas appris** :
+  - la cible de Monster Reborn : 73 %, autant que l'heuristique, qui choisit ses cibles au hasard ;
+  - les effets rapides avec intention : en déterministe, MST n'est joué qu'une fois (304 fois en mode tiré), Rush Recklessly 2 fois (254), Shrink 0 fois (105). Dans chaque fenêtre de chaîne, « passer » a la plus forte probabilité : le réseau n'utilise ces cartes que grâce au bruit du tirage. Et quand il les joue, c'est sans cible une fois sur quatre ;
+  - les échelles pendule : Dragong 25 activations pour 110 fins de tour où elle restait jouable, Flash Knight 16 / 11, contre 115 et 130 pour l'heuristique ;
+  - les invocations Link : Knightmare Phoenix n'est jamais activé (207 fois chez l'heuristique) ;
+  - les effets d'ignition sous-utilisés : Little Swordsman of Aile 7 activations contre 109, Cannon Soldier 29 contre 121, Exiled Force 37 contre 107.
+- Bilan : le combat et les magies simples sont acquis ; les choix de cible, le timing des effets rapides et les mécaniques longues (pendule, Link) ne le sont pas. Plus d'entraînement (run A100) devrait en corriger une partie. Pour la cible de Reborn et les effets rapides, il faudra peut-être un adversaire plus fort que le self-play actuel ou un meilleur signal.
