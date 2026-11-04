@@ -337,3 +337,35 @@ Pistes :
 - Des decks structurés (archétypes, étape 4).
 - Évaluer sur les vraies cartes (benchmark).
 - Mesurer `act` sur GPU.
+
+### Évaluation honnête (2026-11-04)
+
+Outils :
+- **Vraies cartes** (`train/realcards.py`, `train/realbank.npz`) : 86 vraies cartes, jamais vues à l'entraînement, et quatre decks de 40 cartes + Extra Deck de 15 construits à la main :
+  - contrôle (magies / pièges génériques) ;
+  - synchro / Xyz / Link ;
+  - rituel / fusion ;
+  - pendule.
+  - La banque est complétée aux formes procédurales (480 cartes, tprog à 2 × PT) : pas de nouvelle compilation.
+  - On la reconstruit avec `python train/realcards.py` (il faut l'oracle).
+- **Adversaire heuristique** (`ppo.heuristic`) : active tout ce qui peut l'être, invoque le plus fort, attaque avec tout, pose ses magies / pièges, puis passe. Ses choix (cibles, matériaux, zones) sont faits au hasard.
+- **Decks par paires** (`ppo.paired`) : chaque paire de decks est jouée 4 fois (le réseau avec A puis B, en premier puis en second). La force des decks et l'avantage du premier joueur s'annulent.
+- **Sur les vraies cartes**, toutes les rencontres (deck du réseau × deck adverse × côté) sont jouées, avec un taux de victoire par deck du réseau.
+- `act_step` prend un adversaire aléatoire, réseau ou heuristique (`lax.switch`).
+- L'évaluation périodique de `ppo.py` joue contre l'aléatoire, l'heuristique et la version d'il y a `--old-lag` itérations. Le banc des vraies cartes tourne tous les `--bench-every`.
+- `train/bench_eval.py CKPT` évalue un checkpoint.
+
+Run 2, itération 200 (L4, B=1024, ~1020 parties finies par ligne) :
+
+| | contre l'aléatoire | contre l'heuristique |
+|---|---|---|
+| heuristique, banque procédurale | 86,7 % | — |
+| heuristique, vraies cartes | 88,2 % | — |
+| réseau, banque procédurale | 97,8 % | 66,2 % |
+| réseau, vraies cartes | 95,2 % | 64,7 % |
+| contre l'heuristique, vraies cartes, par deck du réseau | — | contrôle 66 %, pendule 70 %, rituel / fusion 59 %, synchro 65 % |
+
+Lecture :
+- Le réseau généralise aux vraies cartes : il perd seulement ~2 points par rapport à la banque procédurale, alors qu'il n'a jamais vu ces cartes et que certaines de leurs briques (négation, fusion, rituel, Knightmare) sont rares ou absentes des banques d'entraînement.
+- Contre l'heuristique, il ne gagne que ~65 % : elle est bien plus discriminante que l'aléatoire, et il y a encore beaucoup de marge.
+- Le deck rituel / fusion est le moins bien joué (59 %) : ce sont les procédures les plus longues (sort + matériaux).
