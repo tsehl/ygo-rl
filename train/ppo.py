@@ -62,6 +62,7 @@ def parse():
     ap.add_argument("--old-lag", type=int, default=50, help="évaluation aussi contre la politique d'il y a X itérations")
     ap.add_argument("--eval-b", type=int, default=0, help="parties d'évaluation (défaut : b)")
     ap.add_argument("--eval-steps", type=int, default=400)
+    ap.add_argument("--bench-every", type=int, default=50, help="benchmark sur les vraies cartes (multiple de --eval-every)")
     ap.add_argument("--eval-bank", type=int, default=1_000_000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
@@ -97,6 +98,26 @@ def _where(m, a, b):
     return jax.tree.map(lambda x, y: jnp.where(m.reshape(m.shape + (1,) * (x.ndim - 1)), x, y), a, b)
 
 
+# adversaire heuristique : poids par verbe (V_SUMMON, V_MSET, V_REPOS, V_ATTACK, V_SELECT, V_SSET, puis V_ACT0 + e)
+H_VERB = [4.0, 1.5, 0.3, 3.0, 1.0, 2.0] + [5.0] * core.E
+# actions spéciales : vers BP, vers M2, vers EP, 7 zones, position ATK / DEF, passer, oui
+H_SPECIAL = [2.5, 0.5, 0.2] + [1.0] * 7 + [1.2, 0.8, 0.1, 1.0]
+
+
+def heuristic(bank, s, m, f, key):
+    """Adversaire de référence simple, plus exigeant que l'aléatoire : active tout ce qui peut l'être, invoque (le plus
+    fort d'abord), attaque avec tout, pose ses magies / pièges, puis passe ; choix (cibles, matériaux, zones) au hasard.
+    Rend l'action du moteur [B] (l'action forcée si f >= 0)."""
+    n = s.cid.shape[1]
+    assert len(H_VERB) == core.NV and len(H_SPECIAL) == core.N_SPECIAL
+    w = jnp.concatenate([jnp.repeat(jnp.asarray(H_VERB), n), jnp.asarray(H_SPECIAL)])          # [A]
+    atk = bank.atk[s.cid].astype(jnp.float32) / 10000.0                                          # [B, n]
+    vb = jnp.zeros((s.cid.shape[0], core.NV, n)).at[:, core.V_SUMMON].set(atk).at[:, core.V_ATTACK].set(atk)
+    bonus = jnp.concatenate([vb.reshape(s.cid.shape[0], -1), jnp.zeros((s.cid.shape[0], core.N_SPECIAL))], -1)
+    sc = w + bonus + 0.01 * jax.random.gumbel(key, m.shape)
+    return jnp.where(f >= 0, f, jnp.argmax(jnp.where(m, sc, -1e9), -1).astype(jnp.int32))
+
+
 def make_fns(a, opt):
     obs_b = jax.vmap(lambda bank, s, m, p: obsm.observe(bank, s, p, m), in_axes=(None, 0, 0, 0))
 
@@ -127,15 +148,17 @@ def make_fns(a, opt):
         """Un appel du rollout, en une seule fonction compilée (pas de synchronisation hôte) : politique, step_batch,
         puis remplacement des parties finies par la réserve. side [B] : -1 = le réseau joue les deux côtés ; sinon le
         réseau joue le joueur `side` et l'adversaire l'autre (évaluation, avec used = vrai : pas de remplacement).
-        opp = (paramètres, cemb, use) : adversaire réseau si use (scalaire), sinon aléatoire uniforme ; lax.cond sur un
-        scalaire hors vmap : une seule branche calculée. Rend aussi done / winner juste après step_batch."""
+        opp = (paramètres, cemb, kind) : adversaire aléatoire uniforme (kind 0), réseau (1) ou heuristique (2) ;
+        lax.switch sur un scalaire hors vmap : une seule branche calculée. Rend aussi done / winner juste après
+        step_batch."""
         k1, k2 = jax.random.split(key)
         ae, tr = _act(params, cemb, bank, s, m, f, k1)
         rnd = lambda: jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
         if opp is None:
             ar = rnd()
         else:
-            ar = jax.lax.cond(opp[2], lambda: _act(opp[0], opp[1], bank, s, m, f, k2)[0], rnd)
+            ar = jax.lax.switch(opp[2], [rnd, lambda: _act(opp[0], opp[1], bank, s, m, f, k2)[0],
+                                         lambda: heuristic(bank, s, m, f, k2)])
         s, m, f = core.step_batch(bank, s, jnp.where((side < 0) | (s.dec_player == side), ae, ar), a.frac)
         done, win = s.done, s.winner
         s, m, f, used = refill(s, m, f, pool, pm, used)
@@ -192,31 +215,82 @@ def make_fns(a, opt):
     return act, values, act_step, gae, update, enc, obs_b
 
 
-def evaluate(a, env, fns, params, rng, key, oparams=None):
-    """Réseau contre aléatoire (oparams None) ou contre une autre version du réseau, sur la banque d'évaluation : taux
-    de victoire du réseau (parties finies)."""
+def paired(d, x):
+    """Decks [P, 2, ...] → [4P, 2, ...] et côté du réseau [4P] : chaque paire de decks (A, B) est jouée 4 fois, le réseau
+    avec A puis avec B, en premier puis en second. La force des decks et l'avantage du premier joueur s'annulent."""
+    sw = lambda z: z[:, ::-1]
+    D = np.stack([d, d, sw(d), sw(d)], 1).reshape((-1,) + d.shape[1:])
+    X = np.stack([x, x, sw(x), sw(x)], 1).reshape((-1,) + x.shape[1:])
+    return D, X, np.tile([0, 1, 0, 1], len(d))
+
+
+def play_eval(a, env, fns, params, bank, d, x, side, key, kind, oparams=None):
+    """Parties d [B, 2, 40], x [B, 2, 15] ; le réseau joue le joueur side[b], l'adversaire est aléatoire (kind 0), le
+    réseau oparams (1) ou l'heuristique (2). Rend (finies [B], résultat [B] : 1 victoire, -1 défaite, 0 nul / pas fini)."""
     act, values, act_step, gae, update, enc, obs_b = fns
-    cset, bank = bank_of(a.eval_bank, a)
     tok, msk = model.card_tokens(bank)
     cemb = enc(params, tok, msk)
-    opp = (params, cemb, jnp.asarray(False)) if oparams is None else (oparams, enc(oparams, tok, msk), jnp.asarray(True))
-    s, m = env.games(bank, cset, rng, key)
+    opp = (params if oparams is None else oparams, cemb if oparams is None else enc(oparams, tok, msk), jnp.asarray(kind))
+    s, m = env.new(bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, env.b))
     f = jnp.full(env.b, -1, jnp.int32)
-    side = jnp.arange(env.b) % 2                       # côté du réseau
+    side = jnp.asarray(side)
+    sd = np.asarray(side)
     fin = np.zeros(env.b, bool)
-    win = np.zeros(env.b, int)
+    res = np.zeros(env.b, int)
     used = jnp.ones(env.b, bool)                       # pas de remplacement des parties finies
     for t in range(a.eval_steps):
         key, k = jax.random.split(key)
-        s, m, f, used, _, d, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used, opp)
-        d, w = np.asarray(d), np.asarray(w)
-        new = d & ~fin
-        win[new] = (w[new] == np.asarray(side)[new]).astype(int) - (w[new] == 1 - np.asarray(side)[new]).astype(int)
-        fin |= d
+        s, m, f, used, _, dn, w = act_step(params, cemb, bank, s, m, f, k, side, s, m, used, opp)
+        dn, w = np.asarray(dn), np.asarray(w)
+        new = dn & ~fin
+        res[new] = (w[new] == sd[new]).astype(int) - (w[new] == 1 - sd[new]).astype(int)
+        fin |= dn
         if fin.all():
             break
-    return dict(eval_games=int(fin.sum()), eval_win=float((win[fin] == 1).mean()) if fin.any() else float("nan"),
-                eval_loss=float((win[fin] == -1).mean()) if fin.any() else float("nan"))
+    return fin, res
+
+
+def summary(fin, res, pre="eval"):
+    n = max(int(fin.sum()), 1)
+    return {f"{pre}_games": int(fin.sum()), f"{pre}_win": float((res[fin] == 1).sum() / n),
+            f"{pre}_loss": float((res[fin] == -1).sum() / n)}
+
+
+def evaluate(a, env, fns, params, key, kind, oparams=None, pre="eval"):
+    """Banque procédurale d'évaluation (jamais vue), decks aléatoires joués par paires (voir paired), graine fixe."""
+    cset, bank = bank_of(a.eval_bank, a)
+    d, x = cardgen.random_decks(cset, np.random.default_rng(12345), env.b // 4)
+    D, X, side = paired(d, x)
+    return summary(*play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams), pre)
+
+
+_REAL = {}
+
+
+def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real"):
+    """Vraies cartes (train/realcards.py) : toutes les rencontres (deck du réseau, deck adverse, côté), répétées pour
+    remplir le lot. Rend le taux de victoire global et par deck du réseau."""
+    import realcards
+    if not _REAL:
+        _REAL["v"] = realcards.load()
+    bank, names, main, extra = _REAL["v"]
+    nd = len(names)
+    cfg = np.array([(i, j, sd) for i in range(nd) for j in range(nd) for sd in (0, 1)])
+    cfg = cfg[np.arange(env.b) % len(cfg)]
+    i, j, side = cfg[:, 0], cfg[:, 1], cfg[:, 2]
+    p0, p1 = np.where(side == 0, i, j), np.where(side == 0, j, i)
+    D = np.stack([main[p0], main[p1]], 1)
+    X = np.stack([extra[p0], extra[p1]], 1)
+    fin, res = play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams)
+    out = summary(fin, res, pre)
+    for k, nm in enumerate(names):
+        sel = fin & (i == k)
+        out[f"{pre}_{nm}"] = float((res[sel] == 1).sum() / max(int(sel.sum()), 1))
+    return out
+
+
+def fmt(ev):
+    return " ".join(f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in ev.items())
 
 
 def main():
@@ -263,7 +337,7 @@ def main():
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
         side = jnp.full(a.b, -1, jnp.int32)
-        opp0 = (params, cemb, jnp.asarray(False))
+        opp0 = (params, cemb, jnp.asarray(0))
         jax.block_until_ready(cemb)
         t1 = time.time()
         t_in = 0.0                            # parties neuves pendant la boucle (à retrancher de la boucle)
@@ -306,14 +380,17 @@ def main():
                 f"rollout {t_roll:.1f} s, dont parties neuves {t_games:.1f} s, act_step {t_loop:.1f} s = "
                 f"{1000 * t_loop / a.steps:.0f} ms/appel) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
         if a.eval_every and (it + 1) % a.eval_every == 0:
-            key, k = jax.random.split(key)
-            ev = evaluate(a, eval_env, fns, params, np.random.default_rng(12345), k)
-            line += " | " + " ".join(f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in ev.items())
+            key, k1, k2, k3 = jax.random.split(key, 4)
+            line += " | " + fmt(evaluate(a, eval_env, fns, params, k1, 0, pre="rnd"))
+            line += " | " + fmt(evaluate(a, eval_env, fns, params, k2, 2, pre="heur"))
             # contre la version d'il y a --old-lag itérations (ou la plus ancienne gardée, au début : l'initialisation)
             old = max([i for i in snaps if i <= it + 1 - a.old_lag] or [min(snaps)])
-            key, k = jax.random.split(key)
-            ev = evaluate(a, eval_env, fns, params, np.random.default_rng(54321), k, snaps[old])
+            ev = evaluate(a, eval_env, fns, params, k3, 1, snaps[old])
             line += f" | contre it {old} : win {ev['eval_win']:.3f} loss {ev['eval_loss']:.3f}"
+            if a.bench_every and (it + 1) % a.bench_every == 0:
+                key, k1, k2 = jax.random.split(key, 3)
+                line += " | " + fmt(real_bench(a, eval_env, fns, params, k1, 0, pre="vrai_rnd"))
+                line += " | " + fmt(real_bench(a, eval_env, fns, params, k2, 2, pre="vrai_heur"))
             snaps[it + 1] = params
             snaps = {i: q for i, q in snaps.items() if i >= it + 1 - 2 * a.old_lag}
         print(line, flush=True)
@@ -333,7 +410,7 @@ def profile(a, fns, params, bank, tok, msk, s, m, f, pool, pm, used, key):
     cemb = enc(params, tok, msk)
     sb = jax.jit(lambda bank, s, x: core.step_batch(bank, s, x, a.frac))
     side = jnp.full(a.b, -1, jnp.int32)
-    opp0 = (params, cemb, jnp.asarray(False))
+    opp0 = (params, cemb, jnp.asarray(0))
 
     def tm(name, fn, *xs):
         r = fn(*xs)
