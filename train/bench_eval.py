@@ -1,8 +1,10 @@
 """Évaluation d'un réseau sauvegardé : banque procédurale jamais vue (decks par paires) et vraies cartes, contre
 l'aléatoire et contre l'heuristique ; plus les références heuristique contre aléatoire.
 
-Usage : python train/bench_eval.py train/ckpt/run2_it200_f16.pkl.gz [--b 1024] [--d 128 ...] (mêmes options que ppo.py)"""
+Usage : python train/bench_eval.py train/ckpt/run2_it200_f16.pkl.gz [--b 1024] [--d 128 ...] (mêmes options que ppo.py) ;
+BENCH_GREEDY=1 ajoute le réseau déterministe (argmax)."""
 import gzip
+import os
 import pickle
 import sys
 import time
@@ -86,6 +88,12 @@ def main():
     run("procédural, réseau contre heuristique", lambda: ppo.evaluate(a, env, fns, params, ks[3], 2))
     run("vraies cartes, réseau contre aléatoire", lambda: ppo.real_bench(a, env, fns, params, ks[4], 0))
     run("vraies cartes, réseau contre heuristique", lambda: ppo.real_bench(a, env, fns, params, ks[5], 2))
+    if os.environ.get("BENCH_GREEDY"):   # politique déterministe (argmax)
+        run("procédural, réseau déterministe contre aléatoire", lambda: ppo.evaluate(a, env, fns, params, ks[2], 0, greedy=True))
+        run("procédural, réseau déterministe contre heuristique",
+            lambda: ppo.evaluate(a, env, fns, params, ks[3], 2, greedy=True))
+        run("vraies cartes, réseau déterministe contre heuristique",
+            lambda: ppo.real_bench(a, env, fns, params, ks[5], 2, greedy=True))
     print("FIN", flush=True)
 
 
