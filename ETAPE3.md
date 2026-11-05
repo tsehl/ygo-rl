@@ -524,3 +524,10 @@ Lecture :
 - **Toujours pas appris** : la cible de Monster Reborn (75 %), les attaques suicide (16 %), le Link.
 - **Régressions** : Dark Hole joué en étant devant (54 %, comme l'heuristique à 47 %) et invocations d'un monstre moins fort (25 %). Hypothèse : contre des adversaires heuristiques qui remplissent leur terrain, vider le terrain paie plus souvent, et la sonde (ATK totale) ne voit pas ce contexte.
 - Résultat chiffré contre l'heuristique un peu en dessous du run 2 (62 % contre 65 %), mais avec 60 % des itérations et un jeu plus complet. Le plateau à ~61 % depuis l'itération 99 suggère qu'un run plus long seul ne suffira pas : la cible de Reborn et le Link demandent autre chose (couverture des briques, signal).
+
+Vérification (2026-11-05) :
+- `compare_gen.py --banks 0-3 --games 10 --focus` (moitié des decks parmi les cartes à nouvelles briques) : 40 / 40 parties identiques.
+- `fuzz.py --seeds 0-3` : aucune violation d'invariant.
+- `compare_gen.py --banks 0-9 --games 10` : 97 / 100. Les trois écarts viennent de règles du moteur que les nouvelles banques font apparaître, pas des nouvelles briques :
+  - **relance d'attaque** (banque 6 partie 4, banque 7 partie 9) : un piège déclenché par la déclaration d'attaque invoque spécialement un monstre chez le défenseur. L'oracle redonne la main à l'attaquant (nouvelle cible ou abandon), le moteur poursuit l'attaque sur la cible d'origine (ou en direct). Règle absente du moteur ;
+  - **LP à 0 par un coût** (banque 0 partie 4) : un effet coûte 800 LP à un joueur qui en a 800. Le moteur finit la partie tout de suite ; l'oracle fait encore choisir la cible avant de constater la défaite. Même vainqueur, quelques décisions de différence.
