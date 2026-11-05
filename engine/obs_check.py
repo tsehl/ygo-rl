@@ -85,7 +85,7 @@ def perturb(s, p):
                                                   "proc", "fz_c", "rz_c", "sz_c", "xz_c", "lz_c", "uid")},
                    ov_par=sl(s.ov_par)[perm], tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
                    pend=sl(s.pend), ch_src=sl(s.ch_src), atk=sl(s.atk), atk_tgt=sl(s.atk_tgt), lk_src=sl(s.lk_src),
-                   reg=s.reg[:, perm], lk_reg=s.lk_reg[:, :, perm], mv=s.mv[perm], ev_g=s.ev_g[:, perm], tev=s.tev[:, perm])
+                   reg=s.reg[:, perm], lk_reg=s.lk_reg[:, :, perm], mv=s.mv[perm], ev_g=s.ev_g[:, perm], tev=s.tev[:, perm], tew=s.tew[:, perm], teg=s.teg[:, perm])
     return core.State(*[jnp.asarray(x) for x in s]), len(h)
 
 

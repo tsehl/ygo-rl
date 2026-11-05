@@ -93,6 +93,13 @@ DMG_STEP, DMG_CAL, DMG_STAT = 1, 2, 4
 # limites (bank.eopt) : une fois par tour par nom, une fois par tour par carte, une fois tant que la carte reste
 # (SetCountLimit(1) + EFFECT_FLAG_NO_TURN_RESET)
 OPT_NONE, OPT_NAME, OPT_CARD, OPT_CARD_NR = range(4)
+# SetCountLimit(1, {id, k}) avec k ≥ 1 : compteur par nom distinct pour chaque k (eopt = OPT_NAMEK + k - 1)
+OPT_NAMEK = 4
+# bank.etrig : déclencheur optionnel sans EFFECT_FLAG_DELAY (« lorsque … ») : peut manquer le timing (brk)
+TRIG_WHEN = 1 << 30
+# déclencheur FIELD : n'importe quelle carte subit l'événement, la carte de l'effet est dans les zones erng (main,
+# cimetière, zone monstres / magie-piège recto) ; la condition sur eg passe par OP_EVENT(c=1) dans le coût
+TRIG_FIELD = 1 << 29
 # fenêtres de phase (PhaseEvent)
 WP_DRAW, WP_STANDBY, WP_BSTART, WP_BEND, WP_END = range(5)
 
@@ -274,6 +281,7 @@ class State(NamedTuple):
     pend_set: jnp.ndarray  # l'invocation en cours est une pose
     need: jnp.ndarray    # sélections restantes (tributs, défausses, choix d'effet)
     picks: jnp.ndarray   # sélections déjà faites dans la décision en cours
+    smin: jnp.ndarray    # CHOOSE à taille variable : nombre minimal de cartes (A_PASS termine la sélection au-delà)
     zctx: jnp.ndarray    # ZC_* : usage du choix de case en cours
     zsel: jnp.ndarray    # case choisie pour l'invocation spéciale en cours
     ch_src: jnp.ndarray  # effet en cours (activation ou résolution) : carte source (-1 si aucun)
@@ -319,6 +327,8 @@ class State(NamedTuple):
     # déclencheurs
     pzone: jnp.ndarray   # [N] zone précédente (IsPreviousLocation)
     tev: jnp.ndarray     # [NEV, N] événements subis depuis le dernier point d'événement
+    tew: jnp.ndarray     # [NEV, N] idem, depuis le dernier break_effect (déclencheurs optionnels « lorsque »)
+    teg: jnp.ndarray     # [NEV, N] événements du dernier point d'événement (eg des déclencheurs, OP_EVENT c=1)
     tg: jnp.ndarray      # [N] effet déclenché en attente
     tg_e: jnp.ndarray    # [N] son index d'effet
     tst: jnp.ndarray     # étape SEGOC : 0/1 obligatoires (tour, adversaire), 2/3 optionnels
@@ -607,12 +617,24 @@ def adjust(s):
 
 def raise_ev(s, ev, mask, p):
     return s._replace(ev_g=s.ev_g.at[ev].set(s.ev_g[ev] | mask), ev_p=s.ev_p.at[ev].set(p),
-                      tev=s.tev.at[ev].set(s.tev[ev] | mask))
+                      tev=s.tev.at[ev].set(s.tev[ev] | mask), tew=s.tew.at[ev].set(s.tew[ev] | mask))
+
+
+def brk(s):
+    """break_effect d'ygopro-core : les déclencheurs optionnels sans EFFECT_FLAG_DELAY (« lorsque », TRIG_WHEN) des
+    événements précédents manquent le timing."""
+    return s._replace(tew=jnp.zeros_like(s.tew))
 
 
 def name_in(table, cid):
     """cid [...] présent dans le registre par nom `table` [KO] ?"""
     return (table == (cid + 1)[..., None]).any(-1)
+
+
+def opt_key(cid, opt):
+    """Clé du registre par nom pour une limite OPT_NAME / OPT_NAMEK+k-1 : cid (+ k << 16) ; -1 sans limite par nom."""
+    k = jnp.where(opt >= OPT_NAMEK, opt - OPT_NAMEK + 1, 0)
+    return jnp.where((opt == OPT_NAME) | (opt >= OPT_NAMEK), cid + (k << 16), -1)
 
 
 def name_add(table, cid):
@@ -655,8 +677,9 @@ def act_ok(bank, s, h, e, p):
     # une carte aux effets annulés peut encore les activer (is_activateable ne teste pas STATUS_DISABLED) : ils sont
     # annulés à la résolution (load_link)
     return (test_ok(bank, s, h, e, p) & ~name_in(s.lock_cid[p], cid)
-            & ~((bank.eopt[cid, e] == OPT_NAME) & name_in(s.opt_cid[p], cid))
-            & ~((bank.eopt[cid, e] >= OPT_CARD) & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
+            & ~((opt_key(cid, bank.eopt[cid, e]) >= 0) & name_in(s.opt_cid[p], opt_key(cid, bank.eopt[cid, e])))
+            & ~(((bank.eopt[cid, e] == OPT_CARD) | (bank.eopt[cid, e] == OPT_CARD_NR))
+                & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
 
 
 def trig_next(bank, s):
@@ -687,16 +710,35 @@ def trig_eval(bank, s):
     return _cond(avail.any(), go, finish, s)
 
 
+def in_range(s):
+    """[N] zone de chaque carte au sens des portées d'effet (erng) : main, cimetière, zone monstres ou magie/piège
+    recto ; 0 ailleurs."""
+    up = (s.pos & P_FACEUP) != 0
+    return jnp.where((s.zone == Z_HAND) | (s.zone == Z_GRAVE) | (((s.zone == Z_MZONE) | (s.zone == Z_SZONE)) & up),
+                     s.zone, 0)
+
+
 def trig_point(bank, s):
     """Point d'événement, juste après l'ouverture d'une fenêtre W_QUICK (chaîne vide) : les effets déclenchés par
     les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite."""
     bits = (s.tev * (1 << jnp.arange(NEV))[:, None]).sum(0)
+    wbits = (s.tew * (1 << jnp.arange(NEV))[:, None]).sum(0)
+    abits, awbits = (s.tev.any(1) * (1 << jnp.arange(NEV))).sum(), (s.tew.any(1) * (1 << jnp.arange(NEV))).sum()
+    zr = in_range(s)
     tg, tg_e = s.tg, s.tg_e
     for e in range(E):
         k = bank.ekind[s.cid, e]
-        hit = ((k == K_TRIG_F) | (k == K_TRIG_O)) & ((bank.etrig[s.cid, e] & bits) != 0) & ~tg
+        et = bank.etrig[s.cid, e]
+        when = (k == K_TRIG_O) & ((et & TRIG_WHEN) != 0)
+        fld = (et & TRIG_FIELD) != 0
+        evs = jnp.where(fld, jnp.where(when, awbits, abits), jnp.where(when, wbits, bits))
+        # effect::is_activateable : au damage step, un déclencheur FIELD optionnel sans EFFECT_FLAG_DAMAGE_STEP ne
+        # répond qu'aux événements de combat (codes 1132-1149)
+        ds_lock = (k == K_TRIG_O) & fld & (s.dstep != DS_NONE) & ((bank.edmg[s.cid, e] & DMG_STEP) == 0)
+        evs = jnp.where(ds_lock, evs & ((1 << EV_BATTLE_DESTROYED) | (1 << EV_PRE_DMG)), evs)
+        hit = ((k == K_TRIG_F) | (k == K_TRIG_O)) & ((et & evs) != 0) & ~tg & (~fld | ((zr & bank.erng[s.cid, e]) != 0))
         tg_e, tg = jnp.where(hit, e, tg_e).astype(I32), tg | hit
-    s = s._replace(tg=tg, tg_e=tg_e, tev=jnp.zeros_like(s.tev), pt_p=s.dec_player, pt_passed=s.cw_passed, tst=_i(0))
+    s = s._replace(tg=tg, tg_e=tg_e, teg=s.tev, tev=jnp.zeros_like(s.tev), tew=jnp.zeros_like(s.tew), pt_p=s.dec_player, pt_passed=s.cw_passed, tst=_i(0))
     return _cond(tg.any(), lambda s: trig_next(bank, s), lambda s: s, s)
 
 
@@ -715,7 +757,7 @@ def keep_perm(s):
 def start_turn(s):
     tp = jnp.where(s.turn == 0, 0, 1 - s.tp).astype(I32)
     s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), ps_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
-                   tev=jnp.zeros_like(s.tev), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
+                   tev=jnp.zeros_like(s.tev), tew=jnp.zeros_like(s.tew), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
     s = keep_perm(s)
     # pioche (sauf au premier tour) puis fenêtre ; ensuite fenêtre de phase
     return _cond(s.turn > 1, lambda s: open_quick(rule_draw(s, tp), tp, R_DP, chained=False),
@@ -907,6 +949,7 @@ def place_pending(bank, s, z):
     pos = jnp.where(s.pend_set, P_FD_DEF, P_FU_ATK)
     s = move(s, c, Z_MZONE, z, s.tp, pos)
     s = s._replace(st=s.st.at[c].set(ST_SUMMON_TURN), ns_used=jnp.bool_(True), pend=_i(-1))
+    s = brk(s)  # fin de l'invocation (après les libérations) : break_effect
     s = _cond(s.pend_set, lambda s: s, lambda s: raise_ev(s, EV_SUMMON, jnp.arange(s.cid.shape[0]) == c, s.tp), s)
     return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
 
@@ -965,7 +1008,8 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= (f[F_RACE] == 0) | ((bank.race[s.cid] & f[F_RACE]) != 0)
     m &= (f[F_SET] == 0) | set_match(bank, s.cid, f[F_SET])
     code = bank.code[s.cid]
-    m &= (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2])
+    # F_CODE1 < 0 : tout sauf le nom -F_CODE1 (not c:IsCode(id))
+    m &= jnp.where(f[F_CODE1] < 0, code != -f[F_CODE1], (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2]))
     m &= (f[F_ST] == 0) | ((s.st & f[F_ST]) != 0)
     lv = bank.level[s.cid]
     nolv = (bank.ctype[s.cid] & (TYPE_XYZ | TYPE_LINK)) != 0  # sans niveau : seulement un filtre sans borne
@@ -973,6 +1017,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
     # F_SPSUM = 2 : en défense seulement (IsCanBeSpecialSummoned(..., POS_FACEUP_DEFENSE)), jamais un Link
     m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc)
+                              & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
                               & ~((f[F_SPSUM] == 2) & ((bank.ctype[s.cid] & TYPE_LINK) != 0)))
     # fusion / rituel : SummonEffFilter et Ritual.Filter demandent aussi IsCanBeSpecialSummoned (fl_c est à jour ici,
     # pas forcément quand fz_c / rz_c sont calculés)
@@ -1062,7 +1107,8 @@ def stats(bank, s):
     fl = (jnp.where(dis, FL_DISABLED, 0) | jnp.where(onf & faceup, FL_ONF, 0)).astype(I32)
     for c, b in ((MC_NO_ATTACK, FL_NO_ATTACK), (MC_NO_BTARGET, FL_NO_BTARGET), (MC_NO_ETARGET, FL_NO_ETARGET),
                  (MC_IMM_TRAP, FL_IMM_TRAP), (MC_NO_DIRECT, FL_NO_DIRECT), (MC_INDES_EFF, FL_INDES_EFF)):
-        fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0), b, 0)
+        # continus et temporaires (EFFECT_CANNOT_ATTACK posé par une résolution, Silent Doom…)
+        fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0) | (ttgt & (s.tm_code == c)[:, None]).any(0), b, 0)
     fl |= jnp.where((craw & (ccode == MC_NO_SS)[:, None]).any(0), FL_NO_SS, 0)  # carte visée, où qu'elle soit
     ib = jnp.where(ctgt & (ccode == MC_INDES_BATTLE)[:, None], cval[:, None], BIG).min(0)
     nt = ccode == MC_P_NO_TRAP
@@ -1177,7 +1223,8 @@ def mat_mask(bank, s, f):
     m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
     m &= (f[F_RACE] == 0) | ((bank.race[s.cid] & f[F_RACE]) != 0)
     m &= (f[F_SET] == 0) | set_match(bank, s.cid, f[F_SET])
-    m &= (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2])
+    # F_CODE1 < 0 : tout sauf le nom -F_CODE1 (not c:IsCode(id))
+    m &= jnp.where(f[F_CODE1] < 0, code != -f[F_CODE1], (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2]))
     nolv = (ct & (TYPE_XYZ | TYPE_LINK)) != 0
     return m & jnp.where(nolv, (f[F_LV_LO] <= -BIG) & (f[F_LV_HI] >= BIG), (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI]))
 
@@ -1828,7 +1875,7 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     branches[OP_PAY_LP] = lambda: cond(s.lp[p] >= a)
     evm = ((a >> jnp.arange(NEV)) & 1) != 0
     evb = ((b >> jnp.arange(NEV)) & 1) != 0
-    branches[OP_EVENT] = lambda: put((s.ev_g & evb[:, None]).any(axis=0))
+    branches[OP_EVENT] = lambda: put((jnp.where(c == 1, s.teg, s.ev_g) & evb[:, None]).any(axis=0))
     branches[OP_COND_TURN] = lambda: cond(s.tp == rel(p, a))
     branches[OP_COND_EVP] = lambda: cond((evm & s.ev_g.any(axis=1) & (s.ev_p == rel(p, b))).any())
     branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0))
@@ -1854,6 +1901,19 @@ def test_ok(bank, s, h, e, p):
     return ok
 
 
+def sel_finish(bank, s):
+    """Fin d'une sélection pendant un effet (D_SELECT) : les cartes choisies vont dans le registre de l'instruction."""
+    sel = (s.st & ST_SEL) != 0
+    dst = jnp.clip(current_ins(bank, s)[1], 0, R - 1)
+    return s._replace(reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
+                      dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
+
+
+def sel_var(s):
+    """Sélection à taille variable (CHOOSE, bit 9) en cours : A_PASS la termine dès que smin cartes sont prises."""
+    return (s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0) & (s.smin < s.picks + s.need)
+
+
 def current_ins(bank, s):
     return bank.prog[s.cid[s.ch_src], s.ch_eff, s.pg, s.pc]
 
@@ -1864,7 +1924,8 @@ def begin_act(bank, s, c, e):
     leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) == 0)
     p = s.dec_player
     opt = bank.eopt[s.cid[c], e]
-    s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(opt == OPT_NAME, name_add(s.opt_cid[p], s.cid[c]), s.opt_cid[p])),
+    key = opt_key(s.cid[c], opt)
+    s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(key >= 0, name_add(s.opt_cid[p], key), s.opt_cid[p])),
                    st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
     # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
     # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
@@ -1875,7 +1936,7 @@ def begin_act(bank, s, c, e):
 
 
 def push_link(bank, s):
-    s = adjust(s)  # ygopro : break_effect après coût et cible (AddChain étape 8)
+    s = brk(adjust(s))  # ygopro : break_effect après coût et cible (AddChain étape 8)
     k, src = s.n_chain, s.ch_src
     s = s._replace(lk_src=s.lk_src.at[k].set(s.ch_src), lk_eff=s.lk_eff.at[k].set(s.ch_eff),
                    lk_p=s.lk_p.at[k].set(s.ch_p), lk_reg=s.lk_reg.at[k].set(s.reg),
@@ -1890,6 +1951,7 @@ def load_link(s, k):
     monstre dont les effets sont annulés et qui est encore lié au maillon (solve_chain : STATUS_DISABLED)."""
     c = jnp.maximum(s.lk_src[k], 0)
     dis = ((s.fl_c[c] & FL_DISABLED) != 0) & (s.zone[c] == Z_MZONE) & (s.mv[c] <= s.lk_t[k])
+    s = brk(s)  # break_effect avant chaque maillon (solve_chain)
     return s._replace(ch_k=k, ch_src=s.lk_src[k], ch_eff=s.lk_eff[k], ch_p=s.lk_p[k], reg=s.lk_reg[k] & (s.mv <= s.lk_t[k]),
                       ch_lab=s.lk_lab[k],
                       pg=_i(PG_RESOLVE), pc=jnp.where(s.lk_neg[k] | dis, P - 1, 0).astype(I32), dec=_i(D_RUN),
@@ -1933,8 +1995,11 @@ def exec_one(bank, s):
 
     def choose(s):  # au plus (c >> 4) & 15 cartes, moins s'il n'y a pas assez de candidats (rien : pas de décision)
         need = jnp.minimum((c >> 4) & 15, s.reg[jnp.clip(b, 0, R - 1)].sum()).astype(I32)
+        # taille variable (bit 9) : au moins c & 15 cartes (autant que possible), A_PASS termine ensuite la sélection
+        smin = jnp.where((c >> 9) & 1, jnp.minimum(c & 15, need), need).astype(I32)
         return _cond(need > 0,
-                        lambda s: s._replace(dec=_i(D_SELECT), dec_player=rel(p, (c >> 8) & 1), need=need, picks=_i(0)),
+                        lambda s: s._replace(dec=_i(D_SELECT), dec_player=rel(p, (c >> 8) & 1), need=need, picks=_i(0),
+                                             smin=smin),
                         lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
     def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer), la main du propriétaire ou les bannies
@@ -2044,6 +2109,8 @@ def act_cand(bank, s):
     us = zone_used(s, p, Z_SZONE)
     pend_hand = in_hand & ((ct & TYPE_PENDULUM) != 0) & (~us[0] | ~us[4])  # vers une zone pendule libre
     faceup_mon = my_mon & ((s.pos & P_FACEUP) != 0)
+    in_grave = mine & (s.zone == Z_GRAVE)
+    faceup_st = mine & (s.zone == Z_SZONE) & ((s.pos & P_FACEUP) != 0)
     trig_w = chn & (s.wk == W_TRIG)
     # main ajustée en End Phase (hand_adjusted) : pas de fenêtre libre, seulement les réponses à une chaîne
     fast = bat | (chn & ~trig_w & ~((s.wk == W_QUICK) & (s.ret == R_HAND) & (s.n_chain == 0)))  # vitesse 2 minimum
@@ -2057,13 +2124,17 @@ def act_cand(bank, s):
         trig = bank.etrig[s.cid, e]
         act = kind == K_ACTIVATE
         rng = bank.erng[s.cid, e]
-        qm = (kind == K_QUICK) & ((in_hand & ((rng & Z_HAND) != 0)) | (faceup_mon & ((rng & Z_MZONE) != 0)))
+        # zones d'un effet rapide de monstre / d'ignition (erng ; 0 pour une ignition : zone monstres)
+        rng = jnp.where((kind == K_IGNITION) & (rng == 0), Z_MZONE, rng)
+        inr = ((in_hand & ((rng & Z_HAND) != 0)) | (faceup_mon & ((rng & Z_MZONE) != 0))
+               | (in_grave & ((rng & Z_GRAVE) != 0)) | (faceup_st & ((rng & Z_SZONE) != 0)))
+        qm = (kind == K_QUICK) & inr
         where = ((idle & spell & ~quick & act & (from_hand | set_st))
                  | (idle & act & pend_hand)
                  | ((idle | fast) & qm)
                  | ((idle | fast) & quick & act & ((from_hand & (p == s.tp)) | ready))
                  | ((idle | fast) & trap & act & ready & ((s.pf_c[p] & PF_NO_TRAP) == 0))
-                 | (idle & faceup_mon & (kind == K_IGNITION)))
+                 | (idle & inr & (kind == K_IGNITION)))
         where &= speed(bank, s.cid, e) >= top_spd
         where &= (trig == 0) | ((trig & evb) != 0)
         # damage step (effect::is_activateable) : drapeaux DAMAGE_STEP / DAMAGE_CAL, sauf contre-pièges et effets
@@ -2183,7 +2254,8 @@ def legal(bank, s, fus=True):
     sp = sp.at[A_PASS].set((chn & ~(trig_w & (s.tst < 2)))  # les déclencheurs obligatoires ne se refusent pas
                            | ((s.dec == D_TRIBUTE) & (s.psel == PS_LINK) & lgoal)  # Link : « terminer » la sélection
                            | ((s.dec == D_TRIBUTE) & (s.psel == PS_PEND) & ~unsel.all())  # pendule : au moins une carte
-                           | (s.dec == D_YESNO))
+                           | (s.dec == D_YESNO)
+                           | (sel_var(s) & (s.picks >= s.smin)))  # sélection à taille variable : « terminer »
     sp = sp.at[A_YES].set(s.dec == D_YESNO)
     m = jnp.concatenate([verbs.reshape(-1), sp])
     return m & ~s.done & (s.dec != D_NONE)
@@ -2251,11 +2323,7 @@ def apply(bank, s, a):
                                                                             chained=False)), lambda s: s, s)
 
         def eff_select(s):
-            def done(s):
-                sel = (s.st & ST_SEL) != 0
-                dst = jnp.clip(current_ins(bank, s)[1], 0, R - 1)
-                return s._replace(reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
-                                  dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
+            done = lambda s: sel_finish(bank, s)
             s = pick(s)
             rit = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[2], 0, R - 1)])
             fin = jnp.where(s.rsel > 0, rit_done(bank, s, rit, s.rsel), s.need == 0)
@@ -2306,7 +2374,7 @@ def apply(bank, s, a):
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
-        s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, s.tp)
+        s = raise_ev(brk(s), EV_SPSUMMON, jnp.arange(n) == c, s.tp)  # break_effect après les matériaux
         lk = (bank.ctype[s.cid[c]] & TYPE_LINK) != 0
         s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM | jnp.where(lk, ST_LINKSUM, 0)),
                        pend=_i(-1))
@@ -2323,7 +2391,7 @@ def apply(bank, s, a):
 
         def fin(s):
             g = (s.st & ST_PSTEP) != 0
-            s = raise_ev(s, EV_SPSUMMON, g, s.tp)
+            s = raise_ev(brk(s), EV_SPSUMMON, g, s.tp)
             s = s._replace(st=s.st & ~ST_PSTEP, psel=_i(0), pend=_i(-1), ps_used=jnp.bool_(True))
             return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
         return _cond(sel.any(), go, fin, s)
@@ -2367,8 +2435,8 @@ def apply(bank, s, a):
             lambda s: _cond(s.dec == D_TRIBUTE,  # fin de la sélection des matériaux Link : au cimetière, puis la case
                             lambda s: _cond(s.psel == PS_PEND, pend_next,  # pendule : placement carte par carte
                                             lambda s: selected_to_grave(bank, s)._replace(dec=_i(D_ZONE), psel=_i(0)), s),
-                            lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
-                                            lambda s: pass_priority(bank, s), s), s),
+                            lambda s: _cond(s.dec == D_SELECT, lambda s: sel_finish(bank, s), lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
+                                            lambda s: pass_priority(bank, s), s), s), s),
             lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
             lambda s: s._replace(pc=_i(P - 1), dec=_i(D_RUN)),
             replay_go, battle_over,
@@ -2390,7 +2458,8 @@ def forced(bank, s):
 
 def forced_m(bank, s, m):
     k = m.sum()
-    sel = ((s.dec == D_TRIBUTE) & (s.psel == 0)) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0))
+    sel = ((s.dec == D_TRIBUTE) & (s.psel == 0)) | (s.dec == D_DISCARD) | ((s.dec == D_SELECT) & ~s.fsel & (s.rsel == 0)
+                                                                            & ~sel_var(s))
     # libérations rituelles : jouées d'office si l'union des choix possibles est elle-même le seul ensemble valide
     # (l'oracle n'a alors qu'une option) : elle atteint la somme sans carte superflue (Greater) ou exactement (Equal)
     n = s.cid.shape[0]
@@ -2584,14 +2653,14 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     s = State(cid=cid, zone=zone0,
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
-              dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0),
+              dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0), smin=_i(0),
               zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, ch_lab=_i(0), pg=_i(0),
               pc=_i(0), reg=jnp.zeros((R, n), bool), done=f, odraw=f, winner=_i(-1),
               lk_src=jnp.full(CH, -1, I32), lk_eff=jnp.zeros(CH, I32), lk_p=jnp.zeros(CH, I32),
               lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), lk_lab=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
-              pzone=zone0, tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
+              pzone=zone0, tev=jnp.zeros((NEV, n), bool), tew=jnp.zeros((NEV, n), bool), teg=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, rb_m=jnp.zeros(n, bool), rb_t=_i(0), rpl=f, opt_cid=jnp.zeros((2, KO), I32),
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),

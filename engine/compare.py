@@ -91,7 +91,10 @@ def slot(s, con, loc, seq):
     return int(idx[0])
 
 
-def translate(dec, opt, s):
+DESC = {}  # code → description (aux.Stringid) de chaque effet, cartes traduites (translate/validate.py)
+
+
+def translate(dec, opt, s, m=None):
     """Option de l'oracle → suite d'actions JAX ; None si l'option est exclue."""
     kind = opt[0]
     N = s.cid.shape[0]
@@ -105,6 +108,15 @@ def translate(dec, opt, s):
             # déclencheur optionnel seul : oui / non (SelectEffectYesNo, description 221) : l'effet K_TRIG_O de la carte
             ek = np.asarray(BANK.ekind[int(s.cid[slot(s, opt[2], opt[3], opt[4])])])
             verb += int(np.argmax(ek == core.K_TRIG_O))
+        elif opt[1] in DESC and len(opt) > 5:  # carte traduite (translate/validate.py) : l'effet de cette description
+            i = slot(s, opt[2], opt[3], opt[4])
+            if kind == "chain" and opt[5] == 221 and bool(s.tg[i]):  # oui / non : le déclencheur en cours de la carte
+                verb += int(s.tg_e[i])
+            else:  # plusieurs effets de même description (souvent aucune) : celui qui est légal dans le moteur
+                ds = DESC[opt[1]]
+                es = [e for e, d in enumerate(ds) if d == opt[5]] or [e for e, d in enumerate(ds) if d is None] or [0]
+                ok = [e for e in es if m is not None and m[(verb + e) * N + i]]
+                verb += (ok or es)[0]
         return [verb * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck, ou pendule (échelle gauche) : V_SUMMON
         if opt[3] not in ("extra", "szone"):
@@ -123,7 +135,10 @@ def translate(dec, opt, s):
     if kind == "pos":
         return [sp({core.P_FU_ATK: core.A_POS_ATK, core.P_FU_DEF: core.A_POS_DEF}[opt[1]])]
     if kind == "cards":
-        return [V_SELECT * N + slot(s, c[1], c[2], c[3]) for c in opt[1]]
+        q = [V_SELECT * N + slot(s, c[1], c[2], c[3]) for c in opt[1]]
+        if int(s.dec) == core.D_SELECT and bool(core.sel_var(s)) and len(q) < int(s.need):
+            q.append(sp(core.A_PASS))  # sélection à taille variable terminée avant le maximum
+        return q
     if kind == "pick":
         c = opt[1]
         return [V_SELECT * N + slot(s, c[1], c[2], c[3])]
@@ -496,9 +511,11 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                                + f" | jax légales {decode(bank, s, np.where(np.asarray(legal(bank, s)))[0].tolist())}")
             idx = filtered(dec, s)
             ready = mode == "xlk" and xlink_cover(bank, s)
-            seqs = {i: translate(dec, dec.options[i], s) for i in idx}
             m = np.asarray(legal(bank, s))
-            want = {a for q in seqs.values() if q for a in (q if dec.options[0][0] == "cards" else q[:1])}
+            seqs = {i: translate(dec, dec.options[i], s, m) for i in idx}
+            # sélection d'un ensemble : union des cartes ; A_PASS seulement pour l'ensemble vide (taille variable)
+            want = {a for q in seqs.values() if q for a in (q if dec.options[0][0] == "cards" else q[:1])
+                    if not (dec.options[0][0] == "cards" and len(q) > 1 and a == q[-1] and a >= NV * N_(s))}
             got = set(np.where(m)[0].tolist())
             if want != got:
                 raise Mismatch(f"actions légales : oracle {sorted(want)} / jax {sorted(got)} (msg {dec.msg}, "

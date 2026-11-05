@@ -8,7 +8,7 @@ import numpy as np
 
 import core
 
-from core import (BIG, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMON, EV_SPSUMMON, EV_SUMMON, EV_TO_GRAVE,
+from core import (BIG, TRIG_FIELD, E, PT, PG_RESOLVE, EV_ATTACK, EV_BATTLE_DESTROYED, EV_FLIP, EV_FLIP_SUMMON, EV_SPSUMMON, EV_SUMMON, EV_TO_GRAVE,
                   FW, K_TRIG_F, K_TRIG_O, OP_COND_EVP, OP_COND_SELF, OP_COND_TURN, OP_EVENT, OP_LOCK, K_ACTIVATE,
                   K_IGNITION, NF, OP_CHAINCARD, OP_CHOOSE, OP_COND_CHAIN, OP_DAMAGE, OP_DRAW,
                   OP_FILTER, OP_MINATK, OP_MOVE, OP_NEGATE, OP_PAY_LP, OP_RECOVER, OP_REQ, OP_REQ_FREE, OP_SELF,
@@ -43,7 +43,11 @@ def SELF(r): return (OP_SELF, r, 0, 0)
 def REQ(r, n): return (OP_REQ, r, n, 0)
 def REQ_FREE(who, zone, n): return (OP_REQ_FREE, who, zone, n)
 def MINATK(dst, src): return (OP_MINATK, dst, src, 0)
-def CHOOSE(dst, src, n, who=ME, upto=False):  # exactement n cartes (upto : au plus n, éventuellement aucune)
+def CHOOSE(dst, src, n, who=ME, upto=False, mn=None):
+    """n cartes (moins s'il n'y a pas assez de candidats) ; upto : test d'activation sans minimum. mn : sélection de
+    taille variable (Select*(mn, n) pendant la résolution) : le joueur s'arrête quand il veut après mn cartes (A_PASS)."""
+    if mn is not None:
+        return (OP_CHOOSE, dst, src, mn | (n << 4) | (who << 8) | (1 << 9))
     return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
 def MOVE(r, zone=Z_GRAVE): return (OP_MOVE, r, zone, 0)
 def DESTROY(r): return (OP_MOVE, r, Z_GRAVE, 1)  # Duel.Destroy : les indestructibles par effet restent, r = détruites
@@ -57,7 +61,7 @@ def COND_CHAIN_FIELD(): return (OP_COND_CHAIN, 0, 1, 0)  # … est un effet (pas
 def CHAINCARD(r, zone=0): return (OP_CHAINCARD, r, zone, 0)  # sa carte, si elle est toujours dans zone (0 : magie/piège)
 def NEGATE(): return (OP_NEGATE, 0, 0, 0)               # nie son activation
 def PAY_LP(n): return (OP_PAY_LP, n, 0, 0)
-def EVENT(r, ev): return (OP_EVENT, r, ev, 0)            # cartes concernées par les événements ev (masque)
+def EVENT(r, ev, trig=False): return (OP_EVENT, r, ev, int(trig))  # cartes concernées par les événements ev (masque) ; trig : du dernier point d'événement (eg d'un déclencheur)
 def COND_TURN(who): return (OP_COND_TURN, who, 0, 0)     # c'est le tour de who
 def COND_EVP(ev, who): return (OP_COND_EVP, ev, who, 0)  # l'un des événements ev vient de who
 def COND_SELF(zone=0, prev=0, st=0): return (OP_COND_SELF, zone, prev, st)  # la carte est dans zone / venait de prev / a l'un des statuts st
@@ -88,19 +92,25 @@ def ev(*codes):
 
 
 # effet = (genre, on, opt, rng, coût, cible, résolution)
-def act(cost=(), target=(), resolve=(), on=0, dmg=0):
-    """on : masque d'événements (ev(...)) ; 0 = activation libre. dmg : bits DMG_* (activation au damage step)."""
-    return (K_ACTIVATE, on, 0, 0, cost, target, resolve, dict(dmg=dmg))
+def act(cost=(), target=(), resolve=(), on=0, dmg=0, opt=0):
+    """on : masque d'événements (ev(...)) ; 0 = activation libre. dmg : bits DMG_* (activation au damage step).
+    opt : OPT_* (SetCountLimit(1, id) : une activation par tour et par nom)."""
+    return (K_ACTIVATE, on, int(opt), 0, cost, target, resolve, dict(dmg=dmg))
 
 
-def ignition(cost=(), target=(), resolve=(), opt=0):
-    """Effet d'ignition ; opt : OPT_* (OPT_CARD : SetCountLimit(1) sans code, par carte)."""
-    return (K_IGNITION, 0, int(opt), 0, cost, target, resolve)
+def ignition(cost=(), target=(), resolve=(), opt=0, rng=0):
+    """Effet d'ignition ; opt : OPT_* (OPT_CARD : SetCountLimit(1) sans code, par carte) ; rng : zones d'activation
+    (Z_HAND | Z_MZONE | Z_GRAVE | Z_SZONE recto ; 0 = zone monstres)."""
+    return (K_IGNITION, 0, int(opt), int(rng), cost, target, resolve)
 
 
-def trigger(on, cost=(), target=(), resolve=(), optional=False, opt=False):
-    """Effet déclenché (SINGLE) par les événements `on` qui concernent la carte ; opt : une fois par tour (nom)."""
-    return (K_TRIG_O if optional else K_TRIG_F, on, int(opt), 0, cost, target, resolve)
+def trigger(on, cost=(), target=(), resolve=(), optional=False, opt=False, rng=0, dmg=0):
+    """Effet déclenché (SINGLE) par les événements `on` qui concernent la carte ; opt : une fois par tour (nom).
+    rng ≠ 0 : déclencheur FIELD (TRIG_FIELD), par les événements de n'importe quelle carte quand celle-ci est dans les
+    zones rng (eg : EVENT(r, on, trig=True)). dmg : DMG_STEP (EFFECT_FLAG_DAMAGE_STEP) ; seul un déclencheur FIELD
+    optionnel le lit (sans lui, pas d'activation au damage step, sauf sur un événement de combat)."""
+    return (K_TRIG_O if optional else K_TRIG_F, on | (TRIG_FIELD if rng else 0), int(opt), int(rng), cost, target, resolve,
+            dict(dmg=dmg))
 
 
 def quick(rng, cost=(), target=(), resolve=(), opt=False, on=0, dmg=0):
