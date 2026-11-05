@@ -474,3 +474,14 @@ Sur les vraies cartes, le style « tout » bat la référence plus nettement (72
 - dans ces parties, le réseau joue le côté `b % 2` ;
 - `act_step` accepte un adversaire par partie (`kind [B]`) : le réseau adverse et l'heuristique sont calculés sur tout le lot (~+13 ms par appel sur L4 avec une ligue) ;
 - seules les décisions du réseau testé entrent dans le PPO (`tr["need"]`).
+
+### Audit des briques (2026-11-05)
+
+`gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec arguments, déclencheurs, MC_*, damage step, limites, filtres. **59 / 86 vraies cartes entièrement couvertes.** Manques, par fréquence :
+- coût « envoyer au cimetière / bannir » : MOVE (1,16,0) se sacrifier (Cannon Soldier, Knightmare, Magic Jammer, Number 17, Little Swordsman), MOVE (0,16,0) bannir ou défausser soi-même depuis la main (D.D. Crow, Effect Veiler, Exiled Force, Ghost Ogre) ;
+- condition COND_SELF en cible (« si cette carte est envoyée au cimetière depuis le terrain ») : Sangan, Witch, Mystic Tomato, Deepsea Macrotrema ;
+- conditions de piège : COND_TURN (1,0,0) tour adverse (Mirror Force, Sakuretsu), COND_EVP (Trap Hole) ;
+- variantes de MODIFY (Shrink, Forbidden Chalice, Castle Walls, Kazejin, Reverse Glasses, Effect Veiler…) ;
+- LOCK (1,0,0) après recherche (Sangan, Witch) ;
+- cas isolés : MINATK (Fissure), SHUFFLE_HAND (Graceful Charity), MOVE (0,2,0) (Winged Rhynos), continu MC=2/6 (Arsenal Bug), Kazejin (COND_ATK, ATTACKER, PRE_DMG), matériau Link requis (Berserker), et tout le bloc Knightmare (LABEL, COND_LABEL, YESNO, noms différents).
+Aucune caractéristique n'est rare (< 0,2 %) sans être absente : le problème est l'absence, pas la fréquence.
