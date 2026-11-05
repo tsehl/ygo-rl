@@ -108,7 +108,7 @@ def translate(dec, opt, s, m=None):
             # déclencheur optionnel seul : oui / non (SelectEffectYesNo, description 221) : l'effet K_TRIG_O de la carte
             ek = np.asarray(BANK.ekind[int(s.cid[slot(s, opt[2], opt[3], opt[4])])])
             verb += int(np.argmax(ek == core.K_TRIG_O))
-        elif opt[1] in DESC and len(opt) > 5:  # carte traduite (translate/validate.py) : l'effet de cette description
+        elif kind in ("activate", "chain") and opt[1] in DESC and len(opt) > 5:  # carte traduite (translate/validate.py) : l'effet de cette description
             i = slot(s, opt[2], opt[3], opt[4])
             if kind == "chain" and opt[5] == 221 and bool(s.tg[i]):  # oui / non : le déclencheur en cours de la carte
                 verb += int(s.tg_e[i])
