@@ -529,5 +529,5 @@ Vérification (2026-11-05) :
 - `compare_gen.py --banks 0-3 --games 10 --focus` (moitié des decks parmi les cartes à nouvelles briques) : 40 / 40 parties identiques.
 - `fuzz.py --seeds 0-3` : aucune violation d'invariant.
 - `compare_gen.py --banks 0-9 --games 10` : 97 / 100. Les trois écarts viennent de règles du moteur que les nouvelles banques font apparaître, pas des nouvelles briques :
-  - **relance d'attaque** (banque 6 partie 4, banque 7 partie 9) : un piège déclenché par la déclaration d'attaque invoque spécialement un monstre chez le défenseur. L'oracle redonne la main à l'attaquant (nouvelle cible ou abandon), le moteur poursuit l'attaque sur la cible d'origine (ou en direct). Règle absente du moteur ;
+  - **relance d'attaque** (banque 6 partie 4, banque 7 partie 9) : un piège déclenché par la déclaration d'attaque invoque spécialement un monstre chez le défenseur. L'oracle redonne la main à l'attaquant (nouvelle cible ou abandon), le moteur poursuit l'attaque sur la cible d'origine (ou en direct). Règle ajoutée au moteur le 2026-11-05 (voir « Relance d'attaque » dans `ETAPE2.md`) ;
   - **LP à 0 par un coût** (banque 0 partie 4) : un effet coûte 800 LP à un joueur qui en a 800. Le moteur finit la partie tout de suite ; l'oracle fait encore choisir la cible avant de constater la défaite. Même vainqueur, quelques décisions de différence.

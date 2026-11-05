@@ -65,8 +65,9 @@ D_NONE, D_IDLE, D_BATTLE, D_TRIBUTE, D_ZONE, D_TARGET, D_DISCARD, D_SELECT, D_PO
 # D_YESNO : question oui / non pendant la résolution (Duel.SelectYesNo) : A_YES continue l'effet, A_PASS l'arrête
 # D_TRIG (interne) : déclencheurs en attente à tester, traité par settle hors de la boucle d'exécution
 # à quoi sert le choix de case en cours
-ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC, ZC_PEND = range(6)  # ZC_PROC : invocation par procédure (synchro, Xyz,
-# Link) ; ZC_PEND : invocation pendule (une carte à la fois, dans l'ordre des uid)
+ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC, ZC_PEND, ZC_REPLAY = range(7)  # ZC_PROC : invocation par procédure (synchro, Xyz,
+# Link) ; ZC_PEND : invocation pendule (une carte à la fois, dans l'ordre des uid) ; ZC_REPLAY : la question D_YESNO
+# est « relancer l'attaque ? » (SelectYesNo 30), pas un Duel.SelectYesNo d'effet
 PS_SYN, PS_XYZ, PS_LINK, PS_PEND = 1, 2, 3, 4  # psel
 # flèches Link (LINK_MARKER_*)
 LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T, LM_TR = 1, 2, 4, 8, 0x20, 0x40, 0x80, 0x100
@@ -326,6 +327,9 @@ class State(NamedTuple):
     dstep: jnp.ndarray   # DS_* : où en est le damage step
     ds_t: jnp.ndarray    # horloge au début du damage step (attaquant ou cible déplacés depuis : attaque annulée)
     ds_flip: jnp.ndarray  # la cible a été retournée au début du damage step (événement FLIP au calcul des dommages)
+    rb_m: jnp.ndarray    # [N] monstres adverses à la (re)déclaration de l'attaque (opp_mzone d'ygopro-core)
+    rb_t: jnp.ndarray    # horloge à la (re)déclaration : un monstre déplacé depuis n'est plus le même (fieldid_r)
+    rpl: jnp.ndarray     # attaque relancée (is_replaying_attack : pas de nouvel EVENT_ATTACK_ANNOUNCE)
     opt_cid: jnp.ndarray   # [2, KO] cid + 1 des effets « une fois par tour » déjà utilisés
     lock_cid: jnp.ndarray  # [2, KO] cid + 1 des cartes dont le joueur ne peut plus activer les effets ce tour
     # stats courantes (cache recalculé par refresh après chaque micro-pas) et modificateurs temporaires
@@ -741,9 +745,48 @@ def atk_canceled(s):
     return (s.zone[a] != Z_MZONE) | (s.mv[a] > s.ds_t) | (s.pos[a] != P_FU_ATK)
 
 
+def declare(s, tgt, replay):
+    """Déclaration ou relance de l'attaque (étapes 6-8) : cible, instantané des monstres adverses (opp_mzone) ;
+    EVENT_ATTACK_ANNOUNCE seulement à la première déclaration, puis la fenêtre de l'attaque."""
+    n = s.cid.shape[0]
+    s = s._replace(atk_tgt=tgt, rb_m=(s.ctrl == 1 - s.tp) & (s.zone == Z_MZONE), rb_t=s.clk, rpl=replay)
+    r = raise_ev(s, EV_ATTACK, (jnp.arange(n) == s.atk) & ~replay, s.tp)
+    return open_quick(r._replace(ev_p=jnp.where(replay, s.ev_p, r.ev_p)), s.tp, R_ATK1, chained=False)
+
+
+def atk_rollback(s):
+    """attack_rollback (adjust, étape 14, hors damage step) : les monstres adverses ont changé depuis la déclaration
+    (arrivée, départ ou déplacement), ou l'attaque directe n'est plus possible (confirm_attack_target, sans le test de
+    CANNOT_BE_BATTLE_TARGET). Calculé à la fermeture des fenêtres de l'attaque : ygopro-core le fige au premier adjust
+    où il devient vrai, ce qui ne diffère que si la condition redevient fausse (attaque directe interdite puis
+    permise de nouveau)."""
+    opp = (s.ctrl == 1 - s.tp) & (s.zone == Z_MZONE)
+    same = opp & (s.mv <= s.rb_t)
+    nodir = (s.atk_tgt < 0) & ((s.fl_c[s.atk] & FL_NO_DIRECT) != 0)
+    return ((s.rb_m | opp) & ~same).any() | nodir
+
+
+def replay_ask(s):
+    """Étape 11, relance : sans cible possible ni attaque directe, l'attaque s'arrête (elle compte) ; sinon le joueur
+    du tour choisit de la relancer (SelectYesNo 30 ; EFFECT_MUST_ATTACK n'existe pas dans le moteur)."""
+    opp = (s.ctrl == 1 - s.tp) & (s.zone == Z_MZONE)
+    tg = (opp & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
+    dr = ~opp.any() & ((s.fl_c[s.atk] & FL_NO_DIRECT) == 0)
+    return _cond(tg | dr, lambda s: s._replace(dec=_i(D_YESNO), dec_player=s.tp, zctx=_i(ZC_REPLAY)), battle_over, s)
+
+
+def replay_go(s):
+    """Relance acceptée (étape 4) : attaque directe s'il n'y a plus de monstre adverse (sans EFFECT_DIRECT_ATTACK, la
+    question 31 « attaque directe ? » ne se pose jamais), sinon choix de la cible."""
+    dr = ~((s.ctrl == 1 - s.tp) & (s.zone == Z_MZONE)).any()
+    return _cond(dr, lambda s: declare(s, _i(-1), jnp.bool_(True)),
+                 lambda s: s._replace(dec=_i(D_TARGET), dec_player=s.tp, rpl=jnp.bool_(True)), s)
+
+
 def damage_step(bank, s):
     """Début du damage step (étapes 19-20) : première fenêtre."""
-    start = lambda s: trig_point(bank, open_quick(s._replace(dstep=_i(DS_BEFORE), ds_t=s.clk, ds_flip=jnp.bool_(False)),
+    start = lambda s: trig_point(bank, open_quick(s._replace(dstep=_i(DS_BEFORE), ds_t=s.clk, ds_flip=jnp.bool_(False),
+                                                             rpl=jnp.bool_(False)),
                                                   s.tp, R_DS1, chained=False))
     return _cond(atk_canceled(s), battle_over, start, s)  # étape 11 : attaque annulée, pas de combat
 
@@ -804,7 +847,7 @@ def dmg_send(bank, s):
 
 
 def battle_over(s):
-    return to_battle(s._replace(atk=_i(-1), atk_tgt=_i(-1), dstep=_i(DS_NONE)))
+    return to_battle(s._replace(atk=_i(-1), atk_tgt=_i(-1), dstep=_i(DS_NONE), rpl=jnp.bool_(False)))
 
 
 def phase_end(s):
@@ -834,8 +877,10 @@ def quick_end(bank, s):
         lambda s: s._replace(dec=_i(D_CHAIN), dec_player=s.ph_restart, wk=_i(W_PHASE),
                              cw_passed=jnp.bool_(False)),                           # R_PHASE
         lambda s: _cond(atk_canceled(s), battle_over,                               # R_ATK1 (étape 9)
-                        lambda s: open_quick(s, s.tp, R_ATK2, chained=False), s),
-        lambda s: damage_step(bank, s),  # R_ATK2 (après une chaîne : la fenêtre de SolveChain, puis le damage step)
+                        lambda s: _cond(atk_rollback(s), replay_ask,                # relance (étape 11)
+                                        lambda s: open_quick(s, s.tp, R_ATK2, chained=False), s), s),
+        # R_ATK2 (après une chaîne : la fenêtre de SolveChain, puis le damage step ; étape 11 : relance)
+        lambda s: _cond(~atk_canceled(s) & atk_rollback(s), replay_ask, lambda s: damage_step(bank, s), s),
         lambda s: dmg_send(bank, s),                                                # R_DMG1
         battle_over,                                                                # R_DMG2
         lambda s: ds_next(bank, s, lambda s: ds_flip(bank, s)),                     # R_DS1
@@ -2173,14 +2218,13 @@ def apply(bank, s, a):
         return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
 
     def attack(s):
-        s = s._replace(st=s.st.at[c].set(s.st[c] | ST_ATTACKED), atk=c, atk_tgt=_i(-1), ds_t=s.clk)
+        s = s._replace(st=s.st.at[c].set(s.st[c] | ST_ATTACKED), atk=c, atk_tgt=_i(-1), ds_t=s.clk, rpl=jnp.bool_(False))
         opp = (s.ctrl == 1 - s.tp) & (s.zone == Z_MZONE)
         has_target = opp.any()
         # aucune cible possible (CANNOT_BE_BATTLE_TARGET) : attack_announce_failed, l'attaque compte, pas de fenêtre
         ok = (opp & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
         return _cond(has_target, lambda s: _cond(ok, lambda s: s._replace(dec=_i(D_TARGET)), to_battle, s),
-                            lambda s: open_quick(raise_ev(s, EV_ATTACK, jnp.arange(n) == c, s.tp), s.tp, R_ATK1,
-                                                 chained=False), s)
+                            lambda s: declare(s, _i(-1), jnp.bool_(False)), s)
 
     def select(s):
         def pick(s):
@@ -2199,8 +2243,7 @@ def apply(bank, s, a):
             return _cond(fin, done, lambda s: s, s)
 
         def target(s):
-            s = raise_ev(s._replace(atk_tgt=c), EV_ATTACK, jnp.arange(n) == s.atk, s.tp)
-            return open_quick(s, s.tp, R_ATK1, chained=False)
+            return declare(s, c, s.rpl)
 
         def discard(s):
             s = pick(s)
@@ -2315,7 +2358,8 @@ def apply(bank, s, a):
 
     def spec(s):
         yn = s.dec == D_YESNO  # oui : l'effet continue ; non (A_PASS) : il s'arrête (dernière instruction, OP_END)
-        return _switch(jnp.where(yn, jnp.where(k == A_YES, 6, 7),
+        rq = s.zctx == ZC_REPLAY  # relance d'attaque : oui → nouvelle cible, non → fin de l'attaque
+        return _switch(jnp.where(yn, jnp.where(rq, jnp.where(k == A_YES, 8, 9), jnp.where(k == A_YES, 6, 7)),
                                  jnp.where(k < A_ZONE0, k, jnp.where(k < A_POS_ATK, 3, jnp.where(k < A_PASS, 4, 5)))), [
             lambda s: open_quick(s, 1 - s.tp, R_TO_BP, passed=True, chained=False),
             lambda s: open_quick(s, 1 - s.tp, R_TO_M2B, passed=True, chained=False),
@@ -2327,6 +2371,7 @@ def apply(bank, s, a):
                                             lambda s: pass_priority(bank, s), s), s),
             lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
             lambda s: s._replace(pc=_i(P - 1), dec=_i(D_RUN)),
+            replay_go, battle_over,
         ], s)
 
     s = _cond((s.dec == D_IDLE) | (s.dec == D_BATTLE), clear_ev, lambda s: s, s)
@@ -2547,7 +2592,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
-              tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, opt_cid=jnp.zeros((2, KO), I32),
+              tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, rb_m=jnp.zeros(n, bool), rb_t=_i(0), rpl=f, opt_cid=jnp.zeros((2, KO), I32),
               lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),

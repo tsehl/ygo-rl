@@ -588,6 +588,10 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 COVER["kn: destruction jouée face à un indestructible"] += bool(
                     ((np.asarray(s.fl_c) & core.FL_INDES_EFF) != 0).any())
             COVER[(o[0], db.names.get(o[1], o[1]), o[3]) if o[0] in ("activate", "sset", "chain", "spsummon") else (dec.msg, o[0])] += 1
+            if int(s.dec) == core.D_YESNO and int(s.zctx) == core.ZC_REPLAY:
+                COVER[f"relance d'attaque : {o[0]}"] += 1
+            if int(s.dec) == core.D_TARGET and bool(s.rpl):
+                COVER["relance d'attaque : nouvelle cible choisie"] += 1
             if verbose:
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
             duel.respond(dec, i)

@@ -108,6 +108,9 @@ def main():
     print(f"{nok}/{tot} parties identiques")
     for k, v in errs.most_common():
         print(f"  {v} × {k}")
+    for k, v in sorted(compare.COVER.items(), key=str):
+        if "relance" in str(k):
+            print(f"  {k} : {v}")
 
 
 if __name__ == "__main__":
