@@ -67,6 +67,12 @@ def parse():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
     ap.add_argument("--bf16", action="store_true", help="calcul du réseau en bfloat16 (paramètres et optimiseur en f32)")
+    ap.add_argument("--decks", default="structured", choices=["structured", "random"],
+                    help="decks d'entraînement (l'évaluation procédurale garde des decks aléatoires)")
+    ap.add_argument("--mix-heur", type=float, default=0.0, help="part des parties contre l'heuristique à style")
+    ap.add_argument("--mix-old", type=float, default=0.0, help="part des parties contre une ancienne version (ligue)")
+    ap.add_argument("--league-every", type=int, default=10, help="une version ajoutée à la ligue toutes les X itérations")
+    ap.add_argument("--league-size", type=int, default=5)
     ap.add_argument("--prof", type=int, default=0, help="à la fin : chronométrer act, step_batch, act_step... X fois sur l'état du rollout")
     return ap.parse_args()
 
@@ -74,15 +80,25 @@ def parse():
 class Env:
     """Fonctions compilées du moteur (la banque est un argument : une compilation pour toutes les banques)."""
 
-    def __init__(self, b, frac):
+    def __init__(self, b, frac, decks="random"):
         self.b = b
+        self.decks = decks
+        self._pool = (None, None)
         ng = jax.vmap(lambda bank, d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1]), in_axes=(None, 0, 0, 0))
         lg = jax.vmap(lambda bank, s: core.legal(bank, s), in_axes=(None, 0))
         self.new = jax.jit(lambda bank, d, x, k: (lambda s: (s, lg(bank, s)))(ng(bank, d, x, k)))
         self.step = jax.jit(lambda bank, s, a: core.step_batch(bank, s, a, frac))
 
     def games(self, bank, cset, rng, key):
-        d, x = cardgen.random_decks(cset, rng, self.b)
+        if self.decks == "structured":
+            # réserve de decks structurés tirée une fois par banque (~0,5 ms par deck en Python), puis piochée
+            if self._pool[0] is not cset:
+                self._pool = (cset, [z.reshape(-1, z.shape[-1]) for z in cardgen.structured_decks(cset, rng, 2048)])
+            pd, px = self._pool[1]
+            i = rng.integers(0, len(pd), (self.b, 2))
+            d, x = pd[i], px[i]
+        else:
+            d, x = cardgen.random_decks(cset, rng, self.b)
         return self.new(bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, self.b))
 
 
@@ -118,6 +134,66 @@ def heuristic(bank, s, m, f, key):
     return jnp.where(f >= 0, f, jnp.argmax(jnp.where(m, sc, -1e9), -1).astype(jnp.int32))
 
 
+# heuristique à style (adversaire d'entraînement) : un vecteur de style par partie
+# agressivité (1 : attaque même perdue d'avance), choix (1 : cibles / coûts raisonnés, 0 : au hasard), prudence
+# (1 : pose en défense un monstre plus faible que le terrain adverse), zèle (> 0.5 : active aussi pendant son propre
+# tour dans les fenêtres de chaîne), température du bruit
+S_AGGRO, S_SMART, S_PRUDENT, S_EAGER, S_TEMP = range(5)
+N_STYLE = 5
+STYLE_REF = (1.0, 0.0, 0.0, 1.0, 0.01)                   # = heuristic (l'adversaire de référence de l'évaluation)
+
+
+def sample_style(key, b):
+    """Styles tirés au hasard [b, N_STYLE]."""
+    k = jax.random.split(key, 5)
+    u = lambda k: jax.random.uniform(k, (b,))
+    return jnp.stack([u(k[0]), (u(k[1]) < 0.7).astype(jnp.float32), u(k[2]), u(k[3]),
+                      jnp.exp(jnp.log(0.01) + u(k[4]) * (jnp.log(0.5) - jnp.log(0.01)))], -1)
+
+
+def heuristic_style(bank, s, m, f, key, sty):
+    """heuristic, modulée par un style par partie sty [B, N_STYLE] (STYLE_REF : identique à heuristic). Les règles ne
+    lisent que l'état (ATK / DEF, positions, zones), jamais l'identité des cartes : valables sur les cartes procédurales."""
+    b, n = s.cid.shape
+    w = jnp.concatenate([jnp.repeat(jnp.asarray(H_VERB), n), jnp.asarray(H_SPECIAL)])
+    batk = bank.atk[s.cid].astype(jnp.float32) / 10000.0                                         # [B, n]
+    col = lambda i: sty[:, i][:, None]
+    me = s.dec_player[:, None]
+    mon = s.zone == core.Z_MZONE
+    my_mon, op_mon = mon & (s.ctrl == me), mon & (s.ctrl != me)
+    fu = (s.pos & core.P_FACEUP) != 0
+    fatk = s.pos == core.P_FU_ATK
+    atk, df = s.atk_c.astype(jnp.float32) / 10000.0, s.df_c.astype(jnp.float32) / 10000.0
+    # attaque perdue d'avance : tous les monstres adverses recto en attaque et plus forts
+    lose = op_mon.any(-1, keepdims=True) & (~op_mon[:, None, :]
+                                            | (fatk[:, None, :] & (atk[:, None, :] > atk[:, :, None]))).all(-1)
+    v_atk = batk - 6.0 * (1 - col(S_AGGRO)) * lose
+    # invocation : monstre de la main plus faible que le plus fort monstre adverse recto -> poser (prudence)
+    op_best = jnp.where(op_mon & fu, atk, 0.0).max(-1, keepdims=True)
+    hand = (s.zone == core.Z_HAND) & (s.ctrl == me)
+    v_sum = batk - 4.0 * col(S_PRUDENT) * (hand & (batk < op_best))
+    # choix de cartes : cibles d'attaque, sélections, libérations, défausses
+    ak = jnp.take_along_axis(atk, jnp.maximum(s.atk, 0)[:, None], -1)
+    kill = op_mon & fu & ((fatk & (atk < ak)) | (~fatk & (df < ak)))
+    suicide = op_mon & fu & fatk & (atk > ak)
+    t_att = 2.0 * kill + atk - 2.0 * suicide
+    val = jnp.where(mon, atk, batk)
+    high = (s.ctrl != me) | (s.zone == core.Z_GRAVE) | (s.zone == core.Z_REMOVED) | (s.zone == core.Z_DECK) \
+        | (s.zone == core.Z_EXTRA)
+    dsel = (s.dec == core.D_SELECT)[:, None] & high
+    dpen = ((s.dec == core.D_TRIBUTE) & (s.psel == core.PS_PEND))[:, None]
+    t_sel = jnp.where(dsel | dpen, val, -val)
+    v_selc = col(S_SMART) * jnp.where((s.dec == core.D_TARGET)[:, None], t_att, t_sel)
+    vb = jnp.zeros((b, core.NV, n)).at[:, core.V_SUMMON].set(v_sum).at[:, core.V_ATTACK].set(v_atk) \
+        .at[:, core.V_SELECT].set(v_selc)
+    # fenêtre de chaîne pendant son propre tour : sans zèle, on n'active pas (passer vaut 0.1)
+    calm = ((s.dec == core.D_CHAIN) & (s.tp == s.dec_player) & (sty[:, S_EAGER] <= 0.5))[:, None, None]
+    vb = vb.at[:, core.V_ACT0:].add(jnp.where(calm, -5.0, 0.0))
+    bonus = jnp.concatenate([vb.reshape(b, -1), jnp.zeros((b, core.N_SPECIAL))], -1)
+    sc = w + bonus + col(S_TEMP) * jax.random.gumbel(key, m.shape)
+    return jnp.where(f >= 0, f, jnp.argmax(jnp.where(m, sc, -1e9), -1).astype(jnp.int32))
+
+
 def make_fns(a, opt):
     obs_b = jax.vmap(lambda bank, s, m, p: obsm.observe(bank, s, p, m), in_axes=(None, 0, 0, 0))
 
@@ -148,17 +224,27 @@ def make_fns(a, opt):
         """Un appel du rollout, en une seule fonction compilée (pas de synchronisation hôte) : politique, step_batch,
         puis remplacement des parties finies par la réserve. side [B] : -1 = le réseau joue les deux côtés ; sinon le
         réseau joue le joueur `side` et l'adversaire l'autre (évaluation, avec used = vrai : pas de remplacement).
-        opp = (paramètres, cemb, kind) : adversaire aléatoire uniforme (kind 0), réseau (1) ou heuristique (2) ;
-        lax.switch sur un scalaire hors vmap : une seule branche calculée. Rend aussi done / winner juste après
+        opp = (paramètres, cemb, kind[, styles [B, N_STYLE]]) : adversaire aléatoire uniforme (kind 0), réseau (1),
+        heuristique de référence (2) ou heuristique à style (3). kind scalaire : lax.switch hors vmap, une seule
+        branche calculée ; kind [B] (entraînement, adversaire par partie) : réseau et heuristique calculés sur tout le
+        lot. Seules les décisions du réseau testé comptent (tr["need"]). Rend aussi done / winner juste après
         step_batch."""
         k1, k2 = jax.random.split(key)
         ae, tr = _act(params, cemb, bank, s, m, f, k1, greedy)
+        tr = dict(tr, need=tr["need"] & ((side < 0) | (s.dec_player == side)))
         rnd = lambda: jnp.where(f >= 0, f, jax.random.categorical(k2, jnp.where(m, 0.0, -1e9)).astype(jnp.int32))
+        sty = opp[3] if opp is not None and len(opp) > 3 else jnp.broadcast_to(jnp.asarray(STYLE_REF), (s.cid.shape[0], N_STYLE))
         if opp is None:
             ar = rnd()
-        else:
+        elif jnp.ndim(opp[2]) == 0:
             ar = jax.lax.switch(opp[2], [rnd, lambda: _act(opp[0], opp[1], bank, s, m, f, k2)[0],
-                                         lambda: heuristic(bank, s, m, f, k2)])
+                                         lambda: heuristic(bank, s, m, f, k2),
+                                         lambda: heuristic_style(bank, s, m, f, k2, sty)])
+        else:
+            kind = opp[2]
+            sty = jnp.where((kind == 2)[:, None], jnp.asarray(STYLE_REF), sty)
+            ar = jnp.where(kind == 1, _act(opp[0], opp[1], bank, s, m, f, k2)[0],
+                           jnp.where(kind >= 2, heuristic_style(bank, s, m, f, k2, sty), rnd()))
         s, m, f = core.step_batch(bank, s, jnp.where((side < 0) | (s.dec_player == side), ae, ar), a.frac)
         done, win = s.done, s.winner
         s, m, f, used = refill(s, m, f, pool, pm, used)
@@ -305,11 +391,22 @@ def main():
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt_state = opt.init(params)
     snaps = {0: params}                                # versions passées pour l'évaluation (itération → paramètres)
-    env = Env(a.b, a.frac)
+    env = Env(a.b, a.frac, a.decks)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
     fns = act, values, act_step, gae, update, enc, obs_b = make_fns(a, opt)
     bank_seed = a.seed * 100_000
     tot_dec, tot_games = 0, 0
+    # adversaires par emplacement du lot, fixes pour tout le run : self-play (side -1), heuristique à style (kind 3)
+    # ou ancienne version de la ligue (kind 1) ; le réseau joue le côté b % 2 de ces parties
+    cat = np.zeros(a.b, int)
+    nh, no = int(round(a.mix_heur * a.b)), int(round(a.mix_old * a.b))
+    perm0 = rng.permutation(a.b)
+    cat[perm0[:nh]], cat[perm0[nh:nh + no]] = 1, 2
+    side_tr = jnp.asarray(np.where(cat == 0, -1, np.arange(a.b) % 2), jnp.int32)
+    kind_tr = jnp.asarray(np.where(cat == 1, 3, np.where(cat == 2, 1, 0)), jnp.int32)
+    league = [params]
+    key, k = jax.random.split(key)
+    sty = sample_style(k, a.b)
     for it in range(a.iters):
         t0 = time.time()
         t_games = 0.0                         # parties neuves : decks NumPy + new_game + legal (hors boucle comprise)
@@ -330,20 +427,31 @@ def main():
             (s, m), dt = games(k, params)
             t_games += dt
             f = jnp.full(a.b, -1, jnp.int32)
+            key, k = jax.random.split(key)
+            sty = sample_style(k, a.b)
         key, k = jax.random.split(key)
         (pool, pm), dt = games(k, params)
         t_games += dt
         used = jnp.zeros(a.b, bool)
         cemb = enc(params, tok, msk)
         buf, dones, wins = [], [], []
-        side = jnp.full(a.b, -1, jnp.int32)
-        opp0 = (params, cemb, jnp.asarray(0))
+        side = side_tr
+        if a.mix_heur + a.mix_old > 0:
+            op = league[int(rng.integers(len(league)))]
+            opp0 = (op, enc(op, tok, msk), kind_tr, sty)
+        else:
+            opp0 = (params, cemb, jnp.asarray(0))
         jax.block_until_ready(cemb)
         t1 = time.time()
         t_in = 0.0                            # parties neuves pendant la boucle (à retrancher de la boucle)
         for t in range(a.steps):
             key, k = jax.random.split(key)
+            used0 = used
             s, m, f, used, tr, d, w = act_step(params, cemb, bank, s, m, f, k, side, pool, pm, used, opp0, jnp.asarray(False))
+            if len(opp0) > 3:                 # nouveau style pour les parties remplacées
+                key, k = jax.random.split(key)
+                sty = jnp.where((d & ~used0)[:, None], sample_style(k, a.b), sty)
+                opp0 = opp0[:3] + (sty,)
             buf.append(tr)
             dones.append(d)
             wins.append(w)
@@ -373,6 +481,8 @@ def main():
                 mb = jax.tree.map(lambda x: x[:, chunk], bt)
                 params, opt_state, st = update(params, opt_state, tok, msk, mb)
         jax.block_until_ready(params)
+        if (it + 1) % a.league_every == 0:
+            league = (league + [params])[-a.league_size:]
         ng = int(done.sum())
         tot_dec += nd
         tot_games += ng
