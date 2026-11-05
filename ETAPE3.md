@@ -485,3 +485,40 @@ Sur les vraies cartes, le style « tout » bat la référence plus nettement (72
 - LOCK (1,0,0) après recherche (Sangan, Witch) ;
 - cas isolés : MINATK (Fissure), SHUFFLE_HAND (Graceful Charity), MOVE (0,2,0) (Winged Rhynos), continu MC=2/6 (Arsenal Bug), Kazejin (COND_ATK, ATTACKER, PRE_DMG), matériau Link requis (Berserker), et tout le bloc Knightmare (LABEL, COND_LABEL, YESNO, noms différents).
 Aucune caractéristique n'est rare (< 0,2 %) sans être absente : le problème est l'absence, pas la fréquence.
+
+### Troisième run : mélange d'adversaires et decks structurés (L4, 2026-11-05)
+
+`--b 1024 --steps 64 --iters 120 --mb 8 --bf16 --eval-every 20 --bench-every 20 --old-lag 60 --mix-heur 0.2 --mix-old 0.2 --decks structured`, d=128. 20 % des parties contre l'heuristique à style, 20 % contre la ligue, le reste en self-play.
+- ~17,5 s par itération, comme le run 2. Le débit affiché (2,8k décisions/s) ne compte plus que les décisions du réseau entraîné (`tr["need"]`), pas celles des adversaires. Ce n'est pas un ralentissement.
+- 5,9 M de décisions entraînées, 76 400 parties, ~35 min de calcul. Paramètres : `train/ckpt/run3_it120_f16.pkl.gz`.
+
+| itération | aléatoire (proc.) | heuristique (proc.) | contre l'itération −60 | aléatoire (vraies) | heuristique (vraies) |
+|---|---|---|---|---|---|
+| 19 | 80,1 % | 37,9 % | 81,0 % (it 0) | 81,4 % | 40,9 % |
+| 39 | 87,3 % | 48,2 % | 85,2 % (it 0) | 87,2 % | 43,4 % |
+| 59 | 91,7 % | 54,4 % | 91,5 % (it 0) | 92,4 % | 57,8 % |
+| 79 | 92,8 % | 59,3 % | 71,9 % (it 20) | 94,1 % | 58,5 % |
+| 99 | 95,1 % | 61,7 % | 64,8 % (it 40) | 95,6 % | 61,1 % |
+| 119 | 95,5 % | 60,9 % | 59,2 % (it 60) | 95,2 % | 61,7 % |
+
+À l'itération 119, contre l'heuristique sur les vraies cartes, par deck du réseau : contrôle 56 %, pendule 70 %, rituel / fusion 53 %, synchro 68 %. Le run 2 n'évaluait pas contre l'heuristique pendant l'entraînement : pas de point de comparaison à itération égale. Il faisait 65 % (vraies cartes) à l'itération 200.
+
+**Comportement** (`behavior.py`, contre l'heuristique, vraies cartes) : réseau tiré 58,0 %, **déterministe 62,2 %**. Contrairement au run 2, l'argmax gagne maintenant plus que le tirage.
+
+| sonde (% des occasions) | run 2 dét. | run 3 tiré | run 3 dét. |
+|---|---|---|---|
+| attaque perdue d'avance | 17,6 | 15,6 | 16,1 |
+| invoque un monstre moins fort | 19,7 | 24,8 | 25,6 |
+| fin de tour sans invoquer | 5,7 | 8,3 | 8,7 |
+| Dark Hole en étant devant | 17,5 | 53,7 | 54,3 |
+| MST sans cible | (1 occasion) | 27,6 | 28,6 |
+| Monster Reborn : pas le plus fort | 72,6 | 73,3 | 75,3 |
+| passe avec un piège défensif activable | 7,7 | 13,1 | 0,1 |
+
+Activations en déterministe (run 2 → run 3) : MST 1 → 413, Shrink 0 → 145, Rush Recklessly 2 → 308, Dragong 25 → 106 (0 fin de tour où elle restait jouable), Little Swordsman 7 → 22, Cannon Soldier 29 → 56, Exiled Force 37 → 90. Knightmare Phoenix : toujours jamais activé.
+
+Lecture :
+- **Acquis grâce au run 3** : les effets rapides sont joués avec intention (en déterministe), les échelles pendule sont posées, les effets d'ignition sont bien plus utilisés.
+- **Toujours pas appris** : la cible de Monster Reborn (75 %), les attaques suicide (16 %), le Link.
+- **Régressions** : Dark Hole joué en étant devant (54 %, comme l'heuristique à 47 %) et invocations d'un monstre moins fort (25 %). Hypothèse : contre des adversaires heuristiques qui remplissent leur terrain, vider le terrain paie plus souvent, et la sonde (ATK totale) ne voit pas ce contexte.
+- Résultat chiffré contre l'heuristique un peu en dessous du run 2 (62 % contre 65 %), mais avec 60 % des itérations et un jeu plus complet. Le plateau à ~61 % depuis l'itération 99 suggère qu'un run plus long seul ne suffira pas : la cible de Reborn et le Link demandent autre chose (couverture des briques, signal).
