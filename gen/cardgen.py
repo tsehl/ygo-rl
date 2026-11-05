@@ -808,7 +808,8 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
     """Decks structurés [b, 2, d] / [b, 2, x] : cartes en 1 à 3 exemplaires (comme de vrais decks) et, avec une
     certaine probabilité, des paquets de mécaniques qui demandent des cartes assorties (decks aléatoires : quasi jamais
     d'invocation pendule, 3-5 fois moins de rituels / Xyz que les vrais decks, voir bench/coverage.py) : pendules,
-    paires rituelles, fusions avec leurs matériaux nommés, Syntoniseurs. Une part p_rand reste tirée au hasard."""
+    paires rituelles, fusions avec leurs matériaux nommés, monstres d'un même niveau avec des Xyz de ce rang,
+    Syntoniseurs. Une part p_rand reste tirée au hasard."""
     idx = np.arange(len(cset))
     ext_m = np.array([is_extra(c) for c in cset])
     main, ext = idx[~ext_m], idx[ext_m]
@@ -821,6 +822,10 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
     fus = [(i, [r["code"] - CODE0 for r in c["recipe"][1] if "code" in r]) for i, c in enumerate(cset)
            if c.get("recipe") and c["recipe"][0] == "fusion"]
     fus = [(i, m) for i, m in fus if m]
+    lvl = np.array([c.get("lv", 0) for c in cset])
+    xyz = idx[ext_m & (ct & TYPE_XYZ != 0)]
+    nmon = idx[~ext_m & (ct & TYPE_MONSTER != 0) & (ct & TYPE_RITUAL == 0)]
+    xyz_lv = [L for L in sorted(set(lvl[xyz])) if (lvl[nmon] == L).sum() >= 3]
     cop = lambda: int(rng.choice([1, 2, 3], p=[0.3, 0.4, 0.3]))
 
     def one():
@@ -839,6 +844,13 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
                 for mt in fus[j][1]:
                     cards += [mt] * 2
             cards += [rng.choice(fspell)] * int(rng.integers(2, 4))
+        if xyz_lv and rng.random() < 0.3:          # paquet Xyz : monstres d'un même niveau + Xyz de ce rang
+            L = rng.choice(xyz_lv)
+            same = nmon[lvl[nmon] == L]
+            for c in rng.choice(same, min(len(same), int(rng.integers(3, 5))), replace=False):
+                cards += [c] * 2
+            xs = xyz[lvl[xyz] == L]
+            extra += list(rng.choice(xs, min(len(xs), 3), replace=False))
         if len(tuner) and rng.random() < 0.3:
             for c in rng.choice(tuner, min(len(tuner), int(rng.integers(2, 4))), replace=False):
                 cards += [c] * 2

@@ -415,3 +415,62 @@ Lecture :
   - les invocations Link : Knightmare Phoenix n'est jamais activé (207 fois chez l'heuristique) ;
   - les effets d'ignition sous-utilisés : Little Swordsman of Aile 7 activations contre 109, Cannon Soldier 29 contre 121, Exiled Force 37 contre 107.
 - Bilan : le combat et les magies simples sont acquis ; les choix de cible, le timing des effets rapides et les mécaniques longues (pendule, Link) ne le sont pas. Plus d'entraînement (run A100) devrait en corriger une partie. Pour la cible de Reborn et les effets rapides, il faudra peut-être un adversaire plus fort que le self-play actuel ou un meilleur signal.
+
+### Couverture des mécaniques, decks structurés, adversaires d'entraînement (2026-11-05)
+
+**Couverture** (`bench/coverage.py`, L4, jeu aléatoire, B=512, 300 appels). Le script compte les occasions de chaque mécanique (action légale) pour 1000 décisions. Il compare deux banques procédurales, avec decks aléatoires (comme le run 2) ou structurés, aux 4 decks de vraies cartes.
+
+| mécanique | aléatoires | structurés | vraies cartes |
+|---|---|---|---|
+| invocation pendule | 0,2 – 0,9 | 11 – 14 | 18 |
+| échelle pendule | 10 – 11 | 20 – 25 | 22 |
+| rituel | 0,9 – 2,0 | 6,0 – 7,4 | 16 |
+| fusion | 4,9 – 8,7 | 8,3 – 10,5 | 6,1 |
+| synchro | 2,0 – 3,9 | 2,4 – 2,8 | 6,2 |
+| Xyz | 2,7 – 4,8 | 2,0 – 4,0 | 16 |
+| Link | 48 – 54 | 39 – 46 | 87 |
+| piège / jeu-rapide activable en chaîne | 65 – 72 | 53 – 56 | 72 |
+| sélection à ≥ 2 choix | 35 – 37 | 36 – 37 | 40 |
+
+- Avec des decks aléatoires, l'invocation pendule n'arrive quasiment jamais : un deck n'a jamais deux échelles. Le run 2 ne l'a donc jamais apprise. Le rituel est rare aussi : il faut le sort et son monstre dans le même deck.
+- Les effets rapides, les choix de cible et le Link sont aussi fréquents qu'avec les vraies cartes. Leurs défauts (voir la section précédente) viennent de l'apprentissage, pas de la couverture.
+- **Decks structurés** (`cardgen.structured_decks`, `ppo.py --decks structured`, le nouveau défaut) :
+  - cartes en 1 à 3 exemplaires ;
+  - paquets tirés avec une certaine probabilité : pendules (25 %), paires rituelles (25 %), fusion avec ses matériaux nommés (30 %), monstres d'un même niveau avec des Xyz de ce rang (30 %), Syntoniseurs (30 %) ;
+  - 20 % de decks restent aléatoires ;
+  - réserve de 2048 decks tirée une fois par banque (~1 s).
+  
+  Effet : le pendule et le rituel se rapprochent des vraies cartes. Le Xyz ne bouge pas (le paquet Xyz a été ajouté après la mesure ; un comptage statique montre que les decks aléatoires ont déjà souvent ≥ 4 monstres du rang d'un de leurs Xyz). L'écart vient probablement des niveaux : la plupart des vrais monstres sont niveau 4, alors que les niveaux procéduraux sont étalés (`LV_W`).
+- L'évaluation procédurale garde des decks aléatoires, pour rester comparable aux chiffres précédents.
+
+**Heuristique à style** (`ppo.heuristic_style`). Un style par partie, avec cinq paramètres :
+- agressivité : attaquer même quand l'attaque est perdue d'avance ;
+- choix raisonnés : cible d'attaque = le plus fort monstre détruit sans suicide ; cartes adverses ou de son cimetière / deck = la plus forte ; ses propres cartes sur le terrain ou en main (coûts, libérations, défausses) = la plus faible ;
+- prudence : poser en défense un monstre de la main plus faible que le plus fort monstre adverse recto ;
+- zèle : activer aussi dans les fenêtres de chaîne de son propre tour ;
+- température du bruit.
+
+Les règles ne lisent que l'état (ATK / DEF, positions, zones), jamais l'identité des cartes, donc elles valent pour les cartes procédurales. `STYLE_REF` redonne exactement `ppo.heuristic`, vérifié action par action. Le calcul reste négligeable.
+
+Contre la référence (`bench/heur_styles.py`, L4, B=1024 ; victoire / défaite) :
+
+| style | procédural | vraies cartes |
+|---|---|---|
+| référence | 0,496 / 0,504 | 0,498 / 0,502 |
+| choix raisonnés | 0,510 / 0,490 | 0,529 / 0,471 |
+| pas d'attaque perdue d'avance | 0,568 / 0,432 | 0,650 / 0,350 |
+| prudent | 0,566 / 0,434 | 0,682 / 0,318 |
+| calme (pas de zèle) | 0,479 / 0,521 | 0,492 / 0,508 |
+| choix + pas de suicide | 0,574 / 0,426 | 0,676 / 0,324 |
+| tout (pas de suicide, choix, prudent, calme) | 0,560 / 0,440 | 0,723 / 0,277 |
+| bruité (température 0,5) | 0,478 / 0,522 | 0,400 / 0,600 |
+| tirés comme à l'entraînement | 0,562 / 0,438 | 0,609 / 0,391 |
+
+Sur les vraies cartes, le style « tout » bat la référence plus nettement (72 %) que le run 2 (65 %). Les styles tirés donnent un adversaire varié, en moyenne un peu plus fort que la référence. L'évaluation garde la référence pour rester comparable.
+
+**Mélange d'adversaires** (`ppo.py --mix-heur X --mix-old Y`) :
+- une part fixe des emplacements du lot joue contre l'heuristique à style (style retiré à chaque nouvelle partie), une autre contre une version de la ligue ; le reste est en self-play ;
+- la ligue garde `--league-size` versions, une ajoutée toutes les `--league-every` itérations, et une version est tirée à chaque itération ;
+- dans ces parties, le réseau joue le côté `b % 2` ;
+- `act_step` accepte un adversaire par partie (`kind [B]`) : le réseau adverse et l'heuristique sont calculés sur tout le lot (~+13 ms par appel sur L4 avec une ligue) ;
+- seules les décisions du réseau testé entrent dans le PPO (`tr["need"]`).
