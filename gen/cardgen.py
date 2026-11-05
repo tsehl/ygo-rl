@@ -804,6 +804,56 @@ def random_decks(cset, rng, b, d=40, x=15):
     return main[rng.integers(0, len(main), (b, 2, d))], ext[rng.integers(0, len(ext), (b, 2, x))]
 
 
+def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
+    """Decks structurés [b, 2, d] / [b, 2, x] : cartes en 1 à 3 exemplaires (comme de vrais decks) et, avec une
+    certaine probabilité, des paquets de mécaniques qui demandent des cartes assorties (decks aléatoires : quasi jamais
+    d'invocation pendule, 3-5 fois moins de rituels / Xyz que les vrais decks, voir bench/coverage.py) : pendules,
+    paires rituelles, fusions avec leurs matériaux nommés, Syntoniseurs. Une part p_rand reste tirée au hasard."""
+    idx = np.arange(len(cset))
+    ext_m = np.array([is_extra(c) for c in cset])
+    main, ext = idx[~ext_m], idx[ext_m]
+    ct = np.array([c["ctype"] for c in cset])
+    k0 = lambda c: c["effects"][0]["kind"] if c["effects"] else ""
+    pend = idx[~ext_m & (ct & TYPE_PENDULUM != 0)]
+    tuner = idx[~ext_m & (ct & TYPE_TUNER != 0) & (ct & TYPE_MONSTER != 0)]
+    rit = [(i, c["effects"][0]["code"] - CODE0) for i, c in enumerate(cset) if k0(c) == "ritual"]
+    fspell = idx[[k0(c) == "fusion_spell" for c in cset]]
+    fus = [(i, [r["code"] - CODE0 for r in c["recipe"][1] if "code" in r]) for i, c in enumerate(cset)
+           if c.get("recipe") and c["recipe"][0] == "fusion"]
+    fus = [(i, m) for i, m in fus if m]
+    cop = lambda: int(rng.choice([1, 2, 3], p=[0.3, 0.4, 0.3]))
+
+    def one():
+        if rng.random() < p_rand:
+            return main[rng.integers(0, len(main), d)], ext[rng.integers(0, len(ext), x)]
+        cards, extra = [], []
+        if len(pend) >= 2 and rng.random() < 0.25:
+            for c in rng.choice(pend, min(len(pend), int(rng.integers(3, 6))), replace=False):
+                cards += [c] * int(rng.integers(2, 4))
+        if rit and rng.random() < 0.25:
+            for j in rng.choice(len(rit), min(len(rit), int(rng.integers(1, 3))), replace=False):
+                cards += [rit[j][0]] * 2 + [rit[j][1]] * int(rng.integers(1, 3))
+        if fus and len(fspell) and rng.random() < 0.3:
+            for j in rng.choice(len(fus), min(len(fus), int(rng.integers(1, 3))), replace=False):
+                extra += [fus[j][0]] * 2
+                for mt in fus[j][1]:
+                    cards += [mt] * 2
+            cards += [rng.choice(fspell)] * int(rng.integers(2, 4))
+        if len(tuner) and rng.random() < 0.3:
+            for c in rng.choice(tuner, min(len(tuner), int(rng.integers(2, 4))), replace=False):
+                cards += [c] * 2
+        cards = cards[:d - 10]                     # au moins 10 cartes de remplissage
+        while len(cards) < d:
+            cards += [rng.choice(main)] * cop()
+        extra = extra[:x]
+        while len(extra) < x:
+            extra += [rng.choice(ext)] * cop()
+        return np.array(cards[:d]), np.array(extra[:x])
+
+    out = [[one() for _ in range(2)] for _ in range(b)]
+    return (np.array([[p[0] for p in r] for r in out], np.int64), np.array([[p[1] for p in r] for r in out], np.int64))
+
+
 # ---------------------------------------------------------------------- texte (débogage)
 
 def describe(c):
