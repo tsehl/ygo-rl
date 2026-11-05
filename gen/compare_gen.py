@@ -4,7 +4,7 @@ Pour chaque graine de banque : gen/cardgen.py tire les cartes, gen/tolua.py écr
 gen/procgen.lua) et leurs lignes de base de cartes, puis on joue des parties aléatoires avec la boucle de
 engine/compare.py (mêmes vérifications : état, actions légales, fin de partie), sur des decks tirés au hasard dans
 la banque (40 cartes + Extra Deck de 15).
-Usage : uv run --with jax python gen/compare_gen.py --banks 0-3 --games 10 [--seed0 0] [--main 400 --extra 80]
+Usage : uv run --with jax python gen/compare_gen.py --banks 0-3 --games 10 [--seed0 0] [--main 400 --extra 80] [--focus]
 """
 import argparse
 import collections
@@ -32,10 +32,20 @@ def rng_range(s):
     return range(int(a), int(b or a) + 1)
 
 
-def decks(cset, rng, d=40, x=15):
+def focus(c):
+    """Carte qui utilise une brique ajoutée au générateur le 2026-11-05 (variantes de MODIFY, MINATK, LOCK)."""
+    return any(cl["verb"] in ("def", "halve_base", "halve") or cl.get("sel") == "min" or cl.get("lock") or cl.get("rd")
+               for e in c["effects"] for cl in e.get("clauses", []))
+
+
+def decks(cset, rng, d=40, x=15, foc=False):
+    """Decks tirés au hasard ; foc : la moitié du deck principal parmi les cartes de focus()."""
     main = [c["code"] for c in cset if not cardgen.is_extra(c)]
     ext = [c["code"] for c in cset if cardgen.is_extra(c)]
-    return [[rng.choice(main) for _ in range(d)] for _ in range(2)], [[rng.choice(ext) for _ in range(x)] for _ in range(2)]
+    fm = [c["code"] for c in cset if not cardgen.is_extra(c) and focus(c)] if foc else []
+    nf = d // 2 if fm else 0
+    return ([[rng.choice(fm) for _ in range(nf)] + [rng.choice(main) for _ in range(d - nf)] for _ in range(2)],
+            [[rng.choice(ext) for _ in range(x)] for _ in range(2)])
 
 
 def dump(cset, s):
@@ -67,6 +77,7 @@ def main():
     ap.add_argument("--out", default="/tmp/ygo-gen")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--dump", action="store_true", help="décrit les cartes en jeu à chaque écart")
+    ap.add_argument("--focus", action="store_true", help="la moitié des decks parmi les cartes à briques récentes")
     a = ap.parse_args()
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     db = driver.CardDB()
@@ -82,7 +93,7 @@ def main():
             rng = random.Random(1000 * b + g)
             t0 = time.time()
             try:
-                r = compare.play(db, bank, cmap, g, step, legal, verbose=a.verbose, mode="gen", given=decks(cset, rng))
+                r = compare.play(db, bank, cmap, g, step, legal, verbose=a.verbose, mode="gen", given=decks(cset, rng, foc=a.focus))
             except Exception as e:  # plantage du pilote ou de l'oracle (script Lua, message non géré…)
                 r = dict(ok=False, err=f"{type(e).__name__}: {e}")
             tot += 1

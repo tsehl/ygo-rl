@@ -477,14 +477,16 @@ Sur les vraies cartes, le style « tout » bat la référence plus nettement (72
 
 ### Audit des briques (2026-11-05)
 
-`gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec arguments, déclencheurs, MC_*, damage step, limites, filtres. **59 / 86 vraies cartes entièrement couvertes.** Manques, par fréquence :
-- coût « envoyer au cimetière / bannir » : MOVE (1,16,0) se sacrifier (Cannon Soldier, Knightmare, Magic Jammer, Number 17, Little Swordsman), MOVE (0,16,0) bannir ou défausser soi-même depuis la main (D.D. Crow, Effect Veiler, Exiled Force, Ghost Ogre) ;
-- condition COND_SELF en cible (« si cette carte est envoyée au cimetière depuis le terrain ») : Sangan, Witch, Mystic Tomato, Deepsea Macrotrema ;
-- conditions de piège : COND_TURN (1,0,0) tour adverse (Mirror Force, Sakuretsu), COND_EVP (Trap Hole) ;
-- variantes de MODIFY (Shrink, Forbidden Chalice, Castle Walls, Kazejin, Reverse Glasses, Effect Veiler…) ;
-- LOCK (1,0,0) après recherche (Sangan, Witch) ;
-- cas isolés : MINATK (Fissure), SHUFFLE_HAND (Graceful Charity), MOVE (0,2,0) (Winged Rhynos), continu MC=2/6 (Arsenal Bug), Kazejin (COND_ATK, ATTACKER, PRE_DMG), matériau Link requis (Berserker), et tout le bloc Knightmare (LABEL, COND_LABEL, YESNO, noms différents).
-Aucune caractéristique n'est rare (< 0,2 %) sans être absente : le problème est l'absence, pas la fréquence.
+`gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec leurs arguments significatifs, déclencheurs, MC_*, damage step, limites, filtres.
+
+Première version fausse : elle comparait les arguments bruts, numéros de registre compris, et la partie où se trouvent les conditions. Elle annonçait 59 / 86 cartes couvertes et des manques qui n'en étaient pas : coûts « se sacrifier / se défausser » (MOVE (1,16,0) contre (2,16,0) dans le générateur), COND_SELF de Sangan, COND_TURN / COND_EVP des pièges (en partie coût dans le générateur, cible dans les vraies cartes). Les registres sont maintenant retirés et les COND_* comptées sans partie : **72 / 86**.
+
+Vrais manques, comblés le même jour (`cardgen.card_clause`, `gen/procgen.lua`) :
+- variantes de modificateurs de stats : DEF (Castle Walls), ATK de base / 2 (Shrink), ATK / 2 (Reverse Glasses), bonus sur soi effacé si ses effets sont annulés (`rd`, Little Swordsman), ou permanent (`perm`, Number 17) ; ces modificateurs peuvent tous être activés pendant le damage step (jeu-rapide / piège) ;
+- verrou après recherche (`lock`, LOCK de Sangan / Witch) ;
+- sélection « le monstre adverse au plus faible ATK » (`sel="min"`, MINATK de Fissure), pour détruire, bannir ou renvoyer en main.
+
+Après ajout : **80 / 86**. Restent Knightmare (label, oui / non, noms différents), Berserker (matériau Link requis), Arsenal Bug, Kazejin (damage step du calcul, ATTACKER) et SHUFFLE_HAND (Graceful Charity) : cartes isolées, laissées de côté. Les nouvelles briques changent le tirage de toutes les banques, donc la banque procédurale d'évaluation : les chiffres procéduraux des runs 1-3 ne sont plus directement comparables (les vraies cartes, si).
 
 ### Troisième run : mélange d'adversaires et decks structurés (L4, 2026-11-05)
 

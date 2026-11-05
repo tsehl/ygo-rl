@@ -190,18 +190,38 @@ function PG.verb(cl,g,e,tp)
 		Duel.Remove(g,POS_FACEUP,REASON_EFFECT)
 	elseif v=="bounce" or v=="tohand" then
 		Duel.SendtoHand(g,nil,REASON_EFFECT)
+		if cl.lock then  --Sangan : plus d'activation des cartes de ce nom ce tour
+			local tc=g:GetFirst()
+			if tc:IsLocation(LOCATION_HAND) then
+				local e1=Effect.CreateEffect(e:GetHandler())
+				e1:SetType(EFFECT_TYPE_FIELD)
+				e1:SetProperty(EFFECT_FLAG_PLAYER_TARGET)
+				e1:SetCode(EFFECT_CANNOT_ACTIVATE)
+				e1:SetTargetRange(1,0)
+				e1:SetValue(function(e,re,tp) return re:GetHandler():IsCode(e:GetLabel()) end)
+				e1:SetLabel(tc:GetCode())
+				e1:SetReset(RESET_PHASE|PHASE_END)
+				Duel.RegisterEffect(e1,tp)
+			end
+		end
 	elseif v=="tograve" then
 		Duel.SendtoGrave(g,REASON_EFFECT)
 	elseif v=="ss" then
 		Duel.SpecialSummon(g,0,tp,tp,false,false,cl.pos)
-	elseif v=="atk" then  --Rush Recklessly
+	elseif v=="atk" or v=="def" or v=="halve_base" or v=="halve" then
+		--Rush Recklessly, Little Swordsman (rd), Number 17 (rd + perm), Castle Walls, Shrink, Reverse Glasses
 		local c=e:GetHandler()
+		local reset=RESETS_STANDARD_PHASE_END
+		if cl.perm then reset=RESET_EVENT|RESETS_STANDARD_DISABLE
+		elseif cl.rd then reset=RESETS_STANDARD_DISABLE_PHASE_END end
 		for tc in g:Iter() do
 			local e1=Effect.CreateEffect(c)
 			e1:SetType(EFFECT_TYPE_SINGLE)
-			e1:SetCode(EFFECT_UPDATE_ATTACK)
-			e1:SetValue(cl.v)
-			e1:SetReset(RESETS_STANDARD_PHASE_END)
+			if v=="atk" then e1:SetCode(EFFECT_UPDATE_ATTACK) e1:SetValue(cl.v)
+			elseif v=="def" then e1:SetCode(EFFECT_UPDATE_DEFENSE) e1:SetValue(cl.v)
+			elseif v=="halve_base" then e1:SetCode(EFFECT_SET_BASE_ATTACK) e1:SetValue(tc:GetBaseAttack()/2)
+			else e1:SetCode(EFFECT_SET_ATTACK_FINAL) e1:SetValue(tc:GetAttack()/2) end
+			e1:SetReset(reset)
 			tc:RegisterEffect(e1)
 		end
 	elseif v=="disable" then  --Effect Veiler
@@ -251,6 +271,7 @@ local function check(cl,first,e,tp,eg)
 	if sel=="pick" then return #group(f,e,tp)>=cl.k end
 	if sel=="event" then return eg~=nil and eg:IsExists(fn(f,e,tp,true),1,nil) end
 	if sel=="self" then return PG.match(e:GetHandler(),f,e,tp) end
+	if sel=="min" then return #group(f,e,tp)>=1 end
 	error("procgen : sélecteur inconnu "..tostring(sel))
 end
 
@@ -294,6 +315,11 @@ local function resolve(cl,first,e,tp,eg,ep,ev,re)
 		local all=group(f,e,tp)
 		local n=math.min(cl.k,#all)
 		g=n>0 and all:Select(tp,n,n,nil) or Group.CreateGroup()
+	elseif sel=="min" then  --Fissure
+		local all=group(f,e,tp)
+		if #all==0 then return true,false end
+		g=all:GetMinGroup(Card.GetAttack)
+		if #g>1 then g=g:Select(tp,1,1,nil) end
 	elseif sel=="self" then
 		local c=e:GetHandler()
 		g=(c:IsRelateToEffect(e) and PG.match(c,f,e,tp)) and Group.FromCards(c) or Group.CreateGroup()

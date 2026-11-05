@@ -29,7 +29,7 @@ import cards  # noqa: E402
 import core  # noqa: E402
 from cards import (F, FILTER, SELF, REQ, REQ_FREE, CHOOSE, MOVE, DESTROY, SPSUMMON, DRAW,  # noqa: E402
                    DAMAGE, RECOVER, COND_CHAIN, COND_CHAIN_FIELD, CHAINCARD, NEGATE, PAY_LP, EVENT, COND_TURN,
-                   COND_EVP, COND_SELF, MODIFY, COND_PHASE, act, ignition, trigger, quick, cont, ev, ritual_spell,
+                   COND_EVP, COND_SELF, MODIFY, COND_PHASE, LOCK, MINATK, act, ignition, trigger, quick, cont, ev, ritual_spell,
                    ME, OPP)
 from core import (BIG, E, P, PT, NF, NSET, Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_GRAVE, Z_REMOVED, Z_EXTRA,  # noqa: E402
                   Z_OVERLAY, P_FU_ATK, P_FU_DEF, P_FD_ATK, P_FACEUP, TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL,
@@ -38,6 +38,7 @@ from core import (BIG, E, P, PT, NF, NSET, Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_G
                   EV_TO_GRAVE, EV_BATTLE_DESTROYED, EV_FLIP, OPT_NONE, OPT_NAME, OPT_CARD, PH_MAIN1, PH_MAIN2,
                   PH_BATTLE, MC_ATK, MC_DEF, MC_DISABLE, MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP,
                   MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP, MC_INDES_EFF, MC_NO_DIRECT, DMG_STEP, DMG_STAT,
+                  MC_FINAL_ATK, MC_BASE_ATK, MV_HALF_BASE_ATK, MV_HALF_ATK, TD_PERM,
                   RIT_GREATER, RIT_EQUAL, ST_SUMMON_TURN, ST_FLIP_TURN, ST_LINKSUM, LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T,
                   LM_TR)
 
@@ -120,6 +121,8 @@ class Gen:
                  "opp_card": lambda: dict(op=ONFIELD), "opp_gy": lambda: dict(op=Z_GRAVE)}[where]()
             if verb == "bounce" and where in ("opp_gy", "opp_st"):
                 f = self.mon(op=Z_MZONE)
+            if where == "opp_mon" and verb != "tograve" and self.p(0.15):  # Fissure : le monstre adverse au plus faible ATK
+                return dict(verb=verb, sel="min", f=self.mon(op=Z_MZONE, pos=P_FACEUP), k=1, v=0)
             sel = "target" if self.p(0.6) else "all"
             if sel == "all" and where in ("opp_card", "any_mon") and verb != "destroy":
                 sel = "target"
@@ -129,7 +132,7 @@ class Gen:
             if self.p(0.6):  # recherche dans le deck
                 f = self.mon(self.pick([1, 1, 2]), me=Z_DECK) if self.p(0.7) else dict(
                     me=Z_DECK, typ=self.pick([TYPE_SPELL, TYPE_TRAP, TYPE_SPELL | TYPE_TRAP]))
-                return dict(verb="tohand", sel="pick", f=f, k=1, v=0)
+                return dict(verb="tohand", sel="pick", f=f, k=1, v=0, lock=self.p(0.3))  # lock : Sangan
             f = self.mon(me=Z_GRAVE)  # récupération dans le cimetière
             return dict(verb="tohand", sel="target" if self.p(0.6) else "pick", f=f, k=1, v=0)
         if verb == "ss":
@@ -147,8 +150,19 @@ class Gen:
             return dict(verb="ss", sel=sel, f=f, k=1, v=0, pos=pos)
         if verb == "atk":
             r = self.rng.random()
-            if zone == Z_MZONE and r < 0.25:
-                return dict(verb="atk", sel="self", f=dict(me=Z_MZONE, pos=P_FACEUP), k=1, v=self.pos_atk())
+            if zone == Z_MZONE and r < 0.4:  # sur soi ; rd : effacé si ses effets sont annulés (Little Swordsman),
+                rd = self.p(0.5)              # perm : tant qu'elle reste sur le terrain (Number 17)
+                return dict(verb="atk", sel="self", f=dict(me=Z_MZONE, pos=P_FACEUP), k=1, v=self.pos_atk(), rd=rd,
+                            perm=rd and self.p(0.4))
+            r2 = self.rng.random()
+            if r2 < 0.15:  # Castle Walls
+                return dict(verb="def", sel="target", f=dict(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP), k=1,
+                            v=self.pos_atk())
+            if r2 < 0.27:  # Shrink : ATK de base / 2
+                return dict(verb="halve_base", sel="target", f=self.mon(1, op=Z_MZONE, pos=P_FACEUP), k=1, v=0)
+            if r2 < 0.35:  # Reverse Glasses : ATK / 2 (tous les monstres adverses, ou de tout le terrain)
+                f = dict(op=Z_MZONE, pos=P_FACEUP) if self.p(0.6) else dict(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP)
+                return dict(verb="halve", sel="all", f=f, k=1, v=0)
             if r < 0.6:
                 if self.p(0.5):
                     return dict(verb="atk", sel="target", f=dict(me=Z_MZONE, op=Z_MZONE, pos=P_FACEUP), k=1,
@@ -244,8 +258,9 @@ class Gen:
             if e["on"] == ev(EV_ATTACK) and e["clauses"][0].get("sel") != "event" and self.p(0.5):
                 e["clauses"][0] = dict(verb="destroy", sel="all", f=dict(op=Z_MZONE, pos=P_FU_ATK | P_FD_ATK), k=1, v=0)
             e["cost"] = self.cost([None, "lp", "discard"], [6, 2, 1])
-            if (ct & (TYPE_QUICKPLAY | TYPE_TRAP)) and len(e["clauses"]) == 1 and e["clauses"][0]["verb"] == "atk" \
-                    and e["clauses"][0]["sel"] == "target" and self.p(0.5):
+            c1 = e["clauses"][0]  # modificateur de stats : activable pendant le damage step (Shrink, Reverse Glasses)
+            if (ct & (TYPE_QUICKPLAY | TYPE_TRAP)) and len(e["clauses"]) == 1 and self.p(0.5) and \
+                    c1["verb"] in ("atk", "def", "halve_base", "halve") and c1["sel"] in ("target", "all"):
                 e["dmg"] = DMG_STEP | DMG_STAT
             return e
         if kind == "ignition":
@@ -556,9 +571,12 @@ def clause_value(c):
         return 2.5 * c["v"] / 1500
     if v in ("negate", "chain_destroy"):
         return 1.3
-    mult = {"target": 1.0, "pick": 1.0, "event": 0.9, "self": 0.8, "all": 1.8}[sel]
+    mult = {"target": 1.0, "pick": 1.0, "event": 0.9, "self": 0.8, "all": 1.8, "min": 0.9}[sel]
     base = {"destroy": 1.0, "banish": 1.15, "bounce": 0.8, "tograve": 0.9, "tohand": 0.9, "ss": 1.0,
-            "atk": abs(c.get("v", 0)) / 1500, "disable": 0.7}[v]
+            "atk": abs(c.get("v", 0)) / 1500 * (1.6 if c.get("perm") else 1.0), "def": c.get("v", 0) / 3000,
+            "halve_base": 0.6, "halve": 0.5, "disable": 0.7}[v]
+    if c.get("lock"):
+        base -= 0.1
     if v == "tograve" and c["f"].get("me") == Z_DECK:
         base = 0.3
     if v in ("tohand", "ss") and sel == "all":
@@ -648,13 +666,19 @@ def verb_bricks(c, r):
     if v == "banish":
         return [MOVE(r, Z_REMOVED)]
     if v in ("bounce", "tohand"):
-        return [MOVE(r, Z_HAND)]
+        return [MOVE(r, Z_HAND)] + ([LOCK(r)] if c.get("lock") else [])
     if v == "tograve":
         return [MOVE(r, Z_GRAVE)]
     if v == "ss":
         return [SPSUMMON(r, c["pos"])]
     if v == "atk":
-        return [MODIFY(r, MC_ATK, c["v"])]
+        return [MODIFY(r, MC_ATK, c["v"], dur=TD_PERM if c.get("perm") else core.TD_TURN, rd=bool(c.get("rd")))]
+    if v == "def":
+        return [MODIFY(r, MC_DEF, c["v"])]
+    if v == "halve_base":
+        return [MODIFY(r, MC_BASE_ATK, mode=MV_HALF_BASE_ATK)]
+    if v == "halve":
+        return [MODIFY(r, MC_FINAL_ATK, mode=MV_HALF_ATK)]
     if v == "disable":
         return [MODIFY(r, MC_DISABLE)]
     raise ValueError(v)
@@ -694,6 +718,9 @@ def clause_bricks(c, on, first):
     if sel == "pick":
         return (pre_t + [FILTER(0, _F(f)), REQ(0, k)],
                 pre_r + [FILTER(2, _F(f)), CHOOSE(1, 2, k)] + verb_bricks(c, 1), 1)
+    if sel == "min":  # Fissure
+        return ([FILTER(0, _F(f)), REQ(0, 1)],
+                [FILTER(0, _F(f)), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1)] + verb_bricks(c, 2), 2)
     if sel == "event":
         return ([EVENT(0, on), FILTER(1, _F(f), within=0, tgt=True), REQ(1, 1)],
                 [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
