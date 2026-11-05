@@ -45,9 +45,9 @@ Le tableau ci-dessous donne les premières raisons de refus, avec un comptage an
 | condition Link sur le groupe de matériaux | 128 | |
 | EVENT_PHASE | 124 | |
 
-Autre manque : les sélections de taille variable (`min < max` pendant la résolution, ~378 scripts) demandent une
-fonction du moteur, une sélection min..max avec arrêt anticipé. Aujourd'hui, CHOOSE prend toujours exactement
-min(max, nombre).
+Les sélections de taille variable (`Select*(mn, mx)` avec mn < mx) sont traduites depuis le 2026-11-05 (voir plus
+bas). Elles n'ont débloqué aucune carte à elles seules : chaque carte ne compte que sa première raison de refus, et
+les ~378 scripts concernés butent tous sur un autre manque (IsReason passe de 138 à 177 cartes, par exemple).
 
 ## Vérification (`validate.py`)
 
@@ -79,6 +79,11 @@ par l'effet `tg_e` en attente.
 - Damage step : un déclencheur FIELD TRIGGER_O sans la propriété DAMAGE_STEP ne réagit qu'aux événements de combat
   (EV_BATTLE_DESTROYED, EV_PRE_DMG). C'est la règle d'`effect::is_activateable` dans ygopro-core : les codes 1132-1149
   sont exemptés, de même que SINGLE TRIGGER_O, TRIGGER_F et FLIP.
+- Sélection de taille variable : `CHOOSE(..., mn=k)` (bit 9 de l'argument) entre en D_SELECT avec `smin = min(k,
+  besoin)` ; dès que `picks >= smin`, A_PASS termine la sélection (`sel_finish`) ; la sélection n'est alors plus
+  jouée d'office (`forced_m`). Le traducteur prend au moins une carte (mn = 0 → 1) : le pilote de l'oracle ne propose
+  l'ensemble vide qu'avec une annulation possible. `compare.translate` ajoute A_PASS aux ensembles plus petits que le
+  maximum.
 - `cards.act(opt=)` transmet la limite d'activation. Avant ce correctif, une magie ou un piège avec
   EFFECT_COUNT_CODE_OATH pouvait s'activer deux fois par tour.
 
@@ -88,7 +93,8 @@ par l'effet `tg_e` en attente.
 |---|---|---|
 | 2 | 7 / 12 | |
 | 4 | 10 / 12 | The Cheerful Coffin (DiscardHand(1,3) traduit en « exactement 3 », désormais refusé) ; Evoltile Lagosucho (option de l'oracle mal traduite, corrigé par DESC) |
-| 5 | voir `ETAPE3.md` | |
+| 5 (graines 12-41) | 28 / 30 | deux cartes à deux effets ACTIVATE sans description (Hidden Soldiers…) : `compare.translate` prend désormais l'effet légal dans le moteur |
+| 6 (graines 42-71) | 29 / 30 | Gogogo Goliath : la correspondance par description s'appliquait aussi aux attaques (corrigé ; la partie rejouée est identique) |
 
 Divergences anciennes non élucidées :
 - Constellar Alrescha ;
