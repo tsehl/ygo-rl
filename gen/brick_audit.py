@@ -1,6 +1,6 @@
 """Audit des briques : quelles caractéristiques d'effet des vraies cartes du benchmark (train/realbank.npz) le
 générateur procédural ne produit jamais ? Caractéristiques par effet : genre (K_*), opcodes par partie du programme
-(coût / cible / résolution) avec leurs arguments pour OP_MOVE / OP_SPSUMMON / OP_LOCK / OP_MODIFY, événements de
+(coût / cible / résolution ; les conditions COND_* sans partie) avec leurs arguments significatifs, registres retirés, événements de
 déclenchement, modificateurs continus (MC_*), damage step, limites par tour, filtres par nom / archétype.
 
 Usage : python gen/brick_audit.py [--banks 10]"""
@@ -23,7 +23,11 @@ OPS = ("END FILTER SELF REQ REQ_FREE MINATK CHOOSE MOVE SPSUMMON DRAW DAMAGE REC
 KINDS = "NONE ACTIVATE IGNITION TRIG_F TRIG_O QUICK CONT".split()
 PARTS = ("coût", "cible", "résol")
 EVS = "SUMMON FLIP_SUMMON SPSUMMON ATTACK TO_GRAVE BATTLE_DESTROYED FLIP PRE_DMG".split()
-WITH_ARGS = {"MOVE", "SPSUMMON", "LOCK", "MODIFY", "NEGATE", "EVENT", "COND_PHASE", "COND_TURN"}
+# arguments significatifs par opcode (les numéros de registre sont des détails d'assemblage : on les retire)
+ARGS = {"MOVE": lambda a, b, c: (b, c), "SPSUMMON": lambda a, b, c: (b, c), "MODIFY": lambda a, b, c: (b,),
+        "EVENT": lambda a, b, c: (b,), "COND_PHASE": lambda a, b, c: (a,), "COND_TURN": lambda a, b, c: (a,),
+        "COND_EVP": lambda a, b, c: (a, b), "COND_SELF": lambda a, b, c: (a, b, c), "COND_CHAIN": lambda a, b, c: (a, b),
+        "COND_ATK": lambda a, b, c: (a,)}
 
 
 def features(bank, c):
@@ -44,7 +48,8 @@ def features(bank, c):
                 if op == core.OP_END:
                     continue
                 nm = OPS[op]
-                out.add(f"{PARTS[pt]} {nm}" + (f" ({a1},{b1},{c1})" if nm in WITH_ARGS else ""))
+                part = "condition" if nm.startswith("COND_") else PARTS[pt]   # coût ou cible : vérifiée à l'activation
+                out.add(f"{part} {nm}" + (f" {ARGS[nm](int(a1), int(b1), int(c1))}" if nm in ARGS else ""))
         for i, ev in enumerate(EVS):
             if etrig[e] >> i & 1:
                 out.add(f"déclencheur {ev}")
