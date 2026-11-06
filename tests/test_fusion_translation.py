@@ -46,5 +46,15 @@ class FusionTranslationTests(unittest.TestCase):
         self.assertIsNone(proc)
 
 
+    def test_stringid_matches_pinned_oracle_utility(self):
+        # Même codage que data/CardScripts/utility.lua, y compris le masque de l'index.
+        translator = T.Translator.__new__(T.Translator)
+        for code, index, expected in ((11384280, 0, 11937282785280),
+                                      (6983839, 1, 7323085963265),
+                                      (12, 0x100003, 12582915)):
+            node = ast.parse(f'local value=aux.Stringid({code},{index})').body.body[0].values[0]
+            self.assertEqual(translator.ie_val(node, {}), expected)
+
+
 if __name__ == '__main__':
     unittest.main()

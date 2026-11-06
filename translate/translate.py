@@ -97,7 +97,7 @@ class Player:  # joueur relatif à celui qui active (ME / OPP)
     def __repr__(self): return f"P{self.p}"
 
 
-class Desc(int):  # aux.Stringid(id, k) = id * 16 + k (description d'un effet, celle que l'oracle affiche)
+class Desc(int):  # aux.Stringid(id, k) = (id << 20) | (k & 0xfffff) (description d'un effet, celle que l'oracle affiche)
     pass
 
 
@@ -447,7 +447,7 @@ class Translator:
             return Fn(name=d)
         if isinstance(node, A.Call) and dotted(node.func) == "aux.Stringid":
             a = [self.ie_val(x, env) for x in node.args]
-            return Desc(a[0] * 16 + a[1]) if len(a) == 2 and all(isinstance(x, int) for x in a) else None
+            return Desc((a[0] << 20) | (a[1] & 0xfffff)) if len(a) == 2 and all(isinstance(x, int) for x in a) else None
         if isinstance(node, A.UMinusOp):
             v = self.ie_val(node.operand, env)
             need(isinstance(v, int), "initial_effect : -x")

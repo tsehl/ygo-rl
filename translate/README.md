@@ -194,3 +194,13 @@ Les cartes fictives de `tests/fixtures/fusion/` isolent les recettes (matériaux
 filtres qui se recouvrent, matériau absent ou quantité insuffisante). Elles ne servent jamais à
 l'entraînement. Le contrôle vérifie les parties contre l'oracle et exige que les fusions positives
 aient effectivement été invoquées, et que Polymerization n'ait pas pu résoudre dans les cas négatifs.
+
+### Correspondance des descriptions corrigée
+
+Le codage de `aux.Stringid(code, index)` doit suivre la version épinglée de
+`data/CardScripts/utility.lua` : `(code << 20) | (index & 0xfffff)`. L'ancien calcul
+`code * 16 + index` était incorrect ; le repli sur l'effet 0 masquait cette erreur.
+Les types statiques des effets permettent également d'écarter un effet continu d'une
+activation, ou un effet d'ignition d'une réponse en chaîne, sans consulter le masque légal JAX.
+Les véritables ambiguïtés entre plusieurs effets du même type et de même description restent
+non concluantes et font échouer la validation.

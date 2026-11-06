@@ -112,5 +112,13 @@ class ValidationTests(unittest.TestCase):
                 compare.translate(None, opt, state)
 
 
+    def test_continuous_effect_is_not_an_activation_candidate(self):
+        state = SimpleNamespace(cid=np.array([0]), zone=np.array([compare.core.Z_SZONE]), ctrl=np.array([0]), seq=np.array([0]))
+        opt = ('activate', 123, 0, 'szone', 0, 0)
+        with patch.dict(compare.DESC, {123: [None, None]}), \
+             patch.dict(compare.EFFECT_KINDS, {123: [compare.core.K_ACTIVATE, compare.core.K_CONT]}):
+            self.assertEqual(compare.translate(None, opt, state), [compare.core.V_ACT0])
+
+
 if __name__ == '__main__':
     unittest.main()

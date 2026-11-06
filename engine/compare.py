@@ -120,6 +120,11 @@ def translate(dec, opt, s, m=None):
             else:
                 ds = DESC[opt[1]]
                 es = [e for e, d in enumerate(ds) if d == opt[5]] or [e for e, d in enumerate(ds) if d is None]
+                kinds = EFFECT_KINDS.get(opt[1])
+                if kinds is not None:
+                    allowed = {core.K_ACTIVATE, core.K_QUICK}
+                    allowed |= {core.K_IGNITION} if kind == "activate" else {core.K_TRIG_O, core.K_TRIG_F}
+                    es = [e for e in es if kinds[e] in allowed]
             if len(es) != 1:
                 raise Inconclusive(f"correspondance d'effet ambiguë : code={opt[1]} description={opt[5]} effets={es}")
             verb += es[0]

@@ -44,7 +44,11 @@ def _one(code):
 
 def _sig():
     from validation_run import fingerprint
-    return hashlib.sha256(json.dumps(fingerprint(), sort_keys=True).encode()).hexdigest()
+    files = fingerprint()
+    relevant = {k: v for k, v in files.items()
+                if k in ("translate/translate.py", "engine/core.py", "engine/cards.py")
+                or k.startswith(("data/", "oracle/ygopro-core"))}
+    return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()
 
 
 
@@ -214,7 +218,7 @@ def main():
     if stale:
         print("CAMPAGNE INVALIDE : sources ou données modifiées pendant son exécution")
     clean = [c for c, s in stats.items() if s["ok"] and not (s["bad"] or s["inconclusive"] or s["error"]) and (s["resolved"] or s["summoned"])]
-    print(f"cartes invoquées ou effets résolus dans des parties identiques uniquement : {len(clean)} / {len(stats)} jouées")
+    print(f"cartes invoquées ou effets résolus dans des parties identiques uniquement : {len(clean)} / {len(stats)} présentes")
     if not a.nosave:
         manifest["stats"] = dict(stats)
         manifest["blame"] = dict(blame)
