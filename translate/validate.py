@@ -21,6 +21,7 @@ import pickle
 import random
 import sys
 import time
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "engine"), os.path.join(HERE, "..", "oracle")]
@@ -55,10 +56,13 @@ def _sig():
 def translate_all(force=False):
     sig = _sig()
     if not force and os.path.exists(CACHE):
-        with open(CACHE, "rb") as fh:
-            d = pickle.load(fh)
-        if d["sig"] == sig:
-            return d["res"]
+        try:
+            with open(CACHE, "rb") as fh:
+                d = pickle.load(fh)
+            if isinstance(d, dict) and d.get("sig") == sig and "res" in d:
+                return d["res"]
+        except (OSError, EOFError, pickle.UnpicklingError, AttributeError, ValueError):
+            pass  # Cache interrompu ou incompatible : repartir des scripts épinglés.
     import translate
     codes = translate.all_codes()
     t0 = time.time()
@@ -68,8 +72,15 @@ def translate_all(force=False):
     if _sig() != sig:
         raise RuntimeError("sources ou données modifiées pendant la traduction ; relancer sur une copie figée")
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    with open(CACHE, "wb") as fh:
-        pickle.dump(dict(sig=sig, res=res), fh)
+    with tempfile.NamedTemporaryFile(dir=os.path.dirname(CACHE), suffix=".tmp", delete=False) as fh:
+        temporary = fh.name
+        try:
+            pickle.dump(dict(sig=sig, res=res), fh)
+            fh.close()
+            os.replace(temporary, CACHE)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
     return res
 
 

@@ -61,8 +61,14 @@ def save_run(directory, manifest, games):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '-' + uuid.uuid4().hex[:12] + '.json')
-    with path.open('x') as f:
-        json.dump(dict(manifest=manifest, games=games), f, indent=2)
+    temporary = path.with_suffix('.json.tmp')
+    try:
+        with temporary.open('x') as f:
+            json.dump(dict(manifest=manifest, games=games), f, indent=2)
+        # Le lien est créé uniquement lorsque le JSON est complet, sans écraser un résultat existant.
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 

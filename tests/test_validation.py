@@ -120,5 +120,32 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(compare.translate(None, opt, state), [compare.core.V_ACT0])
 
 
+    def test_failed_serialization_leaves_no_complete_run_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(TypeError):
+                validation_run.save_run(tmp, {'invalid': object()}, [])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_incomplete_translation_cache_is_rebuilt(self):
+        import pickle
+        from unittest.mock import MagicMock
+        sys.path.insert(0, str(ROOT / 'translate'))
+        import validate
+        import translate
+        expected = {24094653: ('ok', [], [], None, [])}
+        context = MagicMock()
+        context.Pool.return_value.__enter__.return_value.imap_unordered.return_value = list(expected.items())
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / 'translated.pkl'
+            cache.write_bytes(b'\x80')  # pickle interrompu
+            with patch.object(validate, 'CACHE', str(cache)), patch.object(validate, '_sig', return_value='signature'), \
+                 patch.object(translate, 'all_codes', return_value=[24094653]), \
+                 patch.object(validate.multiprocessing, 'get_context', return_value=context):
+                self.assertEqual(validate.translate_all(), expected)
+            with cache.open('rb') as f:
+                self.assertEqual(pickle.load(f)['res'], expected)
+            self.assertEqual(list(Path(tmp).glob('*.tmp')), [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -204,3 +204,8 @@ Les types statiques des effets permettent également d'écarter un effet continu
 activation, ou un effet d'ignition d'une réponse en chaîne, sans consulter le masque légal JAX.
 Les véritables ambiguïtés entre plusieurs effets du même type et de même description restent
 non concluantes et font échouer la validation.
+
+Les JSON finaux et le cache de traduction sont publiés atomiquement : une interruption ne doit
+pas laisser un fichier final partiellement écrit. Un cache tronqué ou incompatible est reconstruit
+à partir des scripts épinglés. Le journal JSONL reste le support de récupération d'une campagne
+interrompue (ignorer une éventuelle dernière ligne incomplète).
