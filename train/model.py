@@ -101,7 +101,7 @@ def block(p, x, mask, h):
 F_INS = 3 * (1 + NBITS)                       # a, b, c
 F_FILT = FW * (1 + NBITS)
 F_EFF = 32 + 3 * 8 + MW * (1 + NBITS)         # etrig, eopt, erng, edmg (bits) ; emod
-F_HEAD = 3 + 32 + 8 + 32 + NSET * NBITS + 9 + 2 + 8   # stats, ctype, attr, race, setcode, flèches, échelles, procédures
+F_HEAD = 3 + 32 + 8 + 32 + NSET * NBITS + 9 + 2 + 8 + FK   # stats, ctype, attr, race, setcode, flèches, échelles, procédures
 N_MATF = FK + 2 + 1 + 1                        # filtres de matériaux : fusion, synchro (2), Xyz, Link
 
 
@@ -111,7 +111,7 @@ def card_tokens(bank):
     head = jnp.concatenate([
         sl(bank.atk), sl(bank.df), sl(bank.level), bits(bank.ctype, 32), bits(bank.attr, 8), bits(bank.race, 32),
         bits(bank.setcode, NBITS).reshape(bank.setcode.shape[0], -1), bits(bank.lmark, 9), sl(bank.lsc), sl(bank.rsc),
-        sl(bank.fmn), sl(bank.xct), sl(bank.lmin), sl(bank.lmax), sl(bank.lneed), sl(bank.ldiff), sl(bank.syn), sl(bank.erl),
+        sl(bank.fmn), sl(bank.xct), sl(bank.lmin), sl(bank.lmax), sl(bank.lneed), sl(bank.ldiff), sl(bank.syn), sl(bank.erl), bits(bank.fsub, FK),
     ], -1)
     eff = jnp.concatenate([bits(bank.etrig, 32), bits(bank.eopt, 8), bits(bank.erng, 8), bits(bank.edmg, 8),
                            ifeat(bank.emod).reshape(bank.emod.shape[:2] + (-1,))], -1)        # [C, E, F_EFF]
@@ -157,7 +157,13 @@ def encode_cards(p, tok, msk, heads=4):
     les 91 tokens tant qu'aucune carte n'a plus de LC tokens utiles."""
     C = tok["head"].shape[0]
     pe = p["pos_e"]
-    x_head = dense(p["head"], tok["head"])[:, None]
+    # Les anciens checkpoints précèdent les FK permissions de substitution.
+    head = tok["head"]
+    if p["head"]["w"].shape[0] == F_HEAD - FK:
+        head = head[:, :-FK]  # même produit matriciel qu'avant ; aucun poids inventé
+    elif p["head"]["w"].shape[0] != F_HEAD:
+        raise ValueError("dimension d'en-tête de checkpoint incompatible")
+    x_head = dense(p["head"], head)[:, None]
     x_eff = dense(p["eff"], tok["eff"]) + p["kind"][jnp.clip(tok["ekind"], 0, N_KIND - 1)] + pe
     x_ins = (dense(p["ins"], tok["ins"]) + p["op"][jnp.clip(tok["ins_op"], 0, N_OPS - 1)]
              + pe[:, None, None] + p["pos_g"][:, None] + p["pos_i"])

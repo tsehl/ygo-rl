@@ -125,7 +125,7 @@ def main():
     for c, v in ok.items():
         if v[3] is not None:
             k, f, *rest = v[3]
-            recipes[k][c] = f if k == "fusion" else ((f, rest[0], rest[1], 0) if k == "link" else (f, rest[0]))  # synchro (F, F), xyz (F, ct)
+            recipes[k][c] = cards.FusionRecipe(f, rest[0]) if k == "fusion" else ((f, rest[0], rest[1], 0) if k == "link" else (f, rest[0]))  # synchro (F, F), xyz (F, ct)
     extra_set = {c for c, v in ok.items() if v[3] is not None}
     pool = db.normal_monsters()
     want = 0x1 | 0x10 | TUNER  # MONSTER | NORMAL | TUNER : Syntoniseurs normaux
@@ -139,6 +139,8 @@ def main():
     cmap = {c: i for i, c in enumerate(codes)}
     compare.DESC.clear()
     compare.DESC.update({c: v[4] for c, v in ok.items()})
+    compare.EFFECT_EVENTS.clear()
+    compare.EFFECT_EVENTS.update({c: [e[1] for e in v[1]] for c, v in ok.items()})
     compare.EFFECT_KINDS.clear()
     compare.EFFECT_KINDS.update({c: [e[0] for e in v[1]] for c, v in ok.items()})
     step, legal = jax.jit(core.step), jax.jit(core.legal)

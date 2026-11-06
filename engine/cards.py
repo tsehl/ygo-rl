@@ -297,6 +297,16 @@ CARDS = {
 }
 
 
+class FusionRecipe(list):
+    def __init__(self, filters, substitute=True):
+        super().__init__(filters)
+        if type(substitute) is bool:
+            self.substitute_mask = sum(1 << j for j, f in enumerate(self) if substitute and f[core.F_CODE1] > 0)
+        else:
+            self.substitute_mask = int(substitute)
+            assert 0 <= self.substitute_mask < (1 << len(self))
+
+
 def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None, ritual=None):
     """codes : [C] ids → (ekind [C,E], prog [C,E,3,P,4], filt [C,E,NF,FW]) en numpy.
     fusion / synchro / xyz / link / ritual : recettes (mêmes formats que FUSION, SYNCHRO, XYZ, LINK, RITUAL) ;
@@ -305,6 +315,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                                                XYZ if xyz is None else xyz, LINK if link is None else link,
                                                RITUAL if ritual is None else ritual)
     c = len(codes)
+    subzone = np.zeros(c, np.int32)
     ekind = np.zeros((c, E), np.int32)
     prog = np.zeros((c, E, 3, P, 4), np.int32)
     filt = np.zeros((c, E, NF, FW), np.int32)
@@ -325,6 +336,8 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte ou condition)
             for k, v in extra.get("mod", {}).items():
                 emod[i, e, k] = v
+            if extra.get("mod", {}).get(M_CODE) == core.MC_FUS_SUB:
+                subzone[i] |= rng
             for g, pr in enumerate(progs):
                 assert len(pr) < P, (code, g)  # toujours au moins un OP_END
                 assert g == PG_RESOLVE or len(pr) <= PT, (code, g)  # test_ok ne lit que PT instructions
@@ -339,6 +352,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                 filt[i, e, j] = f
     fmat = np.zeros((c, FK, len(F())), np.int32)
     fmn = np.zeros(c, np.int32)
+    fsub = np.zeros(c, np.int32)
     erl = np.zeros(c, np.int32)
     dflt = F()
     for i, code in enumerate(codes):
@@ -346,6 +360,8 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             # recette : seuls les champs de core.MAT_FIELDS sont lus (la zone est la main et le terrain)
             assert all(f[k] == dflt[k] for k in range(len(f)) if k not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             fmat[i, j] = f
+            if (getattr(FUSION_.get(code), "substitute_mask", (1 << FK) - 1) & (1 << j)) and f[core.F_CODE1] > 0:
+                fsub[i] |= 1 << j
         fmn[i] = len(FUSION_.get(code, ()))
         erl[i] = int(code in FUSION_ or code in RITUAL_ or code in SYNCHRO_ or code in XYZ_ or code in LINK_)
     smat = np.zeros((c, 2, len(F())), np.int32)
@@ -372,7 +388,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             lmat[i] = f
     return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
-                fmat=fmat, fmn=fmn, erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct, lmat=lmat, lmin=lmin, lmax=lmax,
+                fmat=fmat, fmn=fmn, fsub=fsub, submat=(subzone[:, None] if subzone.any() else np.zeros((c, 0), np.int32)), erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct, lmat=lmat, lmin=lmin, lmax=lmax,
                 lneed=lneed, ldiff=ldiff)
 
 

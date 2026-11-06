@@ -95,11 +95,17 @@ def slot(s, con, loc, seq):
     return int(idx[0])
 
 
+EFFECT_EVENTS = {}
+ORACLE_EVENTS = {driver.K[name]: getattr(core, event) for name, event in {
+    "EVENT_SUMMON_SUCCESS": "EV_SUMMON", "EVENT_FLIP_SUMMON_SUCCESS": "EV_FLIP_SUMMON",
+    "EVENT_SPSUMMON_SUCCESS": "EV_SPSUMMON", "EVENT_ATTACK_ANNOUNCE": "EV_ATTACK",
+    "EVENT_TO_GRAVE": "EV_TO_GRAVE", "EVENT_BATTLE_DESTROYED": "EV_BATTLE_DESTROYED",
+    "EVENT_FLIP": "EV_FLIP", "EVENT_PRE_DAMAGE_CALCULATE": "EV_PRE_DMG"}.items()}
 EFFECT_KINDS = {}  # types statiques des effets traduits (aucune légalité JAX consultée)
 DESC = {}  # code → description (aux.Stringid) de chaque effet, cartes traduites (translate/validate.py)
 
 
-def translate(dec, opt, s, m=None):
+def translate(dec, opt, s, m=None, option_index=None):
     """Option de l'oracle → suite d'actions JAX ; None si l'option est exclue."""
     kind = opt[0]
     N = s.cid.shape[0]
@@ -125,6 +131,17 @@ def translate(dec, opt, s, m=None):
                     allowed = {core.K_ACTIVATE, core.K_QUICK}
                     allowed |= {core.K_IGNITION} if kind == "activate" else {core.K_TRIG_O, core.K_TRIG_F}
                     es = [e for e in es if kinds[e] in allowed]
+            if len(es) > 1 and dec is not None and "effect_query" in dec.raw:
+                if option_index is None:
+                    indices = [j for j, value in enumerate(dec.options) if value == opt]
+                    if len(indices) != 1:
+                        raise Inconclusive("options identiques sans index oracle")
+                    option_index = indices[0]
+                raw_event = dec.raw["effect_query"](dec, option_index)
+                event = ORACLE_EVENTS.get(raw_event)
+                masks = EFFECT_EVENTS.get(opt[1], [])
+                if event is not None and len(masks) == len(DESC[opt[1]]):
+                    es = [e for e in es if masks[e] & (1 << event)]
             if len(es) != 1:
                 raise Inconclusive(f"correspondance d'effet ambiguë : code={opt[1]} description={opt[5]} effets={es}")
             verb += es[0]
@@ -342,7 +359,7 @@ NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée 
 FORCED = jax.jit(core.forced)
 
 
-def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None, given=None):
+def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None, given=None, chooser=None):
     """given : (decks, extra) imposés (cartes procédurales, gen/compare_gen.py) ; sinon tirés selon le mode."""
     global BANK_CODE, BANK
     BANK_CODE, BANK = bank.code, bank
@@ -527,7 +544,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             idx = filtered(dec, s)
             ready = mode == "xlk" and xlink_cover(bank, s)
             m = np.asarray(legal(bank, s))
-            seqs = {i: translate(dec, dec.options[i], s, m) for i in idx}
+            seqs = {i: translate(dec, dec.options[i], s, m, option_index=i) for i in idx}
             # sélection d'un ensemble : union des cartes ; A_PASS seulement pour l'ensemble vide (taille variable)
             want = {a for q in seqs.values() if q for a in (q if dec.options[0][0] == "cards" else q[:1])
                     if not (dec.options[0][0] == "cards" and len(q) > 1 and a == q[-1] and a >= NV * N_(s))}
@@ -612,7 +629,9 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                     pick = no2
                 elif int(s.zctx) != core.ZC_SUMMON and z2 and rng.random() < 0.8:
                     pick = z2
-            i = rng.choice(pick)
+            i = rng.choice(pick) if chooser is None else chooser(dec, pick)
+            if i not in pick:
+                raise ValueError("politique de test : option hors des choix autorisés")
             o = dec.options[i]
             if mode in ("lnk", "xlk", "kn"):
                 link_cover(bank, s, o)
@@ -626,7 +645,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 COVER["relance d'attaque : nouvelle cible choisie"] += 1
             if verbose:
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
-            trace.append(dict(message=dec.msg, player=dec.player, option=o, actions=seqs[i]))
+            trace.append(dict(message=dec.msg, player=dec.player, option=o, actions=seqs[i], oracle_event=dec.raw.get("effect_events", {}).get(i)))
             duel.respond(dec, i)
             before = s
             for a in seqs[i]:

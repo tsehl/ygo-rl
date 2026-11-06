@@ -158,5 +158,35 @@ class ValidationTests(unittest.TestCase):
         self.assertNotEqual(before, after)
 
 
+    def test_identical_options_are_disambiguated_by_their_oracle_index(self):
+        state = SimpleNamespace(cid=np.array([0]), zone=np.array([compare.core.Z_SZONE]), ctrl=np.array([0]), seq=np.array([0]))
+        option=('chain',123,0,'szone',0,0)
+        calls=[]
+        def query(dec,index):
+            calls.append(index)
+            return driver.K['EVENT_FLIP_SUMMON_SUCCESS'] if index==0 else driver.K['EVENT_SUMMON_SUCCESS']
+        dec=SimpleNamespace(options=[option,option],raw={'effect_query':query})
+        with patch.dict(compare.DESC,{123:[None,None]}), \
+             patch.dict(compare.EFFECT_KINDS,{123:[compare.core.K_ACTIVATE]*2}), \
+             patch.dict(compare.EFFECT_EVENTS,{123:[1<<compare.core.EV_SUMMON,1<<compare.core.EV_FLIP_SUMMON]}):
+            self.assertEqual(compare.translate(dec,option,state,option_index=0),[compare.core.V_ACT0+1])
+            self.assertEqual(compare.translate(dec,option,state,option_index=1),[compare.core.V_ACT0])
+        self.assertEqual(calls,[0,1])
+
+
+    def test_inspector_recovers_a_truncated_build_stamp(self):
+        import build_inspector
+        build_inspector.load.cache_clear()
+        try:
+            with tempfile.TemporaryDirectory() as tmp, patch.object(build_inspector,'OUT',Path(tmp)):
+                (Path(tmp)/'effect-inspector.json').write_text('{')
+                loaded=build_inspector.load()
+                self.assertTrue(hasattr(loaded,'YGO_EffectEvent'))
+                self.assertIn('signature',json.loads((Path(tmp)/'effect-inspector.json').read_text()))
+                self.assertFalse((Path(tmp)/'effect-inspector.tmp').exists())
+        finally:
+            build_inspector.load.cache_clear()
+
+
 if __name__ == '__main__':
     unittest.main()

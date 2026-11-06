@@ -561,16 +561,18 @@ class Translator:
                 specs = expanded
             need(2 <= len(specs) <= core.FK, f"Fusion : entre 2 et {core.FK} matériaux")
             filters = []
-            for material in specs:
+            substitute_mask = 0
+            for j, material in enumerate(specs):
                 value = self.ie_val(material, env)
                 if type(value) is int:
                     need(value > 0, "Fusion : code de matériau")
-                    need(not sub, "Fusion : substituts de matériaux nommés non pris en charge")
+                    if sub:
+                        substitute_mask |= 1 << j
                     filters.append(C.MAT(code=value))
                 else:
                     need(isinstance(value, Fn), "Fusion : matériau ni code ni filtre")
                     filters.append(self.mat_filter(material, env))
-            return ("fusion", filters)
+            return ("fusion", filters, substitute_mask)
         f0 = args[0] if args else A.Nil()
         if d == "Xyz.AddProcedure":  # (f, lv, ct, alterf, desc, maxct, op, mustbemat, exchk)
             need(all(nil(i) for i in (3, 6, 7, 8)), "Xyz : matériau alternatif / opération")
@@ -621,6 +623,24 @@ class Translator:
         T = lambda n: typ & K[n]  # noqa: E731
         for k in ("SetLabel", "SetLabelObject", "SetValue", "SetTargetRange", "SetReset", "SetAbsoluteRange"):
             need(k not in f or T("EFFECT_TYPE_SINGLE") or T("EFFECT_TYPE_FIELD"), f"effet : {k}")
+        if code == K["EFFECT_FUSION_SUBSTITUTE"]:
+            need(typ == K["EFFECT_TYPE_SINGLE"] and not f.get("SetProperty", [0])[0], "substitut : type / propriétés")
+            need(not any(k in f for k in ("SetValue", "SetRange", "SetCountLimit", "SetReset")), "substitut : valeur / portée dynamique")
+            zones = ALLZ
+            if "SetCondition" in f:
+                fn = f["SetCondition"][0]
+                need(isinstance(fn, Fn) and fn.node is not None and len(fn.node.body.body) == 1, "substitut : condition")
+                statement = fn.node.body.body[0]
+                need(isinstance(statement, A.Return) and len(statement.values) == 1, "substitut : condition")
+                test = statement.values[0]
+                need(isinstance(test, A.Invoke) and test.func.id == "IsLocation" and len(test.args) == 1,
+                     "substitut : condition autre qu'une zone")
+                owner = test.source
+                need(isinstance(owner, A.Invoke) and owner.func.id == "GetHandler" and not owner.args and
+                     isinstance(owner.source, A.Name) and owner.source.id == fn.node.args[0].id, "substitut : autre carte")
+                zones = self.ie_val(test.args[0], {})
+                need(type(zones) is int, "substitut : zones non constantes")
+            return C.cont(zones, core.MC_FUS_SUB, 0)
         prop = f.get("SetProperty", [0])[0] or 0
         okprop = K["EFFECT_FLAG_CARD_TARGET"] | K["EFFECT_FLAG_PLAYER_TARGET"] | K["EFFECT_FLAG_DELAY"]
         opt = 0

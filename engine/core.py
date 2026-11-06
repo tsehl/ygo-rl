@@ -143,6 +143,7 @@ MC_NONE, MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK, MC_DEF, MC_SET_DEF, MC_F
 MC_NO_ATTACK, MC_NO_BTARGET, MC_NO_ETARGET, MC_IMM_TRAP, MC_NO_SS, MC_INDES_BATTLE, MC_P_NO_TRAP = range(9, 16)
 MC_NO_DIRECT = 17  # EFFECT_CANNOT_DIRECT_ATTACK
 MC_DISABLE = 16  # EFFECT_DISABLE : effets de la carte annulés (continus inactifs, pas d'activation, maillons annulés)
+MC_FUS_SUB = 19  # substitut de matériau nommé (métadonnée passive de banque)
 MC_INDES_EFF = 18  # EFFECT_INDESTRUCTABLE_EFFECT : pas détruite par les effets (OP_MOVE avec destruction)
 FL_NO_ATTACK, FL_NO_BTARGET, FL_NO_ETARGET, FL_IMM_TRAP, FL_NO_SS, FL_DISABLED = 1, 2, 4, 8, 16, 32  # bits de fl_c
 FL_NO_DIRECT = 128  # pas d'attaque directe
@@ -211,6 +212,8 @@ class Bank(NamedTuple):
     edmg: jnp.ndarray   # [C, E] activation au damage step : bits DMG_*
     fmat: jnp.ndarray   # [C, FK, FW] matériaux de fusion (un filtre par matériau, sur la main et le terrain)
     fmn: jnp.ndarray    # [C] nombre de matériaux (0 : pas de recette)
+    fsub: jnp.ndarray   # [C] masque des emplacements nommés acceptant un substitut
+    submat: jnp.ndarray # [C,0 ou 1] zones des substituts ; largeur 0 élimine le chemin au traçage
     erl: jnp.ndarray    # [C] EnableReviveLimit : invocable spécialement seulement si correctement invoquée avant
     smat: jnp.ndarray   # [C, 2, FW] synchro : filtres du Syntoniseur (un seul) et des non-Syntoniseurs (1 ou plus)
     syn: jnp.ndarray    # [C] monstre synchro (procédure d'invocation synchro)
@@ -229,7 +232,7 @@ class Bank(NamedTuple):
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
               race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None,
               smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None, ldiff=None,
-              lsc=None, rsc=None):
+              lsc=None, rsc=None, fsub=None, submat=None):
     """df : DEF, ou flèches pour un monstre Link (champ def de la base ygopro) : rangées dans lmark, DEF nulle."""
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
@@ -244,6 +247,7 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 ekind=i(ekind, (c, E)), prog=i(prog, (c, E, 3, P, 4)), filt=i(filt, (c, E, NF, FW)),
                 etrig=i(etrig, (c, E)), eopt=i(eopt, (c, E)), erng=i(erng, (c, E)), setcode=i(setcode, (c, NSET)),
                 emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)), fmat=i(fmat, (c, FK, FW)), fmn=i(fmn, (c,)),
+                fsub=i(fsub, (c,)), submat=i(submat, (c, 0)),
                 erl=i(erl, (c,)), smat=i(smat, (c, 2, FW)), syn=i(syn, (c,)),
                 xmat=i(xmat, (c, FW)), xct=i(xct, (c,)))
 
@@ -1062,6 +1066,8 @@ def stats(bank, s):
     srcok = faceup & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
     bdok = (md[..., M_SELF] != 0) | ((s.st & ST_BDES) == 0)[:, None]
     act = (k == K_CONT) & ((bank.erng[s.cid] & s.zone[:, None]) != 0) & srcok[:, None] & bdok
+    if bank.submat.shape[1]:
+        act &= md[..., M_CODE] != MC_FUS_SUB  # propriété passive, aucun slot de stats()/KM
     flat = jnp.nonzero(act.reshape(-1), size=KM, fill_value=0)[0]  # ordre carte puis effet
     hs, es = flat // E, flat % E
     live = jnp.arange(KM) < act.sum()
@@ -1244,6 +1250,8 @@ def fusion_ok(bank, s):
     pour l'invocation : une case libre, ou un matériau sur le terrain qui en libérera une). Chaque carte est résumée
     par le masque des emplacements qu'elle peut remplir ; le test de Hall se fait sur l'histogramme de ces masques
     (main / terrain), en O(2^FK × 2^FK) une fois l'histogramme fait. O(EXK × (FK + 1) × N)."""
+    if bank.submat.shape[1]:
+        return fusion_sub_ok(bank, s)
     n = s.cid.shape[0]
     want = (s.zone == Z_EXTRA) & (bank.fmn[s.cid] > 0)
     idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
@@ -1284,6 +1292,8 @@ def fus_picks(bank, s, f):
     existe une affectation des matériaux choisis et du candidat à des emplacements distincts, et les emplacements
     restants ont des matériaux distincts parmi les autres cartes (Hall). Toutes les permutations des FK emplacements
     sont essayées (FK! = 24). O(FK! × 2^FK × N)."""
+    if bank.submat.shape[1]:
+        return fusion_sub_picks(bank, s, f)
     n = s.cid.shape[0]
     k = bank.fmn[s.cid[f]]
     cand = fus_cands(bank, s, f)                                   # [FK, N]
@@ -1314,6 +1324,58 @@ def fus_picks(bank, s, f):
         okc = ok_s & (t < k) & (slot_c < k) & cand[slot_c] & jnp.where(room | field, ok_h, ok_f)
         out |= okc
     return out & ~sel
+
+
+
+def fusion_sub_cards(bank, s, f):
+    """SINGLE non SINGLE_RANGE : disponible aussi face cachée, sauf annulation effective."""
+    return ((bank.submat[s.cid, 0] & s.zone) != 0) & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0) & (s.ctrl == s.owner[f]) & \
+           ((s.zone == Z_HAND) | (s.zone == Z_MZONE)) & ((s.fl_c & FL_DISABLED) == 0) & ((s.st & ST_BDES) == 0)
+
+
+def fusion_sub_ok(bank, s):
+    from fusion import completions
+    n = s.cid.shape[0]
+    want = (s.zone == Z_EXTRA) & (bank.fmn[s.cid] > 0)
+    idx = jnp.nonzero(want, size=EXK, fill_value=0)[0]
+    live = jnp.arange(EXK) < want.sum()
+    def one(f):
+        cand = fus_cands(bank, s, f)
+        _, any_sub, _, field_sub = completions(cand, fusion_sub_cards(bank, s, f), s.zone == Z_MZONE,
+                                              bank.fsub[s.cid[f]], jnp.array([-1], I32))
+        use = (1 << bank.fmn[s.cid[f]]) - 1
+        return jnp.where(ex_zones(s, s.owner[f]).any(), any_sub[use, 0], field_sub[use, 0])
+    ok = jax.vmap(one)(idx) & live
+    return jnp.zeros(n, bool).at[jnp.where(live, idx, n)].set(ok, mode="drop"), want.sum() > EXK
+
+
+def fusion_sub_picks(bank, s, f):
+    from fusion import completions
+    n, k = s.cid.shape[0], bank.fmn[s.cid[f]]
+    cand = fus_cands(bank, s, f)
+    subs = fusion_sub_cards(bank, s, f)
+    eligible = (bank.fsub[s.cid[f]] & (1 << jnp.arange(FK))) != 0
+    sel = (s.st & ST_SEL) != 0
+    t = sel.sum()
+    chosen = jnp.nonzero(sel, size=FK, fill_value=0)[0]
+    field = s.zone == Z_MZONE
+    plain, enhanced, plain_field, enhanced_field = completions(cand & ~sel[None, :], subs & ~sel, field,
+                                                               bank.fsub[s.cid[f]], jnp.arange(n))
+    room = ex_zones(s, s.owner[f]).any() | (sel & field).any()
+    def assignment(pm):
+        pos = jnp.arange(FK)
+        ordinary = cand[pm, chosen]
+        alternative = eligible[pm] & subs[chosen]
+        ok_s = ((pos >= t) | ordinary | alternative).all()
+        used = ((pos < t) & ~ordinary).sum()
+        slot_c = pm[jnp.minimum(t, FK - 1)]
+        rest = jnp.where((pos > t) & (pm < k), 1 << pm, 0).sum()
+        budget = used + (~cand[slot_c]).astype(I32)
+        can = cand[slot_c] | (eligible[slot_c] & subs)
+        complete = jnp.where(budget == 0, enhanced[rest], plain[rest])
+        complete_field = jnp.where(budget == 0, enhanced_field[rest], plain_field[rest])
+        return ok_s & (t < k) & (slot_c < k) & can & (budget <= 1) & jnp.where(room | field, complete, complete_field)
+    return jax.vmap(assignment)(jnp.asarray(PERMS)).any(0) & ~sel
 
 
 def ex_zones(s, p):

@@ -32,9 +32,13 @@ TEST_CARDS = {
 
 
 def _constants():
-    """Toutes les constantes #define numériques d'ocgapi_constants.h (expressions | évaluées)."""
+    """Constantes numériques de l’API et des effets de l’oracle épinglé."""
     out = {}
-    txt = open(os.path.join(HERE, "ygopro-core/ocgapi_constants.h")).read()
+    texts = []
+    for name in ("ocgapi_constants.h", "effect_constants.h"):
+        with open(os.path.join(HERE, "ygopro-core", name)) as source:
+            texts.append(source.read())
+    txt = "\n".join(texts)
     for name, expr in re.findall(r"#define\s+(\w+)\s+(.+)", txt):
         expr = expr.split("//")[0].strip()
         try:
@@ -319,11 +323,30 @@ class Duel:
         elif t == K["MSG_SHUFFLE_HAND"]:
             self.events.append(("shuffle_hand", r.take("B")))
         elif t in SELECT_PARSERS:
-            return SELECT_PARSERS[t](t, r)
+            decision = SELECT_PARSERS[t](t, r)
+            decision.raw["effect_query"] = self.effect_event
+            return decision
         elif 10 <= t < 30 or t in (K["MSG_ANNOUNCE_RACE"], K["MSG_ANNOUNCE_ATTRIB"], K["MSG_ANNOUNCE_CARD"],
                                    K["MSG_ANNOUNCE_NUMBER"], K["MSG_ROCK_PAPER_SCISSORS"]):
             raise NotImplementedError(f"message de décision {t} pas encore géré par le pilote")
         return None
+
+    def effect_event(self, decision, option_index):
+        """Identité lue dans l'oracle en pause ; aucune donnée du moteur JAX."""
+        import build_inspector
+        option = decision.options[option_index]
+        response = struct.unpack("<i", decision.responses[option_index])[0]
+        if decision.msg == K["MSG_SELECT_EFFECTYN"] and option[5] == 221:
+            index = 0
+        elif decision.msg == K["MSG_SELECT_CHAIN"]:
+            index = response
+        elif decision.msg in (K["MSG_SELECT_IDLECMD"], K["MSG_SELECT_BATTLECMD"]):
+            index = response >> 16
+        else:
+            raise RuntimeError("choix sans identité d'effet exposée par l'inspecteur")
+        value = build_inspector.event(self.ptr, index, option[1])
+        decision.raw.setdefault("effect_events", {})[option_index] = value
+        return value
 
     # -------------------------------------------------- état
 

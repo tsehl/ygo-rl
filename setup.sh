@@ -38,6 +38,7 @@ if [ ! -f "$lib" ]; then
   (cd oracle/ygopro-core && premake5 gmake2 && make -C build ocgcoreshared config=release -j"$(getconf _NPROCESSORS_ONLN)")
 fi
 python3 oracle/smoke.py
+python3 oracle/build_inspector.py
 
 # uv (lancement des scripts : uv run --with jax python engine/compare.py ...)
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh

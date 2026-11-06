@@ -20,8 +20,11 @@ def git_head(path):
 def fingerprint():
     # Inclut les modifications locales et le pilote, pas seulement le commit.
     files = {}
-    for folder in ('engine', 'oracle', 'translate'):
-        for p in sorted((ROOT / folder).glob('*.py')):
+    for folder in ('engine', 'oracle', 'translate', 'train'):
+        for p in sorted([*(ROOT / folder).glob('*.py'), *(ROOT / folder).glob('*.cpp')]):
+            files[str(p.relative_to(ROOT))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for p in sorted((ROOT / 'tests').rglob('*')):
+        if p.is_file() and p.suffix in ('.py', '.lua', '.json'):
             files[str(p.relative_to(ROOT))] = hashlib.sha256(p.read_bytes()).hexdigest()
     for folder in ('oracle/ygopro-core', 'data/CardScripts', 'data/BabelCDB'):
         path = ROOT / folder
@@ -33,7 +36,7 @@ def fingerprint():
         for name in untracked.decode().split('\0'):
             if name and (path / name).is_file():
                 files[folder + '/' + name] = hashlib.sha256((path / name).read_bytes()).hexdigest()
-    for name in ("oracle/ygopro-core/bin/release/libocgcore.so", "data/BabelCDB/cards.cdb"):
+    for name in ("oracle/ygopro-core/bin/release/libocgcore.so", "data/BabelCDB/cards.cdb", "oracle/ygopro-core/bin/release/libocgcore.dylib", ".tools/libeffect-inspector.so"):
         p = ROOT / name
         if p.exists():
             files[name] = hashlib.sha256(p.read_bytes()).hexdigest()
@@ -58,7 +61,7 @@ def provenance(args):
                     architecture=platform.machine(), runtime_config={k: os.environ.get(k)
                     for k in ("JAX_ENABLE_X64", "JAX_PLATFORMS", "XLA_FLAGS")})
     signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    return dict(schema=1, signature=signature, commit=git_head(ROOT), identity=identity,
+    return dict(schema=2, signature=signature, commit=git_head(ROOT), identity=identity,
                 args=vars(args), started_at=datetime.now(timezone.utc).isoformat())
 
 
