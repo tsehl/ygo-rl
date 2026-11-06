@@ -29,11 +29,11 @@ def main():
             effects, _, proc, _ = T.translate(code)
             assert effects == []
             assert proc[0] == 'fusion'
-            recipes[code] = proc[1]
+            recipes[code] = cards.FusionRecipe(proc[1], proc[2])
     for code in (3544583, 96334243, 8692301):
         effects, _, proc, _ = T.translate(code)
         assert effects == []
-        recipes[code] = proc[1]
+        recipes[code] = cards.FusionRecipe(proc[1], proc[2])
     db = driver.CardDB()
     codes = sorted([*ids, 3544583, 96334243, 8692301, 487395, 76908448,
                     34460851, 44287299, 89631139, 46986414, 24094653])

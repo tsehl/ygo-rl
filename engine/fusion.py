@@ -12,7 +12,7 @@ def completions(cand, substitutes, field, eligible, excluded):
     """Quatre tables [2**FK, M] : sans/avec substitut, sans/avec matériau du terrain.
     `excluded[M]` : candidat déjà réservé, -1 pour aucun. Les cartes déjà choisies
     doivent avoir été retirées de cand et substitutes par l'appelant.
-    Coût O(FK² * 2**FK * M + FK * (N + FK * 2**FK)), mémoire O(FK * 2**FK * M).
+    Coût O(FK² * 2**FK * M + FK * (N + FK * 2**FK)), mémoire O(FK² * 2**FK * M).
     FK=4 est une borne statique ; M=N pour les choix, M=1 pour la disponibilité.
     """
     fk, n = cand.shape

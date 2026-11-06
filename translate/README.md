@@ -24,7 +24,7 @@ qu'à mesurer ce que le moteur sait jouer, jamais à l'entraînement.
 - 420 du deck principal ;
 - 21 de l'Extra Deck : synchro 6, Xyz 12, Link 3.
 
-La fusion n'est pas encore traduite (`Fusion.AddProcMix`, 344 cartes).
+La fusion est partiellement traduite (`Fusion.AddProcMix` et `MixN` à quantités fixes ; voir plus bas).
 
 Le tableau ci-dessous donne les premières raisons de refus, avec un comptage antérieur aux derniers ajouts.
 
@@ -109,8 +109,8 @@ ci-dessus et la sélection de taille variable) : 301 décisions/s, contre 258-26
 ## Reprise (pour la session suivante)
 
 Pistes, par ordre de rendement probable :
-1. Fusion : traduire `Fusion.AddProcMix` / `AddProcMixN` (494 cartes) vers les recettes que le moteur a déjà
-   (`cards.assemble(fusion=...)`, mode `fus` de `compare.py`). Débloque aussi une partie d'EnableReviveLimit.
+1. Fusion : sous-ensemble fixe et substituts simples réalisés (bilan du 2026-11-06 ci-dessous).
+   Restent les quantités variables, alternatives complexes et conditions non représentées.
 2. SPSUMMON_PROC (336) : invocation spéciale par procédure depuis la main, nouvelle fonction du moteur.
 3. IsReason (177), EVENT_PHASE (129, déclencheurs de phase : fonction du moteur à écrire, voir
    `process_phase_event` dans `oracle/ygopro-core/processor.cpp`), équipement (231).
@@ -156,9 +156,9 @@ Les compteurs agrégés d'exécution portent uniquement sur les parties identiqu
 reste dans `games[].result.coverage`. Une carte invoquée n'a pas nécessairement exercé tous ses effets.
 Les cartes retirées par la limite d'Extra Deck ne sont pas comptées comme présentes.
 
-Une description ambiguë n'est plus départagée à partir des actions légales du moteur testé :
-le résultat est « inconclusive ». Il faut alors améliorer la correspondance ou ajouter un scénario
-ciblé avant de conclure sur cette carte.
+Une description ambiguë n'est plus départagée à partir des actions légales du moteur testé.
+L'inspecteur natif lit le code d'événement enregistré sur l'effet proposé par l'oracle ; si cela
+ne suffit pas à l'identifier, le résultat reste « inconclusive ».
 
 `--bisect` reste un **rejeu carte par carte**, avec d'autres decks, et non une réduction du scénario
 original. Il peut manquer un défaut d'interaction. Le scénario original et sa trace sont conservés ;
@@ -177,8 +177,9 @@ par code ou par filtre représentable dans `MAT_FIELDS`. Les quantités de `MixN
 et positives. L'effet par défaut `Fusion.RegisterSummonEff(c)` (Polymerization) est également traduit ;
 les variantes avec options sont refusées.
 
-Les substituts de matériaux nommés (`sub=true` avec un code de matériau) restent explicitement refusés :
-le moteur ne les représente pas. Les recettes à matériaux variables, tables d'alternatives et filtres
+Les substituts de matériaux nommés sont pris en charge : `sub=true` autorise un seul remplacement,
+uniquement aux emplacements donnés par un argument numérique dans le script. Un filtre fonctionnel
+`Card.IsCode` ne donne pas cette permission. Les recettes à matériaux variables, tables d'alternatives et filtres
 hors des champs du moteur restent refusés. L'option `insf` concerne les invocations sans matériaux,
 comme Instant Fusion, dont les effets ne sont pas pris en charge par cette traduction.
 Une recette reconnue ne suffit pas à rendre toute la carte traduisible : ses autres effets doivent l'être.
@@ -202,8 +203,11 @@ Le codage de `aux.Stringid(code, index)` doit suivre la version épinglée de
 `code * 16 + index` était incorrect ; le repli sur l'effet 0 masquait cette erreur.
 Les types statiques des effets permettent également d'écarter un effet continu d'une
 activation, ou un effet d'ignition d'une réponse en chaîne, sans consulter le masque légal JAX.
-Les véritables ambiguïtés entre plusieurs effets du même type et de même description restent
-non concluantes et font échouer la validation.
+Pour les effets du même type et de même description, `oracle/effect_inspector.cpp` lit, sans
+modifier l'oracle, le code d'événement enregistré sur l'effet de `select_chains`. L'indice de
+l'option est conservé même si plusieurs tuples d'options sont identiques. Si l'événement ne
+suffit toujours pas, le résultat reste non concluant. L'inspecteur est construit par `setup.sh`
+ou à la première ambiguïté, contre les en-têtes et le binaire épinglés de ygopro-core.
 
 Les JSON finaux et le cache de traduction sont publiés atomiquement : une interruption ne doit
 pas laisser un fichier final partiellement écrit. Un cache tronqué ou incompatible est reconstruit
@@ -212,3 +216,28 @@ interrompue (ignorer une éventuelle dernière ligne incomplète).
 
 La clé du cache comprend aussi les versions de Python, JAX/jaxlib, NumPy et luaparser :
 un changement de runtime impose une nouvelle traduction, même si les scripts sont inchangés.
+
+## Substituts : validation et coût (2026-11-06)
+
+Le sous-ensemble actuel traduit **507 / 13 541 cartes** : 426 du deck principal et 81 de
+l'Extra Deck, dont 60 fusions. Les effets passifs `EFFECT_FUSION_SUBSTITUTE` simples sont
+reconnus ; les callbacks de valeur et conditions arbitraires restent refusés.
+
+L'affectation exacte repose sur les sous-ensembles des quatre emplacements de recette,
+un histogramme de profils et des transformées zêta. Aucun tableau carte × carte n'est créé.
+Les banques sans substitut gardent le chemin de calcul précédent ; les métadonnées sont
+partagées dans la banque, sans nouvel état par partie. L'encodeur lit les permissions par
+emplacement pour les nouveaux modèles. Les anciens checkpoints restent utilisables et
+conservent leur calcul précédent en ignorant ces nouveaux bits.
+
+```sh
+YGO_JAX_CACHE=/workspace/.cache/ygo-jax .venv/bin/python tests/substitute_oracle_check.py
+YGO_JAX_CACHE=/workspace/.cache/ygo-jax .venv/bin/python tests/effect_identity_check.py
+.venv/bin/python bench/fusion_match_bench.py --b 32 --n 110 --calls 50
+```
+
+Les scénarios ciblés vérifient notamment les substituts face cachée, le refus de deux
+remplacements, les filtres non substituables et le cas valide de deux cartes substituts
+dont une utilisée normalement. Les cinq anciens scénarios ambigus sont rejoués avec leurs
+decks complets et doivent dépasser l'ancien point de blocage en consultant l'inspecteur natif.
+Résultats, provenance et limites : [bilan](../notes/codex-substituts-2026-11-06.md).
