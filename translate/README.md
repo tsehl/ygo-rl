@@ -102,3 +102,6 @@ Divergences anciennes non élucidées :
 - une sélection de Gren Maju (val2, partie 9).
 
 Usage : `uv run --with luaparser --with jax python translate/validate.py --games 30 --k 8 --seed0 12 --bisect`
+
+Débit (CPU, `bench/engine_bench.py ../engine --b 64 --calls 20 --extra 15`, machine au repos, après les règles
+ci-dessus et la sélection de taille variable) : 301 décisions/s, contre 258-267 avant. Pas de coût mesurable.
