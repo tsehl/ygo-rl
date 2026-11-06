@@ -209,3 +209,6 @@ Les JSON finaux et le cache de traduction sont publiés atomiquement : une inter
 pas laisser un fichier final partiellement écrit. Un cache tronqué ou incompatible est reconstruit
 à partir des scripts épinglés. Le journal JSONL reste le support de récupération d'une campagne
 interrompue (ignorer une éventuelle dernière ligne incomplète).
+
+La clé du cache comprend aussi les versions de Python, JAX/jaxlib, NumPy et luaparser :
+un changement de runtime impose une nouvelle traduction, même si les scripts sont inchangés.

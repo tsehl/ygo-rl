@@ -147,5 +147,16 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob('*.tmp')), [])
 
 
+    def test_translation_cache_key_tracks_dependency_versions(self):
+        sys.path.insert(0, str(ROOT / 'translate'))
+        import validate
+        with patch.object(validation_run, 'fingerprint', return_value={'translate/translate.py': 'unchanged'}):
+            with patch.object(validation_run, 'package_versions', return_value={'luaparser': 'old'}):
+                before = validate._sig()
+            with patch.object(validation_run, 'package_versions', return_value={'luaparser': 'new'}):
+                after = validate._sig()
+        self.assertNotEqual(before, after)
+
+
 if __name__ == '__main__':
     unittest.main()

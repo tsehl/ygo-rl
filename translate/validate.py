@@ -44,12 +44,13 @@ def _one(code):
 
 
 def _sig():
-    from validation_run import fingerprint
+    from validation_run import fingerprint, package_versions
     files = fingerprint()
     relevant = {k: v for k, v in files.items()
                 if k in ("translate/translate.py", "engine/core.py", "engine/cards.py")
                 or k.startswith(("data/", "oracle/ygopro-core"))}
-    return hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()
+    identity = dict(files=relevant, versions=package_versions(), python=list(sys.version_info[:3]))
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
 

@@ -40,15 +40,20 @@ def fingerprint():
     return files
 
 
-def provenance(args):
+def package_versions():
     import importlib.metadata
-    files = fingerprint()
     versions = {}
     for p in ("jax", "jaxlib", "numpy", "luaparser"):
         try:
             versions[p] = importlib.metadata.version(p)
         except importlib.metadata.PackageNotFoundError:
             versions[p] = None
+    return versions
+
+
+def provenance(args):
+    files = fingerprint()
+    versions = package_versions()
     identity = dict(files=files, versions=versions, python=platform.python_version(),
                     architecture=platform.machine(), runtime_config={k: os.environ.get(k)
                     for k in ("JAX_ENABLE_X64", "JAX_PLATFORMS", "XLA_FLAGS")})
