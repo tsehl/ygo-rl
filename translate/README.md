@@ -105,3 +105,25 @@ Usage : `uv run --with luaparser --with jax python translate/validate.py --games
 
 Débit (CPU, `bench/engine_bench.py ../engine --b 64 --calls 20 --extra 15`, machine au repos, après les règles
 ci-dessus et la sélection de taille variable) : 301 décisions/s, contre 258-267 avant. Pas de coût mesurable.
+
+## Reprise (pour la session suivante)
+
+Pistes, par ordre de rendement probable :
+1. Fusion : traduire `Fusion.AddProcMix` / `AddProcMixN` (494 cartes) vers les recettes que le moteur a déjà
+   (`cards.assemble(fusion=...)`, mode `fus` de `compare.py`). Débloque aussi une partie d'EnableReviveLimit.
+2. SPSUMMON_PROC (336) : invocation spéciale par procédure depuis la main, nouvelle fonction du moteur.
+3. IsReason (177), EVENT_PHASE (129, déclencheurs de phase : fonction du moteur à écrire, voir
+   `process_phase_event` dans `oracle/ygopro-core/processor.cpp`), équipement (231).
+4. Divergences anciennes non élucidées (voir plus haut) : les rejouer avec `--chosen` quand elles réapparaissent.
+
+Méthode qui a marché :
+- `translate.py --top 40` après chaque ajout, pour voir ce qui se débloque. Chaque carte n'affiche que sa première
+  raison de refus : un ajout peut ne rien débloquer et seulement déplacer les cartes vers la raison suivante.
+- `validate.py --games 30 --k 8 --seed0 S --bisect` sur des graines neuves à chaque fois (12-41 et 42-71 déjà
+  jouées). La première exécution après un changement de `translate.py`, `cards.py` ou `core.py` retraduit tout, ce
+  qui prend ~4 min.
+- Rejouer une partie divergente : `--codes X --seed0 G --games 1 --k 1 --nosave` pour une carte seule (c'est ce que
+  fait la bissection), ou `--chosen` avec les cartes des deux decks.
+- Non-régression sans bloquer le travail : copier le dépôt dans le scratchpad, avec des liens symboliques vers
+  `oracle/ygopro-core` et `data`, puis lancer `JOBS=3 engine/regress.sh LOGS` depuis la copie (~45 min). On peut
+  continuer à modifier `engine/` pendant ce temps. Recopier les fichiers du moteur si on les change avant la fin.
