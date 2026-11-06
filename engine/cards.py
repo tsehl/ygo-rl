@@ -40,7 +40,7 @@ def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), att
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
     return (OP_FILTER, r, f, (0 if within is None else within + 1) | (8 if tgt else 0))
 def SELF(r): return (OP_SELF, r, 0, 0)
-def REQ(r, n): return (OP_REQ, r, n, 0)
+def REQ(r, n, maximum=False): return (OP_REQ, r, n, int(maximum))  # >= n, ou <= n
 def REQ_FREE(who, zone, n): return (OP_REQ_FREE, who, zone, n)
 def MINATK(dst, src): return (OP_MINATK, dst, src, 0)
 def CHOOSE(dst, src, n, who=ME, upto=False, mn=None):
@@ -316,6 +316,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                                                RITUAL if ritual is None else ritual)
     c = len(codes)
     subzone = np.zeros(c, np.int32)
+    revive = np.zeros(c, np.int32)
     ekind = np.zeros((c, E), np.int32)
     prog = np.zeros((c, E, 3, P, 4), np.int32)
     filt = np.zeros((c, E, NF, FW), np.int32)
@@ -333,6 +334,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             extra = progs[3] if len(progs) > 3 else {}
             progs = progs[:3]
             edmg[i, e] = extra.get("dmg", 0)
+            revive[i] |= extra.get("revive", 0)
             fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte ou condition)
             for k, v in extra.get("mod", {}).items():
                 emod[i, e, k] = v
@@ -363,7 +365,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             if (getattr(FUSION_.get(code), "substitute_mask", (1 << FK) - 1) & (1 << j)) and f[core.F_CODE1] > 0:
                 fsub[i] |= 1 << j
         fmn[i] = len(FUSION_.get(code, ()))
-        erl[i] = int(code in FUSION_ or code in RITUAL_ or code in SYNCHRO_ or code in XYZ_ or code in LINK_)
+        erl[i] = int(revive[i]) or int(code in FUSION_ or code in RITUAL_ or code in SYNCHRO_ or code in XYZ_ or code in LINK_)
     smat = np.zeros((c, 2, len(F())), np.int32)
     syn = np.zeros(c, np.int32)
     for i, code in enumerate(codes):

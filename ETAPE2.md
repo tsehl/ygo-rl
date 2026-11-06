@@ -603,3 +603,21 @@ Moteur : champs `rb_m` (monstres adverses à la déclaration), `rb_t` (horloge d
 Vérification : `compare_gen.py --banks 6-7` (les deux parties qui divergeaient) 20 / 20 ; `--banks 0-9 --games 10 --seed0 500` 100 / 100 ; `--banks 6-7 --seed0 900` 20 / 20 avec relance refusée (1), acceptée (2), nouvelle cible choisie (2) (compteurs COVER de `compare.py`) ; non-régression complète verte.
 
 Débit (CPU, `engine_bench.py --b 64 --calls 20 --extra 15`, b889e4d contre la relance) : 258 → 267 décisions/s, soit pas de coût mesurable. Une première mesure avait donné 249 → 210 alors que la machine traduisait des scripts en parallèle : sur CPU, refaire les mesures sur une machine au repos.
+
+
+## Procédures de main et filtres après destruction au combat (2026-11-06)
+
+`K_PROC` étend les procédures inhérentes aux monstres de la main : programmes de
+conditions et compteurs existants, placement en zone principale, état correctement
+invoqué, événement d'invocation spéciale sans chaîne et sans utiliser l'invocation
+normale. Les restrictions de type et de réanimation sont distinctes. Le traducteur
+refuse encore les procédures à coût/opération ou à conditions non représentables.
+
+Les requêtes et filtres sur un groupe existant voient les monstres marqués détruits
+au combat mais encore sur le terrain, comme `field::filter_matching_card` dans le
+cœur épinglé. Le ciblage les exclut. Une fixture minimale vérifie un effet FLIP sur
+sa propre carte dans cette fenêtre, avec activations effectives exigées.
+
+Les formes des banques, de l'état par partie et du modèle sont conservées, sans
+nouveau calcul carte × carte. Contrôles, mesures CPU et limites :
+`notes/codex-procedures-2026-11-06.md`.

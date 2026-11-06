@@ -1,0 +1,75 @@
+[
+  {
+    "ctype": 33,
+    "atk": 500,
+    "df": 800,
+    "lv": 4,
+    "attr": 32,
+    "race": 524288,
+    "setc": [],
+    "lsc": 0,
+    "rsc": 0,
+    "effects": [
+      {
+        "kind": "trigger",
+        "on": 64,
+        "opt": 1,
+        "optional": true,
+        "rng": 0,
+        "dmg": 0,
+        "conds": [],
+        "cost": null,
+        "clauses": [
+          {
+            "verb": "atk",
+            "sel": "self",
+            "f": {
+              "me": 4,
+              "pos": 5
+            },
+            "k": 1,
+            "v": 300,
+            "rd": true,
+            "perm": false
+          }
+        ]
+      },
+      {
+        "kind": "ignition",
+        "on": 0,
+        "opt": 2,
+        "optional": false,
+        "rng": 0,
+        "dmg": 0,
+        "conds": [],
+        "cost": null,
+        "clauses": [
+          {
+            "verb": "draw",
+            "n": 2
+          }
+        ]
+      }
+    ],
+    "recipe": null,
+    "flip": true,
+    "extra": false,
+    "code": 600000071
+  },
+  {
+    "ctype": 17,
+    "atk": 1800,
+    "df": 1200,
+    "lv": 4,
+    "attr": 1,
+    "race": 1,
+    "setc": [],
+    "lsc": 0,
+    "rsc": 0,
+    "effects": [],
+    "recipe": null,
+    "flip": false,
+    "extra": false,
+    "code": 600000099
+  }
+]

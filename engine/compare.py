@@ -147,8 +147,13 @@ def translate(dec, opt, s, m=None, option_index=None):
             verb += es[0]
         return [verb * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck, ou pendule (échelle gauche) : V_SUMMON
+        if opt[3] == "hand":
+            es = [e for e, k in enumerate(EFFECT_KINDS.get(opt[1], ())) if k == core.K_PROC]
+            if len(es) != 1:
+                raise Inconclusive(f"procédure de main non identifiée : {opt}")
+            return [(V_ACT0 + es[0]) * N + slot(s, opt[2], opt[3], opt[4])]
         if opt[3] not in ("extra", "szone"):
-            raise Mismatch(f"spsummon hors Extra Deck {opt}")
+            raise Mismatch(f"spsummon depuis une zone non prise en charge {opt}")
         return [V_SUMMON * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "to_bp":
         return [sp(core.A_TO_BP)]

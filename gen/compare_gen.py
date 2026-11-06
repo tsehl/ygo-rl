@@ -34,7 +34,7 @@ def rng_range(s):
 
 def focus(c):
     """Carte qui utilise une brique ajoutée au générateur le 2026-11-05 (variantes de MODIFY, MINATK, LOCK)."""
-    return any(cl["verb"] in ("def", "halve_base", "halve") or cl.get("sel") == "min" or cl.get("lock") or cl.get("rd")
+    return any(e["kind"] == "hand_proc" for e in c["effects"]) or any(cl["verb"] in ("def", "halve_base", "halve") or cl.get("sel") == "min" or cl.get("lock") or cl.get("rd")
                for e in c["effects"] for cl in e.get("clauses", []))
 
 
@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--dump", action="store_true", help="décrit les cartes en jeu à chaque écart")
     ap.add_argument("--focus", action="store_true", help="la moitié des decks parmi les cartes à briques récentes")
     a = ap.parse_args()
+    if a.games <= 0:
+        ap.error("--games doit être > 0")
     step, legal = jax.jit(core.step), jax.jit(core.legal)
     db = driver.CardDB()
     tot, nok, errs = 0, 0, collections.Counter()
@@ -86,6 +88,9 @@ def main():
         cset = cardgen.Gen(b).make_set(a.main, a.extra)
         bank = cardgen.to_bank(cset)
         cmap = {c["code"]: i for i, c in enumerate(cset)}
+        compare.EFFECT_KINDS.clear()
+        compare.EFFECT_KINDS.update({c["code"]:[cardgen.bricks(e)[0] for e in c["effects"]] for c in cset})
+
         db.add(tolua.cdb_rows(cset))
         sdir = tolua.write(cset, os.path.join(a.out, str(b)))
         driver.SCRIPTS[:] = [sdir] + [d for d in driver.SCRIPTS if not d.startswith(a.out)]
@@ -112,6 +117,8 @@ def main():
         if "relance" in str(k):
             print(f"  {k} : {v}")
 
+    return 0 if tot > 0 and nok == tot else 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

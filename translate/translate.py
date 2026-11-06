@@ -134,6 +134,10 @@ class Count:  # nombre de cartes d'un registre × mul
     def __init__(self, reg, mul=1): self.reg, self.mul = reg, mul
 
 
+class FreeCount:  # nombre de cases libres, conservé symboliquement dans une variable locale
+    def __init__(self, player, zone): self.player, self.zone = player, zone
+
+
 class ChainInfo:  # CHAININFO_TARGET_PLAYER / PARAM
     def __init__(self, what): self.what = what
 
@@ -284,7 +288,7 @@ def apply_method(fl, name, args):
     elif name == "IsLocation":
         fl.loc &= num(0)
     elif name == "IsControler":
-        need(isinstance(args[0], Player), "filtre : IsControler")
+        need(len(args) == 1 and isinstance(args[0], Player), "filtre : IsControler sans joueur lié")
         fl.ctrl = args[0].p
     elif name == "IsCanBeSpecialSummoned":
         # (e, sumtype, sp, nocheck, nolimit[, pos[, toplayer]])
@@ -591,6 +595,25 @@ class Translator:
     # ------------------------------------------------ effet → briques
     def translate(self):
         regs = self.effects()
+        hand_procs = [e for e in regs if isinstance(e, Effect) and e.f.get("SetCode") == [K["EFFECT_SPSUMMON_PROC"]]]
+        need(len(hand_procs) <= 1, "plusieurs procédures de main")
+        self.revive = int(("revive",) in regs)
+        # aux.FALSE interdit les invocations par effet, même après une invocation correcte.
+        # Cette restriction statique va dans erl, sans occuper un emplacement d'activation.
+        if hand_procs:
+            remaining = []
+            for entry in regs:
+                if isinstance(entry, Effect) and entry.f.get("SetCode") == [K["EFFECT_SPSUMMON_CONDITION"]]:
+                    f = entry.f
+                    value = f.get("SetValue", [None])[0]
+                    need(f.get("SetType") == [K["EFFECT_TYPE_SINGLE"]] and isinstance(value, Fn) and value.name == "aux.FALSE"
+                         and f.get("SetProperty", [0])[0] & ~(K["EFFECT_FLAG_UNCOPYABLE"] | K["EFFECT_FLAG_CANNOT_DISABLE"]) == 0
+                         and set(f) <= {"SetCode", "SetType", "SetProperty", "SetValue"},
+                         "restriction d'invocation spéciale conditionnelle")
+                    self.revive = 2
+                else:
+                    remaining.append(entry)
+            regs = remaining
         out = []
         self.descs = []  # description (aux.Stringid) de chaque effet traduit, pour le pilote de l'oracle
         for e in regs:
@@ -605,16 +628,53 @@ class Translator:
                     out.append(C.act())
                     self.descs.append(None)
                     continue
-                if self.proc is not None:  # EnableReviveLimit d'un monstre à procédure (erl vient de la recette)
+                if self.proc is not None or hand_procs:  # EnableReviveLimit d'un monstre à procédure (erl vient de la recette)
                     continue
                 raise Unsupported("monstre à invocation limitée (EnableReviveLimit)")
-            out.append(self.effect(e))
-            self.descs.append(e.desc)
+            compiled = self.effect(e)
+            # Clones SINGLE équivalents pour les trois types d'invocation, mutuellement exclusifs
+            # pour cette carte au même point d'événement. Les compteurs par effet restent distincts.
+            # Aucun regroupement FIELD ou arbitraire.
+            summon_events = (1 << core.EV_SUMMON) | (1 << core.EV_FLIP_SUMMON) | (1 << core.EV_SPSUMMON)
+            merged = False
+            if compiled[0] in (core.K_TRIG_F, core.K_TRIG_O) and compiled[2] not in (core.OPT_CARD, core.OPT_CARD_NR) and compiled[1] & summon_events and not compiled[1] & ~(summon_events | core.TRIG_WHEN):
+                for index, previous in enumerate(out):
+                    if previous[0] == compiled[0] and previous[2:] == compiled[2:] and self.descs[index] == e.desc and \
+                            (previous[1] & ~summon_events) == (compiled[1] & ~summon_events) and \
+                            not previous[1] & compiled[1] & summon_events:
+                        out[index] = (previous[0], previous[1] | compiled[1], *previous[2:])
+                        merged = True
+                        break
+            if not merged:
+                out.append(compiled)
+                self.descs.append(e.desc)
         need(len(out) <= core.E, f"plus de {core.E} effets")
         return out
 
     def flag(self, e, k):
         return (e.f.get("SetProperty", [0])[0] or 0) & K[k]
+
+    def count_limit(self, f):
+        opt = 0
+        if "SetCountLimit" in f:
+            cl = f["SetCountLimit"]
+            need(cl[0] == 1, "SetCountLimit > 1")
+            # EFFECT_COUNT_CODE_OATH : compté même si l'activation est annulée. Le moteur ne rend jamais le compte
+            # (approximation pour les limites sans OATH, dont l'activation annulée est rendue par ygopro-core)
+            if len(cl) == 3 and cl[2] == K["EFFECT_COUNT_CODE_OATH"]:
+                cl = cl[:2]
+            need(len(cl) in (1, 2), "SetCountLimit : drapeaux non pris en charge")
+            if len(cl) == 1:
+                opt = core.OPT_CARD
+            elif isinstance(cl[1], tuple):
+                need(len(cl) == 2 and len(cl[1]) == 2 and cl[1][0] == self.code and isinstance(cl[1][1], int),
+                     "SetCountLimit(1, {autre code / drapeaux})")
+                opt = core.OPT_NAME if cl[1][1] == 0 else core.OPT_NAMEK + cl[1][1] - 1
+            else:
+                need(cl[1] == self.code or (isinstance(cl[1], int) and cl[1] & 0xFFFFFFF == self.code and cl[1] == self.code),
+                     "SetCountLimit(1, autre code / drapeaux)")
+                opt = core.OPT_NAME
+        return opt
 
     def effect(self, e):
         f = e.f
@@ -623,6 +683,49 @@ class Translator:
         T = lambda n: typ & K[n]  # noqa: E731
         for k in ("SetLabel", "SetLabelObject", "SetValue", "SetTargetRange", "SetReset", "SetAbsoluteRange"):
             need(k not in f or T("EFFECT_TYPE_SINGLE") or T("EFFECT_TYPE_FIELD"), f"effet : {k}")
+        if code == K["EFFECT_SPSUMMON_PROC"]:
+            # Les procédures sans coût réutilisent le VM de conditions, mais jamais une chaîne.
+            need(typ == K["EFFECT_TYPE_FIELD"] and f.get("SetRange") == [core.Z_HAND],
+                 "procédure : type / zone")
+            need(f.get("SetProperty", [0])[0] & ~(K["EFFECT_FLAG_UNCOPYABLE"] | K["EFFECT_FLAG_CANNOT_DISABLE"]) == 0,
+                 "procédure : propriétés")
+            need(not any(k in f for k in ("SetTarget", "SetCost", "SetOperation", "SetReset",
+                                         "SetTargetRange", "SetAbsoluteRange", "SetLabel", "SetLabelObject")),
+                 "procédure : coût, opération ou limite")
+            need(f.get("SetValue", [0]) == [0], "procédure : type d'invocation")
+            self.nreg = 0
+            self.on = 0
+            self.pending = []
+            self.hreg = self.egreg = None
+            self.chaining = self.field_trig = self.chain_activate = False
+            self.hz = (core.Z_HAND, 0)
+            prog = Prog(self, "cost")
+            if "SetCondition" in f:
+                fn = f["SetCondition"][0]
+                need(isinstance(fn, Fn) and fn.node is not None and len(fn.node.args) == 2,
+                     "procédure : condition à paramètres complexes")
+                earg, carg = fn.node.args
+                need(isinstance(earg, A.Name) and isinstance(carg, A.Name), "procédure : paramètres")
+                env = {earg.id: Eff(), carg.id: Handler()}
+                body = fn.node.body.body
+                # Le test c==nil de l'API ne fait qu'annoncer l'existence de la procédure.
+                if body and isinstance(body[0], A.If):
+                    first = body[0]
+                    test = first.test
+                    need(isinstance(test, A.EqToOp) and isinstance(test.left, A.Name) and
+                         test.left.id == carg.id and isinstance(test.right, A.Nil) and first.orelse is None and
+                         len(first.body.body) == 1 and isinstance(first.body.body[0], A.Return) and
+                         len(first.body.body[0].values) == 1 and isinstance(first.body.body[0].values[0], A.TrueExpr),
+                         "procédure : test de disponibilité")
+                    body = body[1:]
+                need(body and isinstance(body[-1], A.Return) and len(body[-1].values) == 1,
+                     "procédure : forme de condition")
+                for st in body[:-1]:
+                    self.stmt(st, env, prog, cond=True)
+                self.check(body[-1].values[0], env, prog, cond=True)
+                self.flush(prog)
+            need(len(prog.ins) <= core.PT, "procédure : condition trop longue")
+            return (core.K_PROC, 0, self.count_limit(f), core.Z_HAND, prog.ins, [], [], {"revive": int(self.revive)})
         if code == K["EFFECT_FUSION_SUBSTITUTE"]:
             need(typ == K["EFFECT_TYPE_SINGLE"] and not f.get("SetProperty", [0])[0], "substitut : type / propriétés")
             need(not any(k in f for k in ("SetValue", "SetRange", "SetCountLimit", "SetReset")), "substitut : valeur / portée dynamique")
@@ -643,24 +746,7 @@ class Translator:
             return C.cont(zones, core.MC_FUS_SUB, 0)
         prop = f.get("SetProperty", [0])[0] or 0
         okprop = K["EFFECT_FLAG_CARD_TARGET"] | K["EFFECT_FLAG_PLAYER_TARGET"] | K["EFFECT_FLAG_DELAY"]
-        opt = 0
-        if "SetCountLimit" in f:
-            cl = f["SetCountLimit"]
-            need(cl[0] == 1, "SetCountLimit > 1")
-            # EFFECT_COUNT_CODE_OATH : compté même si l'activation est annulée. Le moteur ne rend jamais le compte
-            # (approximation pour les limites sans OATH, dont l'activation annulée est rendue par ygopro-core)
-            if len(cl) == 3 and cl[2] == K["EFFECT_COUNT_CODE_OATH"]:
-                cl = cl[:2]
-            if len(cl) == 1:
-                opt = core.OPT_CARD
-            elif isinstance(cl[1], tuple):
-                need(len(cl) == 2 and len(cl[1]) == 2 and cl[1][0] == self.code and isinstance(cl[1][1], int),
-                     "SetCountLimit(1, {autre code / drapeaux})")
-                opt = core.OPT_NAME if cl[1][1] == 0 else core.OPT_NAMEK + cl[1][1] - 1
-            else:
-                need(cl[1] == self.code or (isinstance(cl[1], int) and cl[1] & 0xFFFFFFF == self.code and cl[1] == self.code),
-                     "SetCountLimit(1, autre code / drapeaux)")
-                opt = core.OPT_NAME
+        opt = self.count_limit(f)
         self.nreg = 0
         self.chaining = code == K["EVENT_CHAINING"]
         self.field_trig = False
@@ -1150,18 +1236,19 @@ class Translator:
             return type(node).__name__
 
     def loccount(self, x, env, negate):
-        """Duel.GetLocationCount(p, LOCATION_MZONE|SZONE) > 0 (ou <= 0 avec negate) → (p, zone, 1)."""
-        ops = (A.LessOrEqThanOp,) if negate else (A.GreaterThanOp,)
-        if isinstance(x, ops) and isinstance(x.right, A.Number) and x.right.n == 0 and isinstance(x.left, A.Call) \
-                and dotted(x.left.func) == "Duel.GetLocationCount":
-            a = [self.expr(v, env, None) for v in x.left.args]
-            need(len(a) == 2 and isinstance(a[0], Player) and a[1] in (core.Z_MZONE, core.Z_SZONE), "GetLocationCount")
-            return (a[0].p, a[1], 1)
-        if not negate and isinstance(x, A.GreaterOrEqThanOp) and isinstance(x.right, A.Number) and isinstance(x.left, A.Call) \
-                and dotted(x.left.func) == "Duel.GetLocationCount":
-            a = [self.expr(v, env, None) for v in x.left.args]
-            need(len(a) == 2 and isinstance(a[0], Player) and a[1] in (core.Z_MZONE, core.Z_SZONE), "GetLocationCount")
-            return (a[0].p, a[1], x.right.n)
+        """Nombre de cases libres, direct ou via un alias local ; aucune nouvelle instruction."""
+        if not isinstance(x, (A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessOrEqThanOp)) or not isinstance(x.right, A.Number):
+            return None
+        left = x.left
+        known = (isinstance(left, A.Call) and dotted(left.func) == "Duel.GetLocationCount") or \
+                (isinstance(left, A.Name) and isinstance(env.get(left.id), FreeCount))
+        if not known:
+            return None
+        value = self.expr(left, env, None)
+        if x.right.n == 0 and isinstance(x, A.LessOrEqThanOp if negate else A.GreaterThanOp):
+            return (value.player.p, value.zone, 1)
+        if not negate and isinstance(x, A.GreaterOrEqThanOp):
+            return (value.player.p, value.zone, x.right.n)
         return None
 
     def conj(self, t):
@@ -1291,6 +1378,18 @@ class Translator:
         if lc is not None:
             prog.emit(C.REQ_FREE(*lc))
             return
+        if isinstance(x, (A.EqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessThanOp, A.LessOrEqThanOp)):
+            if isinstance(x.right, A.Number):
+                value = self.expr(x.left, env, prog)
+                if isinstance(value, Count):
+                    need(value.mul == 1 and type(x.right.n) is int, "comparaison de compte pondéré")
+                    reg = self.as_reg(value.reg, prog)
+                    n = x.right.n
+                    if isinstance(x, (A.EqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp)) and (n > 0 or not isinstance(x, A.EqToOp)):
+                        prog.emit(C.REQ(reg.r, n + int(isinstance(x, A.GreaterThanOp))))
+                    if isinstance(x, (A.EqToOp, A.LessThanOp, A.LessOrEqThanOp)):
+                        prog.emit(C.REQ(reg.r, n - int(isinstance(x, A.LessThanOp)), maximum=True))
+                    return
         # tour : Duel.GetTurnPlayer()==tp / ~=tp
         if isinstance(x, (A.EqToOp, A.NotEqToOp)):
             l, r = x.left, x.right
@@ -1755,7 +1854,10 @@ class Translator:
         if d in BOUND_FNS:
             return Fn(name=d, bound=[self.expr(a, env, prog) for a in args])
         if d == "Duel.GetLocationCount":
-            raise Unsupported("GetLocationCount hors comparaison")
+            need(len(args) == 2, "GetLocationCount : options")
+            player, zone = E_(0), E_(1)
+            need(isinstance(player, Player) and zone in (core.Z_MZONE, core.Z_SZONE), "GetLocationCount : joueur / zone")
+            return FreeCount(player, zone)
         raise Unsupported(f"appel {d}")
 
     def invoke(self, node, env, prog):
@@ -1770,7 +1872,7 @@ class Translator:
             return Handler()
         if isinstance(obj, Eff) and m == "GetHandlerPlayer":
             return Player(ME)
-        if obj == "SELFCARD" and m == "GetControler":
+        if (obj == "SELFCARD" or isinstance(obj, Handler)) and m == "GetControler":
             return Player(ME)
         if isinstance(obj, ChainEff) and m == "GetHandler":
             return ChainEff(card=True)

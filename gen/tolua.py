@@ -32,6 +32,8 @@ def norm_effect(e, lv_of):
     e = dict(e)
     if "clauses" in e:
         e["clauses"] = [dict(c, f=norm_f(c["f"])) if "f" in c else c for c in e["clauses"]]
+    if e["kind"] == "hand_proc":
+        e["counts"] = [(norm_f(f),mn,mx) for f,mn,mx in e["counts"]]
     if e["kind"] == "cont":
         c = dict(e["cont"])
         for k in ("tgt", "per"):

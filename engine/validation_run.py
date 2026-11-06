@@ -20,8 +20,8 @@ def git_head(path):
 def fingerprint():
     # Inclut les modifications locales et le pilote, pas seulement le commit.
     files = {}
-    for folder in ('engine', 'oracle', 'translate', 'train'):
-        for p in sorted([*(ROOT / folder).glob('*.py'), *(ROOT / folder).glob('*.cpp')]):
+    for folder in ('engine', 'oracle', 'translate', 'train', 'gen'):
+        for p in sorted([*(ROOT / folder).glob('*.py'), *(ROOT / folder).glob('*.cpp'), *(ROOT / folder).glob('*.lua')]):
             files[str(p.relative_to(ROOT))] = hashlib.sha256(p.read_bytes()).hexdigest()
     for p in sorted((ROOT / 'tests').rglob('*')):
         if p.is_file() and p.suffix in ('.py', '.lua', '.json'):

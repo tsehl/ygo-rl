@@ -44,6 +44,7 @@ TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK = 0x40, 0x80, 0x2000
 TYPE_EXTRA = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK  # monstres de l'Extra Deck
 TYPE_TUNER = 0x1000
 TYPE_PENDULUM = 0x1000000
+TYPE_SPSUMMON = 0x2000000  # aucune invocation normale / pose (monstre à invocation spéciale)
 P_SPELL = TYPE_PENDULUM | TYPE_SPELL  # type d'un pendule en zone pendule (card::get_type), et de son activation
 # statuts (bits)
 ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : choisie dans la sélection en cours
@@ -115,7 +116,7 @@ R = 4           # registres ensembles
 NF = 4          # filtres par effet
 KC = 24         # (carte, effet) candidats à l'activation testés par legal (main + terrain du joueur qui décide)
 KA = 2          # candidats testés par auto_pass (au-delà : pas de passe automatique, legal décide)
-K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK, K_CONT = range(7)  # déclencheur obligatoire / optionnel ;
+K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK, K_CONT, K_PROC = range(8)  # déclencheur obligatoire / optionnel ;
 # K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng ; K_CONT : effet continu, appliqué
 # tant que sa carte est recto dans les zones erng (et résolue, pour une magie/piège)
 PG_COST, PG_TARGET, PG_RESOLVE = range(3)
@@ -214,7 +215,7 @@ class Bank(NamedTuple):
     fmn: jnp.ndarray    # [C] nombre de matériaux (0 : pas de recette)
     fsub: jnp.ndarray   # [C] masque des emplacements nommés acceptant un substitut
     submat: jnp.ndarray # [C,0 ou 1] zones des substituts ; largeur 0 élimine le chemin au traçage
-    erl: jnp.ndarray    # [C] EnableReviveLimit : invocable spécialement seulement si correctement invoquée avant
+    erl: jnp.ndarray    # [C] 0 : libre ; 1 : EnableReviveLimit ; 2 : interdit par effet même après invocation correcte
     smat: jnp.ndarray   # [C, 2, FW] synchro : filtres du Syntoniseur (un seul) et des non-Syntoniseurs (1 ou plus)
     syn: jnp.ndarray    # [C] monstre synchro (procédure d'invocation synchro)
     xmat: jnp.ndarray   # [C, FW] Xyz : filtre des matériaux (en plus du niveau = rang)
@@ -680,7 +681,7 @@ def act_ok(bank, s, h, e, p):
     cid = s.cid[h]
     # une carte aux effets annulés peut encore les activer (is_activateable ne teste pas STATUS_DISABLED) : ils sont
     # annulés à la résolution (load_link)
-    return (test_ok(bank, s, h, e, p) & ~name_in(s.lock_cid[p], cid)
+    return (test_ok(bank, s, h, e, p) & ((bank.ekind[cid, e] == K_PROC) | ~name_in(s.lock_cid[p], cid))
             & ~((opt_key(cid, bank.eopt[cid, e]) >= 0) & name_in(s.opt_cid[p], opt_key(cid, bank.eopt[cid, e])))
             & ~(((bank.eopt[cid, e] == OPT_CARD) | (bank.eopt[cid, e] == OPT_CARD_NR))
                 & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
@@ -1020,7 +1021,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= jnp.where(nolv, (f[F_LV_LO] <= -BIG) & (f[F_LV_HI] >= BIG), (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI]))
     # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
     # F_SPSUM = 2 : en défense seulement (IsCanBeSpecialSummoned(..., POS_FACEUP_DEFENSE)), jamais un Link
-    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc)
+    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | ((bank.erl[s.cid] == 1) & s.proc))
                               & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
                               & ~((f[F_SPSUM] == 2) & ((bank.ctype[s.cid] & TYPE_LINK) != 0)))
     # fusion / rituel : SummonEffFilter et Ritual.Filter demandent aussi IsCanBeSpecialSummoned (fl_c est à jour ici,
@@ -1665,7 +1666,7 @@ def pend_info(bank, s, p):
     lo, hi = jnp.minimum(a, b), jnp.maximum(a, b)
     lv = bank.level[s.cid]
     ok = ((lv > lo) & (lv < hi) & ((ct & TYPE_MONSTER) != 0) & ((ct & (TYPE_XYZ | TYPE_LINK)) == 0)
-          & ((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | s.proc) & (s.ctrl == p))
+          & ((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | ((bank.erl[s.cid] == 1) & s.proc)) & (s.ctrl == p))
     ez = ex_zones(s, p)
     free = ez[:N_MAIN_ZONES]
     lz = free & link_arrows(bank, s, p).any(0)
@@ -1916,10 +1917,13 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins):
     cw = c & 7
     within = jnp.where(cw > 0, reg[jnp.clip(cw - 1, 0, R - 1)], True)  # c & 7 > 0 : intersection avec le registre
     # c & 8 : sélection avec ciblage
-    branches[OP_FILTER] = lambda: put(filter_mask(bank, s, bank.filt[s.cid[h], e, jnp.clip(b, 0, NF - 1)], p, h)
-                                      & within & ~(((c & 8) != 0) & untargetable(bank, s, h)))
+    # Les requêtes / Group:Filter incluent les détruits au combat encore sur le terrain.
+    # Seul un ciblage les exclut ici (field::filter_matching_card, is_capable_be_effect_target).
+    branches[OP_FILTER] = lambda: put(filter_mask(bank, s, bank.filt[s.cid[h], e, jnp.clip(b, 0, NF - 1)], p, h, bdes=False)
+                                      & within & (((c & 8) == 0) | ((s.st & ST_BDES) == 0))
+                                      & ~(((c & 8) != 0) & untargetable(bank, s, h)))
     branches[OP_SELF] = lambda: put(jnp.arange(n) == h)
-    branches[OP_REQ] = lambda: cond(reg[ra].sum() >= b)
+    branches[OP_REQ] = lambda: cond(jnp.where(c == 0, reg[ra].sum() >= b, reg[ra].sum() <= b))
     branches[OP_REQ_FREE] = lambda: cond(free_main(s, rel(p, a), jnp.where(b == Z_SZONE, Z_SZONE, Z_MZONE)) >= c)
 
     def minatk():
@@ -1980,15 +1984,20 @@ def current_ins(bank, s):
     return bank.prog[s.cid[s.ch_src], s.ch_eff, s.pg, s.pc]
 
 
+def use_count(bank, s, c, e, p):
+    """Consomme la limite d'une activation ou d'une procédure, sans construire de maillon."""
+    opt = bank.eopt[s.cid[c], e]
+    key = opt_key(s.cid[c], opt)
+    return s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(key >= 0, name_add(s.opt_cid[p], key), s.opt_cid[p])),
+                      st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
+
+
 def begin_act(bank, s, c, e):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
     leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) == 0)
     p = s.dec_player
-    opt = bank.eopt[s.cid[c], e]
-    key = opt_key(s.cid[c], opt)
-    s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(key >= 0, name_add(s.opt_cid[p], key), s.opt_cid[p])),
-                   st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
+    s = use_count(bank, s, c, e, p)
     # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
     # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
     tdis = (s.tm_m[:, c] & (s.mv[c] <= s.tm_t) & (s.tm_code == MC_DISABLE)).any() & (s.zone[c] == Z_MZONE)
@@ -2208,6 +2217,8 @@ def act_cand(bank, s):
         dsok |= (s.dstep == DS_NONE) | (act & ((ct & TYPE_COUNTER) != 0)) | ((trig & (1 << EV_PRE_DMG)) != 0)
         where &= dsok
         where |= trig_w & mine & s.tg & (s.tg_e == e) & (kind == tkind)  # déclencheurs de l'étape SEGOC en cours
+        # Procédure inhérente depuis la main : ni vitesse de chaîne, ni activation de monstre.
+        where |= idle & in_hand & (kind == K_PROC) & (free_main(s, p) > 0) & ((s.fl_c & FL_NO_SS) == 0)
         cand.append(where)
     return jnp.stack(cand)
 
@@ -2242,7 +2253,7 @@ def legal(bank, s, fus=True):
     need = jnp.where(lv >= 7, 2, jnp.where(lv >= 5, 1, 0))
     # monstres rituels et de l'Extra Deck : pas d'invocation normale
     can_ns = (in_hand & monster & ~s.ns_used & jnp.where(need == 0, free_m > 0, nmon >= need)
-              & ((ct & (TYPE_RITUAL | TYPE_EXTRA)) == 0))
+              & ((ct & (TYPE_RITUAL | TYPE_EXTRA | TYPE_SPSUMMON)) == 0))
     can_repos = (my_mon & ((s.st & (ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN)) == 0)
                  & ((ct & TYPE_LINK) == 0))  # un Link ne change pas de position
     unsel = (s.st & ST_SEL) == 0
@@ -2296,10 +2307,10 @@ def legal(bank, s, fus=True):
     sp = sp.at[A_TO_BP].set(idle & (s.phase == PH_MAIN1) & (s.turn > 1))
     sp = sp.at[A_TO_M2].set(bat)
     sp = sp.at[A_TO_EP].set(idle | bat)
-    mz = (s.zctx == ZC_SUMMON) | (s.zctx == ZC_SPSUM)
+    mz = (s.zctx == ZC_SUMMON) | (s.zctx == ZC_SPSUM) | (s.zctx == ZC_PROC) | (s.zctx == ZC_PEND)
     used = jnp.where(mz, zone_used(s, p, Z_MZONE), zone_used(s, p, Z_SZONE))[:7]
     spc = jnp.argmax(s.reg[jnp.clip(ins[1], 0, R - 1)])             # carte invoquée spécialement (ZC_SPSUM)
-    fromex = ((s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)) | (s.zctx == ZC_PROC)
+    fromex = ((s.zctx == ZC_SPSUM) & (s.zone[spc] == Z_EXTRA)) | ((s.zctx == ZC_PROC) & (s.zone[jnp.maximum(s.pend, 0)] == Z_EXTRA))
     pc = jnp.where((s.zctx == ZC_PROC) | (s.zctx == ZC_PEND), jnp.maximum(s.pend, 0), spc)  # carte invoquée
     is_lk = (ct[pc] & TYPE_LINK) != 0
     exz = lax.cond(is_lk & (s.dec == D_ZONE), lambda s: link_zones(bank, s, p, pc), lambda s: ex_zones(s, p), s)
@@ -2409,7 +2420,10 @@ def apply(bank, s, a):
         flip = lambda s: begin_act(bank, s._replace(pos=s.pos.at[c].set(P_SFU)), c, e)
         card = bank.ekind[s.cid[c], e] == K_ACTIVATE  # activation de carte (pas un effet de monstre)
         return _switch(jnp.where(card & (s.zone[c] == Z_HAND), 0, jnp.where(card & (s.zone[c] == Z_SZONE), 1, 2)),
-                          [from_hand, flip, lambda s: begin_act(bank, s, c, e)], s)
+                          [from_hand, flip, lambda s: _cond(bank.ekind[s.cid[c], e] == K_PROC,
+                              lambda s: use_count(bank, s, c, e, p)._replace(pend=c, pend_set=jnp.bool_(False), picks=_i(0), psel=_i(0),
+                                                   zctx=_i(ZC_PROC), dec=_i(D_ZONE)),
+                              lambda s: begin_act(bank, s, c, e), s)], s)
 
     def zone(s):
         z = k - A_ZONE0

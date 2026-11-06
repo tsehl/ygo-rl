@@ -111,7 +111,8 @@ ci-dessus et la sélection de taille variable) : 301 décisions/s, contre 258-26
 Pistes, par ordre de rendement probable :
 1. Fusion : sous-ensemble fixe et substituts simples réalisés (bilan du 2026-11-06 ci-dessous).
    Restent les quantités variables, alternatives complexes et conditions non représentées.
-2. SPSUMMON_PROC (336) : invocation spéciale par procédure depuis la main, nouvelle fonction du moteur.
+2. SPSUMMON_PROC : procédures de main sans coût et à conditions représentables réalisées ;
+   restent les sélections, coûts, opérations et restrictions complexes.
 3. IsReason (177), EVENT_PHASE (129, déclencheurs de phase : fonction du moteur à écrire, voir
    `process_phase_event` dans `oracle/ygopro-core/processor.cpp`), équipement (231).
 4. Divergences anciennes non élucidées (voir plus haut) : les rejouer avec `--chosen` quand elles réapparaissent.
@@ -219,7 +220,7 @@ un changement de runtime impose une nouvelle traduction, même si les scripts so
 
 ## Substituts : validation et coût (2026-11-06)
 
-Le sous-ensemble actuel traduit **507 / 13 541 cartes** : 426 du deck principal et 81 de
+Le jalon des substituts traduisait **507 / 13 541 cartes** : 426 du deck principal et 81 de
 l'Extra Deck, dont 60 fusions. Les effets passifs `EFFECT_FUSION_SUBSTITUTE` simples sont
 reconnus ; les callbacks de valeur et conditions arbitraires restent refusés.
 
@@ -241,3 +242,46 @@ remplacements, les filtres non substituables et le cas valide de deux cartes sub
 dont une utilisée normalement. Les cinq anciens scénarios ambigus sont rejoués avec leurs
 decks complets et doivent dépasser l'ancien point de blocage en consultant l'inspecteur natif.
 Résultats, provenance et limites : [bilan](../notes/codex-substituts-2026-11-06.md).
+
+## Procédures de main et poursuite du moteur (2026-11-06)
+
+Le catalogue atteint **572 / 13 541 cartes utilisables par le compilateur** : 490 du
+Deck principal et 82 de l'Extra Deck (60 fusions, 6 synchros, 13 Xyz, 3 Links).
+Ce total ne signifie pas que tous les effets de ces cartes ont été exercés.
+
+Les procédures simples `EFFECT_SPSUMMON_PROC` depuis la main se compilent en
+`K_PROC` : conditions et compteurs existants, action propre à l'emplacement de
+l'effet, placement dans une zone principale. Elles ne forment pas de chaîne et
+conservent l'invocation normale. Les monstres `TYPE_SPSUMMON` ne peuvent pas être
+invoqués normalement ni posés. `EnableReviveLimit` et l'interdiction permanente
+par `EFFECT_SPSUMMON_CONDITION` à valeur `aux.FALSE` sont distingués, y compris
+pour les invocations par effet et pendule. Les procédures à coût/opération et
+les restrictions conditionnelles non représentables restent refusées.
+
+Des clones SINGLE d'un même déclencheur peuvent partager un emplacement pour
+les événements d'invocation normale, flip et spéciale, s'ils ont les mêmes
+programmes, description et une limite partagée par nom (ou aucune limite).
+Les compteurs par effet et les déclencheurs FIELD ne sont pas regroupés.
+Les requêtes de nombre de cartes acceptent aussi les bornes supérieures ; les
+alias locaux de `GetLocationCount` restent symboliques, sans ajout de bytecode.
+
+Le générateur produit également ces procédures et leur version Lua indépendante,
+avec les formes fixes des banques et les dimensions actuelles du modèle.
+
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python tests/hand_procedure_oracle_check.py
+.venv/bin/python tests/flip_self_oracle_check.py
+.venv/bin/python tests/effect_identity_check.py
+.venv/bin/python gen/compare_gen.py --banks 0-1 --games 5 --main 80 --extra 10 --focus
+```
+
+Le comparateur de cartes générées renvoie un code non nul si une partie échoue.
+Le test d'identité déplie volontairement trois clones optimisés pour continuer à
+exercer l'inspecteur natif sur les cinq anciens scénarios ambigus.
+
+Les nouvelles campagnes ont aussi révélé une erreur de filtre sur les monstres
+marqués détruits au combat mais encore sur le terrain : les requêtes de groupe
+et prédicats sur la carte elle-même doivent les voir, tandis que le ciblage les
+exclut. Une fixture minimale vérifie que l'effet FLIP s'active réellement.
+[Bilan, mesures et suite](../notes/codex-procedures-2026-11-06.md).

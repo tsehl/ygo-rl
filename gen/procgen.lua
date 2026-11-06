@@ -405,6 +405,24 @@ function PG.effect(c,sp,id,idx)
 				c:RegisterEffect(ei)
 			end
 		end
+	elseif k=="hand_proc" then
+		local e=Effect.CreateEffect(c)
+		e:SetType(EFFECT_TYPE_FIELD)
+		e:SetCode(EFFECT_SPSUMMON_PROC)
+		e:SetProperty(EFFECT_FLAG_UNCOPYABLE)
+		e:SetRange(LOCATION_HAND)
+		if sp.opt==OPT_NAME then e:SetCountLimit(1,id,EFFECT_COUNT_CODE_OATH) end
+		e:SetCondition(function(e,c)
+			if c==nil then return true end
+			local tp=c:GetControler()
+			if Duel.GetLocationCount(tp,LOCATION_MZONE)<=0 then return false end
+			for _,check in ipairs(sp.counts) do
+				local n=group(check[1],e,tp):GetCount()
+				if n<check[2] or n>check[3] then return false end
+			end
+			return true
+		end)
+		c:RegisterEffect(e)
 	elseif k=="ignition" then
 		local e=base(c,sp,id,idx)
 		e:SetType(EFFECT_TYPE_IGNITION)

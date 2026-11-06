@@ -263,6 +263,19 @@ class Gen:
                     c1["verb"] in ("atk", "def", "halve_base", "halve") and c1["sel"] in ("target", "all"):
                 e["dmg"] = DMG_STEP | DMG_STAT
             return e
+        if kind == "hand_proc":
+            e["rng"] = Z_HAND
+            e["opt"] = self.pick([OPT_NONE, OPT_NAME])
+            mode = self.pick(["own_empty", "op_empty", "cyber", "ally"])
+            if mode == "ally":
+                f = dict(me=Z_MZONE, pos=P_FACEUP)
+                self.qual(f, stats=False)
+                e["counts"] = [(f, 1, BIG)]
+            else:
+                e["counts"] = [(dict(**({"op": Z_MZONE} if mode == "op_empty" else {"me": Z_MZONE})),0,0)]
+                if mode == "cyber":
+                    e["counts"].append((dict(op=Z_MZONE),1,BIG))
+            return e
         if kind == "ignition":
             e["cost"] = self.cost([None, "lp", "discard", "self", "tribute", "banish_gy"] +
                                   (["detach"] if card["ctype"] & TYPE_XYZ else []),
@@ -399,7 +412,7 @@ class Gen:
             for _ in range(n):
                 # au plus un déclencheur par carte : le moteur ne garde qu'un effet déclenché en attente par carte
                 # (tg / tg_e), ygopro les propose tous (deux événements simultanés : cimetière + détruit au combat)
-                k = self.pick(kinds, [kinds_w[x] * (0 if x == "trigger" and x in used else 0.3 if x in used else 1)
+                k = self.pick(kinds, [kinds_w[x] * (0 if x in ("trigger", "hand_proc") and x in used else 0.3 if x in used else 1)
                                       for x in kinds])
                 used.append(k)
                 effs.append(self.effect(k, c))
@@ -413,7 +426,7 @@ class Gen:
     def effect_monster(self, lv=None):
         c = self.monster_frame(lv=lv)
         c["ctype"] |= TYPE_EFFECT
-        c, v = self.with_effects(c, dict(ignition=3, trigger=4, quick=2, cont=2))
+        c, v = self.with_effects(c, dict(ignition=3, trigger=4, quick=2, cont=2, hand_proc=1))
         c["atk"], c["df"] = self.stats(c["lv"], v)
         if not c["effects"]:
             c["ctype"] = (c["ctype"] & ~TYPE_EFFECT) | TYPE_NORMAL
@@ -594,6 +607,8 @@ def cost_value(cost):
 def value(e):
     """Valeur grossière d'un effet, en cartes d'avantage (avant la valeur de la carte elle-même)."""
     k = e["kind"]
+    if k == "hand_proc":
+        return 0.7
     if k == "cont":
         c = e["cont"]
         if c["code"] in (MC_ATK, MC_DEF):
@@ -733,6 +748,13 @@ def clause_bricks(c, on, first):
 def bricks(e):
     """Effet (spécification) → tuple d'effet de cards.py."""
     k = e["kind"]
+    if k == "hand_proc":
+        program = [REQ_FREE(ME,Z_MZONE,1)]
+        for r,(f,mn,mx) in enumerate(e["counts"]):
+            program.append(FILTER(r,_F(f)))
+            if mn > 0: program.append(REQ(r,mn))
+            if mx < BIG: program.append(REQ(r,mx,maximum=True))
+        return (core.K_PROC,0,e["opt"],Z_HAND,program,[],[])
     if k == "pend":
         return act()
     if k == "cont":
