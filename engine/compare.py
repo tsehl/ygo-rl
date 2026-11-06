@@ -42,6 +42,10 @@ class Mismatch(Exception):
     pass
 
 
+class Inconclusive(Mismatch):
+    """Le pilote ne peut pas établir une correspondance indépendante."""
+
+
 def make_bank(db, codes):
     codes = sorted(set(codes))
     r = [db.rows[c] for c in codes]
@@ -91,6 +95,7 @@ def slot(s, con, loc, seq):
     return int(idx[0])
 
 
+EFFECT_KINDS = {}  # types statiques des effets traduits (aucune légalité JAX consultée)
 DESC = {}  # code → description (aux.Stringid) de chaque effet, cartes traduites (translate/validate.py)
 
 
@@ -110,13 +115,14 @@ def translate(dec, opt, s, m=None):
             verb += int(np.argmax(ek == core.K_TRIG_O))
         elif kind in ("activate", "chain") and opt[1] in DESC and len(opt) > 5:  # carte traduite (translate/validate.py) : l'effet de cette description
             i = slot(s, opt[2], opt[3], opt[4])
-            if kind == "chain" and opt[5] == 221 and bool(s.tg[i]):  # oui / non : le déclencheur en cours de la carte
-                verb += int(s.tg_e[i])
-            else:  # plusieurs effets de même description (souvent aucune) : celui qui est légal dans le moteur
+            if kind == "chain" and opt[5] == 221:  # SelectEffectYesNo : déclencheur optionnel
+                es = [e for e, k in enumerate(EFFECT_KINDS.get(opt[1], [])) if k == core.K_TRIG_O]
+            else:
                 ds = DESC[opt[1]]
-                es = [e for e, d in enumerate(ds) if d == opt[5]] or [e for e, d in enumerate(ds) if d is None] or [0]
-                ok = [e for e in es if m is not None and m[(verb + e) * N + i]]
-                verb += (ok or es)[0]
+                es = [e for e, d in enumerate(ds) if d == opt[5]] or [e for e, d in enumerate(ds) if d is None]
+            if len(es) != 1:
+                raise Inconclusive(f"correspondance d'effet ambiguë : code={opt[1]} description={opt[5]} effets={es}")
+            verb += es[0]
         return [verb * N + slot(s, opt[2], opt[3], opt[4])]
     if kind == "spsummon":  # invocation par procédure depuis l'Extra Deck, ou pendule (échelle gauche) : V_SUMMON
         if opt[3] not in ("extra", "szone"):
@@ -474,13 +480,17 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
     duel = driver.Duel(db, decks[0], decks[1], seed=seed, extra0=extra[0], extra1=extra[1])
     global LAST_LOG
     LAST_LOG = duel.log  # messages de l'oracle (erreurs Lua des scripts)
-    ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
-    s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
-    a0 = int(FORCED(bank, s))
-    if a0 >= 0:
-        s = step(bank, s, a0)
     ndec = 0
+    trace = []
+    def coverage():
+        return [dict(code=c, stage=stage, description=desc, count=n)
+                for (c, stage, desc), n in sorted(duel.coverage.items(), key=str)]
     try:
+        ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
+        s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
+        a0 = int(FORCED(bank, s))
+        if a0 >= 0:
+            s = step(bank, s, a0)
         while True:
             dec = duel.next_decision()
             while dec is not None and len(filtered(dec, s)) == 1:
@@ -491,7 +501,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             if dec is None:
                 if not bool(s.done) or int(s.winner) != duel.winner:
                     raise Mismatch(f"fin : oracle winner={duel.winner}, jax done={bool(s.done)} winner={int(s.winner)}")
-                return dict(ok=True, decisions=ndec, turns=duel.turn, winner=duel.winner)
+                return dict(ok=True, decisions=ndec, turns=duel.turn, winner=duel.winner, status="passed", coverage=coverage(), trace=trace, oracle_log=list(duel.log))
             if bool(s.done):
                 raise Mismatch(f"JAX fini (winner {int(s.winner)}) mais l'oracle demande {dec.msg} {dec.options}")
             global LAST_STATE
@@ -611,6 +621,7 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 COVER["relance d'attaque : nouvelle cible choisie"] += 1
             if verbose:
                 print(duel.turn, hex(duel.phase), dec.player, dec.options[i])
+            trace.append(dict(message=dec.msg, player=dec.player, option=o, actions=seqs[i]))
             duel.respond(dec, i)
             before = s
             for a in seqs[i]:
@@ -625,13 +636,15 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
                 pen_cover(bank, before, s, o)
             ndec += 1
     except Mismatch as e:
-        return dict(ok=False, decisions=ndec, turn=duel.turn, err=str(e))
+        return dict(ok=False, decisions=ndec, turn=duel.turn, err=str(e), status="inconclusive" if isinstance(e, Inconclusive) else "failed", coverage=coverage(), trace=trace, oracle_log=list(duel.log))
     finally:
         duel.close()
 
 
-if __name__ == "__main__":
+def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    if n <= 0:
+        raise SystemExit("n_parties doit être > 0")
     seed0 = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     mode = sys.argv[3] if len(sys.argv) > 3 else "normal"
     db = driver.CardDB()
@@ -642,7 +655,13 @@ if __name__ == "__main__":
     for sd in range(seed0, seed0 + n):
         r = play(db, bank, cmap, sd, step, legal, mode=mode)
         nok += r["ok"]
-        print(sd, r, flush=True)
+        print(sd, {k: v for k, v in r.items() if k not in ("coverage", "trace", "oracle_log")}, flush=True)
     print(f"{nok}/{n} parties identiques")
     for k, v in sorted(COVER.items(), key=str):
         print(" ", k, v)
+
+    return 0 if nok == n else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

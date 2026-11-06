@@ -320,7 +320,8 @@ class Script:
     def __init__(self, code):
         self.code = code
         path = os.path.join(OFFICIAL, f"c{code}.lua")
-        self.src = open(path, encoding="utf-8", errors="replace").read()
+        with open(path, encoding="utf-8", errors="replace") as source:
+            self.src = source.read()
         try:
             self.tree = LA.parse(self.src)
         except Exception as e:  # noqa: BLE001
@@ -499,10 +500,15 @@ class Translator:
             raise Unsupported(f"initial_effect : :{m}")
         if isinstance(st, A.Call):
             d = dotted(st.func)
+            if d == "Fusion.RegisterSummonEff":
+                need(len(st.args) == 1 and isinstance(self.ie_val(st.args[0], env), Handler),
+                     "Fusion.RegisterSummonEff : options")
+                regs.append(("fusion_spell",))
+                return
             if d == "Pendulum.AddProcedure":
                 regs.append(("pendulum",))
                 return
-            if d in ("Xyz.AddProcedure", "Synchro.AddProcedure", "Link.AddProcedure"):
+            if d in ("Xyz.AddProcedure", "Synchro.AddProcedure", "Link.AddProcedure", "Fusion.AddProcMix", "Fusion.AddProcMixN"):
                 need(self.proc is None, "deux procédures")
                 self.proc = self.procedure(d, st.args[1:], env)
                 return
@@ -538,6 +544,33 @@ class Translator:
 
         def nil(i):
             return i >= len(args) or isinstance(args[i], A.Nil)
+        if d in ("Fusion.AddProcMix", "Fusion.AddProcMixN"):
+            need(len(args) >= 4, "Fusion : arguments manquants")
+            sub, insf = self.ie_val(args[0], env), self.ie_val(args[1], env)
+            need(type(sub) is bool and type(insf) is bool, "Fusion : options non booléennes")
+            # insf ne concerne que les invocations sans matériaux (Instant Fusion), dont
+            # les effets ne sont pas traduits. Les recettes courantes utilisent des matériaux.
+            specs = args[2:]
+            if d.endswith("MixN"):
+                need(len(specs) % 2 == 0, "Fusion : paires matériau / nombre")
+                expanded = []
+                for material, count in zip(specs[::2], specs[1::2]):
+                    n = self.ie_val(count, env)
+                    need(type(n) is int and 1 <= n <= core.FK, "Fusion : nombre de matériaux")
+                    expanded.extend([material] * n)
+                specs = expanded
+            need(2 <= len(specs) <= core.FK, f"Fusion : entre 2 et {core.FK} matériaux")
+            filters = []
+            for material in specs:
+                value = self.ie_val(material, env)
+                if type(value) is int:
+                    need(value > 0, "Fusion : code de matériau")
+                    need(not sub, "Fusion : substituts de matériaux nommés non pris en charge")
+                    filters.append(C.MAT(code=value))
+                else:
+                    need(isinstance(value, Fn), "Fusion : matériau ni code ni filtre")
+                    filters.append(self.mat_filter(material, env))
+            return ("fusion", filters)
         f0 = args[0] if args else A.Nil()
         if d == "Xyz.AddProcedure":  # (f, lv, ct, alterf, desc, maxct, op, mustbemat, exchk)
             need(all(nil(i) for i in (3, 6, 7, 8)), "Xyz : matériau alternatif / opération")
@@ -560,6 +593,12 @@ class Translator:
         self.descs = []  # description (aux.Stringid) de chaque effet traduit, pour le pilote de l'oracle
         for e in regs:
             if isinstance(e, tuple):
+                if e[0] == "fusion_spell":
+                    out.append(C.act(target=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.REQ(0, 1)],
+                                     resolve=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.CHOOSE(1, 0, 1),
+                                              C.FUSMAT(2, 1), C.MOVE(2), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF)]))
+                    self.descs.append(None)
+                    continue
                 if e[0] == "pendulum":
                     out.append(C.act())
                     self.descs.append(None)

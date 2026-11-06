@@ -5,6 +5,7 @@ lisibles) et on répond par l'index de l'option choisie. L'état est lu par OCG_
 Usage rapide : python driver.py  (joue une partie aléatoire entre deux decks de monstres normaux)
 """
 import ctypes as C
+import collections
 import itertools
 import os
 import random
@@ -208,6 +209,9 @@ class Duel:
         self.turn, self.turn_player, self.phase = 0, 0, 0
         self.winner = None
         self.events = []
+        self.coverage = collections.Counter()
+        self.chains = {}
+        self.summoning = collections.defaultdict(list)
         lib.OCG_StartDuel(self.ptr)
 
     def _read_script(self, payload, duel, name):
@@ -275,6 +279,43 @@ class Duel:
         elif t == K["MSG_LPUPDATE"]:
             pl, v = r.take("BI")
             self.lp[pl] = v
+        elif t == K["MSG_CHAINING"]:
+            code = r.take("I")
+            r.take("BBII")  # emplacement actuel (loc_info)
+            r.take("BBI")   # emplacement au déclenchement
+            desc, index = r.take("QI")
+            self.chains[index] = (code, desc, False)
+            self.coverage[(code, "activated", desc)] += 1
+        elif t in (K["MSG_CHAIN_NEGATED"], K["MSG_CHAIN_DISABLED"]):
+            index = r.take("B")
+            if index in self.chains:
+                code, desc, _ = self.chains[index]
+                self.chains[index] = (code, desc, True)
+                self.coverage[(code, "negated", desc)] += 1
+        elif t == K["MSG_CHAIN_SOLVED"]:
+            index = r.take("B")
+            if index in self.chains:
+                code, desc, negated = self.chains[index]
+                if not negated:
+                    self.coverage[(code, "resolved", desc)] += 1
+        elif t == K["MSG_CHAIN_END"]:
+            self.chains.clear()
+        elif t in (K["MSG_SUMMONING"], K["MSG_SPSUMMONING"], K["MSG_FLIPSUMMONING"]):
+            code = r.take("I")
+            end = {K["MSG_SUMMONING"]: K["MSG_SUMMONED"], K["MSG_SPSUMMONING"]: K["MSG_SPSUMMONED"],
+                   K["MSG_FLIPSUMMONING"]: K["MSG_FLIPSUMMONED"]}[t]
+            location = tuple(r.take("BBII"))
+            self.summoning[end].append((code, location))
+            self.coverage[(code, "summon_attempt", None)] += 1
+        elif t in (K["MSG_SUMMONED"], K["MSG_SPSUMMONED"], K["MSG_FLIPSUMMONED"]):
+            for code, _ in self.summoning.pop(t, []):
+                self.coverage[(code, "summoned", None)] += 1
+        elif t == K["MSG_MOVE"]:
+            r.take("I")
+            previous = tuple(r.take("BBII"))
+            # Une invocation annulée quitte le terrain sans MSG_*SUMMONED.
+            for end, pending in self.summoning.items():
+                self.summoning[end] = [(c, loc) for c, loc in pending if loc[:3] != previous[:3]]
         elif t == K["MSG_SHUFFLE_HAND"]:
             self.events.append(("shuffle_hand", r.take("B")))
         elif t in SELECT_PARSERS:

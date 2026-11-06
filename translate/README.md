@@ -58,15 +58,15 @@ qu'une fois. Ensuite, on joue des parties aléatoires avec la boucle de `engine/
 - les deux joueurs reçoivent le même Extra Deck, l'union des monstres de l'Extra Deck tirés (15 au plus), parce que
   `new_game` impose deux Extra Decks de même taille.
 
-Une carte est « vérifiée » si elle n'a figuré que dans des parties identiques. Avec `--bisect`, chaque partie
+Les campagnes distinguent la présence d’une carte et l’exécution de ses effets (voir « Validation traçable »). Avec `--bisect`, chaque partie
 divergente est rejouée avec une seule carte traduite par deck, pour isoler la fautive. Deux options servent au
 débogage :
 - `--chosen a,b;c,d` rejoue une partie avec ces cartes imposées ;
-- `--nosave` laisse `validated.json` intact.
+- `--nosave` désactive l’enregistrement de la campagne.
 
 `compare.translate` fait correspondre les options de l'oracle pour les cartes traduites (« activer l'effet n de
-cette carte ») grâce aux descriptions (`compare.DESC`). Pour la description 221 (déclencheur dans la chaîne), il passe
-par l'effet `tg_e` en attente.
+cette carte ») grâce aux descriptions (`compare.DESC`). Pour la description 221 (déclencheur dans la chaîne), il exige désormais un unique effet
+déclenché optionnel dans les métadonnées statiques ; une ambiguïté reste non concluante.
 
 ## Règles du moteur corrigées ou ajoutées pendant la traduction
 
@@ -125,5 +125,72 @@ Méthode qui a marché :
 - Rejouer une partie divergente : `--codes X --seed0 G --games 1 --k 1 --nosave` pour une carte seule (c'est ce que
   fait la bissection), ou `--chosen` avec les cartes des deux decks.
 - Non-régression sans bloquer le travail : copier le dépôt dans le scratchpad, avec des liens symboliques vers
-  `oracle/ygopro-core` et `data`, puis lancer `JOBS=3 engine/regress.sh LOGS` depuis la copie (~45 min). On peut
-  continuer à modifier `engine/` pendant ce temps. Recopier les fichiers du moteur si on les change avant la fin.
+  `oracle/ygopro-core` et `data`, puis lancer `JOBS=3 engine/regress.sh LOGS` depuis la copie (~45 min). Garder
+  cette copie figée ; toute nouvelle version du moteur doit être vérifiée dans une nouvelle campagne.
+
+## Validation traçable (branche codex)
+
+`validate.py` renvoie **0** si toutes les parties sont identiques, **1** pour une divergence,
+**2** si la campagne contient une erreur du pilote ou une correspondance d'effet ambiguë.
+Un changement des sources ou des données pendant la campagne l'invalide également (code 2).
+`compare.py` renvoie un code non nul dès qu'une partie diverge ; `engine/regress.sh` propage
+les échecs tout en exécutant les autres contrôles. `--games 0` n'est pas une validation.
+
+Chaque campagne est indépendante et enregistrée dans `translate/cache/runs/` :
+- un JSON final avec commit, empreintes des fichiers Python, commits et modifications des
+  dépendances, empreintes de la bibliothèque oracle et de la base de cartes, versions Python/JAX,
+  arguments, graines, decks exacts, choix joués et messages du pilote ;
+- un journal JSONL écrit après chaque partie, pour conserver les parties terminées si le processus
+  est interrompu. L'absence de JSON final indique une campagne incomplète.
+
+Les anciennes statistiques de `validated.json` sont conservées sur disque mais ne sont plus
+fusionnées avec les nouvelles campagnes. `--codes` enregistre également ses résultats ;
+`--nosave` désactive l'enregistrement. Ne pas comparer des compteurs issus de signatures différentes
+comme s'ils décrivaient le même programme.
+
+La présence dans un deck, une tentative d'invocation, une invocation réussie, une activation,
+une annulation et une résolution non annulée sont distinctes. Les messages de chaîne de l'oracle
+fournissent la couverture par code de carte et description d'effet ; ils ne prouvent pas qu'un effet
+continu a été exercé, ni qu'une opération a changé l'état (elle peut résoudre sans effet).
+Les compteurs agrégés d'exécution portent uniquement sur les parties identiques. Le détail par effet
+reste dans `games[].result.coverage`. Une carte invoquée n'a pas nécessairement exercé tous ses effets.
+Les cartes retirées par la limite d'Extra Deck ne sont pas comptées comme présentes.
+
+Une description ambiguë n'est plus départagée à partir des actions légales du moteur testé :
+le résultat est « inconclusive ». Il faut alors améliorer la correspondance ou ajouter un scénario
+ciblé avant de conclure sur cette carte.
+
+`--bisect` reste un **rejeu carte par carte**, avec d'autres decks, et non une réduction du scénario
+original. Il peut manquer un défaut d'interaction. Le scénario original et sa trace sont conservés ;
+un réducteur préservant la divergence reste à implémenter. L'absence de divergence dans les rejouages
+isolés ne résout pas la divergence originale.
+
+Pour la non-régression, utiliser une copie **figée** du code avec des liens vers les dépendances
+épinglées. Ne pas y recopier des fichiers pendant la campagne : recommencer une campagne pour
+vérifier une nouvelle version. `YGO_PYTHON=/chemin/vers/.venv/bin/python` permet d'utiliser les
+versions déjà installées plutôt qu'une résolution ad hoc de JAX.
+
+## Fusion : premier sous-ensemble
+
+Le traducteur reconnaît `Fusion.AddProcMix` et `Fusion.AddProcMixN` : deux à quatre matériaux,
+par code ou par filtre représentable dans `MAT_FIELDS`. Les quantités de `MixN` doivent être fixes
+et positives. L'effet par défaut `Fusion.RegisterSummonEff(c)` (Polymerization) est également traduit ;
+les variantes avec options sont refusées.
+
+Les substituts de matériaux nommés (`sub=true` avec un code de matériau) restent explicitement refusés :
+le moteur ne les représente pas. Les recettes à matériaux variables, tables d'alternatives et filtres
+hors des champs du moteur restent refusés. L'option `insf` concerne les invocations sans matériaux,
+comme Instant Fusion, dont les effets ne sont pas pris en charge par cette traduction.
+Une recette reconnue ne suffit pas à rendre toute la carte traduisible : ses autres effets doivent l'être.
+
+Contrôles ciblés :
+
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+YGO_JAX_CACHE=/workspace/.cache/ygo-jax .venv/bin/python tests/fusion_oracle_check.py
+```
+
+Les cartes fictives de `tests/fixtures/fusion/` isolent les recettes (matériaux distincts, répétés,
+filtres qui se recouvrent, matériau absent ou quantité insuffisante). Elles ne servent jamais à
+l'entraînement. Le contrôle vérifie les parties contre l'oracle et exige que les fusions positives
+aient effectivement été invoquées, et que Polymerization n'ait pas pu résoudre dans les cas négatifs.
