@@ -100,7 +100,7 @@ class Gen:
     def card_clause(self, ctx):
         """Clause « verbe sur une sélection ». ctx : genre d'effet, événement, zone de la carte à l'activation."""
         kind, evs, zone = ctx["kind"], ctx.get("on", 0), ctx.get("zone")
-        opts = ["destroy", "destroy", "banish", "bounce", "tohand", "tohand", "ss", "atk", "disable", "tograve"]
+        opts = ["destroy", "destroy", "banish", "bounce", "tohand", "tohand", "ss", "atk", "disable", "tograve", "indes_battle"]
         verb = self.pick(opts)
         if evs:  # piège / effet rapide sur un événement : le verbe s'applique aux cartes de l'événement
             if self.p(0.75):
@@ -171,6 +171,8 @@ class Gen:
             if self.p(0.6):
                 return dict(verb="atk", sel="all", f=self.mon(me=Z_MZONE, pos=P_FACEUP), k=1, v=self.pos_atk())
             return dict(verb="atk", sel="all", f=self.mon(op=Z_MZONE, pos=P_FACEUP), k=1, v=self.neg_atk())
+        if verb == "indes_battle":
+            return dict(verb=verb, sel="target", f=dict(me=Z_MZONE, pos=P_FACEUP), k=1, v=0)
         if verb == "disable":
             return dict(verb="disable", sel="target", f=dict(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_EFFECT, nodis=1),
                         k=1, v=0)
@@ -264,6 +266,7 @@ class Gen:
                 e["dmg"] = DMG_STEP | DMG_STAT
             return e
         if kind == "hand_proc":
+            e["cost"] = self.cost([None, "lp", "discard", "banish_gy"], [4, 1, 2, 1])
             e["rng"] = Z_HAND
             e["opt"] = self.pick([OPT_NONE, OPT_NAME])
             mode = self.pick(["own_empty", "op_empty", "cyber", "ally"])
@@ -587,7 +590,7 @@ def clause_value(c):
     mult = {"target": 1.0, "pick": 1.0, "event": 0.9, "self": 0.8, "all": 1.8, "min": 0.9}[sel]
     base = {"destroy": 1.0, "banish": 1.15, "bounce": 0.8, "tograve": 0.9, "tohand": 0.9, "ss": 1.0,
             "atk": abs(c.get("v", 0)) / 1500 * (1.6 if c.get("perm") else 1.0), "def": c.get("v", 0) / 3000,
-            "halve_base": 0.6, "halve": 0.5, "disable": 0.7}[v]
+            "halve_base": 0.6, "halve": 0.5, "disable": 0.7, "indes_battle": 0.6}[v]
     if c.get("lock"):
         base -= 0.1
     if v == "tograve" and c["f"].get("me") == Z_DECK:
@@ -696,6 +699,8 @@ def verb_bricks(c, r):
         return [MODIFY(r, MC_FINAL_ATK, mode=MV_HALF_ATK)]
     if v == "disable":
         return [MODIFY(r, MC_DISABLE)]
+    if v == "indes_battle":
+        return [MODIFY(r, MC_INDES_BATTLE, 0)]
     raise ValueError(v)
 
 
@@ -754,7 +759,7 @@ def bricks(e):
             program.append(FILTER(r,_F(f)))
             if mn > 0: program.append(REQ(r,mn))
             if mx < BIG: program.append(REQ(r,mx,maximum=True))
-        return (core.K_PROC,0,e["opt"],Z_HAND,program,[],[])
+        return (core.K_PROC,0,e["opt"],Z_HAND,program,cost_bricks(e.get("cost")),[])
     if k == "pend":
         return act()
     if k == "cont":
@@ -779,7 +784,7 @@ def bricks(e):
             resolve.append(REQ(out, 1))  # « puis » : seulement si la première clause a touché une carte
         first = False
     if k == "act":
-        return act(cost=cost, target=target, resolve=resolve, on=e["on"], dmg=e["dmg"])
+        return act(cost=cost, target=target, resolve=resolve, on=e["on"], dmg=e["dmg"], opt=e["opt"])
     if k == "ignition":
         return ignition(cost=cost, target=target, resolve=resolve, opt=e["opt"])
     if k == "trigger":

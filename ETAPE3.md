@@ -553,3 +553,17 @@ Banques 0–1, cinq parties chacune, 80 cartes principales / 10 Extra, focus :
 Un défaut ancien de filtre sur SELF après destruction au combat a été révélé
 et corrigé au passage. Bilan complet, provenance et débit :
 `notes/codex-procedures-2026-11-06.md`. Aucun entraînement CPU effectué.
+
+## Paiements des procédures et protection au combat (2026-11-07)
+
+Le générateur et sa bibliothèque Lua produisent les coûts LP, défausse et
+bannissement du cimetière des procédures, ainsi que la protection temporaire
+contre la destruction au combat. Les formes des banques et du modèle restent
+inchangées. Les limites d'activation des magies/pièges générés sont transmises
+aux briques JAX.
+
+Scénarios de paiements : 6/6 parties identiques, avec quatre paiements LP,
+quatre défausses et deux bannissements effectivement joués. Protection générée :
+2/2, 40 résolutions et six attaques vers un monstre protégé. Nouvelle passe
+banques 0–1, cinq parties chacune, 80 cartes principales / 10 Extra, focus :
+10/10. Provenance et détails : `notes/codex-couts-registres-2026-11-06.md`.

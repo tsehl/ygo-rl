@@ -37,6 +37,13 @@ def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), att
             spsum, nodis, fus, rit, zx)
 
 
+class Effects(list):
+    """Effets et propriétés statiques d'une carte, sans consommer d'emplacement d'effet."""
+    def __init__(self, iterable=(), *, revive=0):
+        super().__init__(iterable)
+        self.revive = revive
+
+
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
     return (OP_FILTER, r, f, (0 if within is None else within + 1) | (8 if tgt else 0))
 def SELF(r): return (OP_SELF, r, 0, 0)
@@ -316,7 +323,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                                                RITUAL if ritual is None else ritual)
     c = len(codes)
     subzone = np.zeros(c, np.int32)
-    revive = np.zeros(c, np.int32)
+    revive = np.asarray([getattr(cards.get(code, ()), "revive", 0) for code in codes], np.int32)
     ekind = np.zeros((c, E), np.int32)
     prog = np.zeros((c, E, 3, P, 4), np.int32)
     filt = np.zeros((c, E, NF, FW), np.int32)

@@ -1117,7 +1117,6 @@ def stats(bank, s):
         # continus et temporaires (EFFECT_CANNOT_ATTACK posé par une résolution, Silent Doom…)
         fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0) | (ttgt & (s.tm_code == c)[:, None]).any(0), b, 0)
     fl |= jnp.where((craw & (ccode == MC_NO_SS)[:, None]).any(0), FL_NO_SS, 0)  # carte visée, où qu'elle soit
-    ib = jnp.where(ctgt & (ccode == MC_INDES_BATTLE)[:, None], cval[:, None], BIG).min(0)
     nt = ccode == MC_P_NO_TRAP
     pf = jnp.stack([(nt & ((cval & jnp.where(cp == q, 1, 2)) != 0)).any() for q in (0, 1)]) * PF_NO_TRAP
     # condition redevenue vraie : nouvel id (horloge avancée d'un cran pour tous ceux de ce calcul)
@@ -1132,6 +1131,7 @@ def stats(bank, s):
     tgt = jnp.concatenate([ctgt, ttgt])[o]
     code = jnp.concatenate([ccode, s.tm_code])[o]
     val = jnp.concatenate([jnp.broadcast_to(cval[:, None], (KM, n)), s.tm_v])[o]
+    ib = jnp.where(tgt & (code == MC_INDES_BATTLE)[:, None], val, BIG).min(0)
     single = jnp.concatenate([cself, jnp.ones(TM, bool)])[o]
     sgl = jnp.concatenate([jnp.zeros(KM, bool), jnp.ones(TM, bool)])[o]
     K = KM + TM
@@ -1992,6 +1992,13 @@ def use_count(bank, s, c, e, p):
                       st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
 
 
+def proc_ready(s, card):
+    """Coûts de procédure payés : placement, sans maillon ni registre de groupe persistant."""
+    return s._replace(pend=card, pend_set=jnp.bool_(False), picks=_i(0), psel=_i(0), need=_i(0),
+                      zctx=_i(ZC_PROC), dec=_i(D_ZONE), ch_src=_i(-1), pc=_i(0), pg=_i(0),
+                      ch_lab=_i(0), reg=jnp.zeros_like(s.reg))
+
+
 def begin_act(bank, s, c, e):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
@@ -2057,7 +2064,9 @@ def exec_one(bank, s):
         return _cond(s.ch_k > 0, lambda s: load_link(s, s.ch_k - 1), lambda s: chain_end(bank, s), s)
 
     def end(s):
-        return _switch(s.pg, [lambda s: s._replace(pg=_i(PG_TARGET), pc=_i(0)), lambda s: push_link(bank, s),
+        return _switch(s.pg, [lambda s: s._replace(pg=_i(PG_TARGET), pc=_i(0)),
+                                 lambda s: _cond(bank.ekind[s.cid[h], e] == K_PROC,
+                                                 lambda s: proc_ready(s, h), lambda s: push_link(bank, s), s),
                                  next_link], s)
 
     def pure(s):
@@ -2420,10 +2429,9 @@ def apply(bank, s, a):
         flip = lambda s: begin_act(bank, s._replace(pos=s.pos.at[c].set(P_SFU)), c, e)
         card = bank.ekind[s.cid[c], e] == K_ACTIVATE  # activation de carte (pas un effet de monstre)
         return _switch(jnp.where(card & (s.zone[c] == Z_HAND), 0, jnp.where(card & (s.zone[c] == Z_SZONE), 1, 2)),
-                          [from_hand, flip, lambda s: _cond(bank.ekind[s.cid[c], e] == K_PROC,
-                              lambda s: use_count(bank, s, c, e, p)._replace(pend=c, pend_set=jnp.bool_(False), picks=_i(0), psel=_i(0),
-                                                   zctx=_i(ZC_PROC), dec=_i(D_ZONE)),
-                              lambda s: begin_act(bank, s, c, e), s)], s)
+                          [from_hand, flip, lambda s: _cond((bank.ekind[s.cid[c], e] == K_PROC) &
+                              (bank.prog[s.cid[c], e, PG_TARGET, 0, 0] == OP_END),
+                              lambda s: proc_ready(s, c), lambda s: s, begin_act(bank, s, c, e))], s)
 
     def zone(s):
         z = k - A_ZONE0
@@ -2697,9 +2705,11 @@ def step_batch(bank, s, a, frac=0.0, stats=False):
     s, m, f, _, k = lax.while_loop(more, body, (s, m, f, _i(1), k))
     return (s, m, f, k) if stats else (s, m, f)
 
-def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
+def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_counts=None):
     """deck0/deck1 : [D] index dans la banque, dans l'ordre d'ajout (dernier = dessus du deck).
-    extra0/extra1 : [X] Extra Deck (même taille pour les deux joueurs ; None : aucun), dans l'ordre d'ajout.
+    extra0/extra1 : [X] Extra Deck (même capacité pour les deux joueurs ; None : aucun), dans l'ordre d'ajout.
+    extra_counts : [2] tailles réelles optionnelles (0..X) ; les emplacements restants ont zone=0.
+    Permet une seule compilation pour des Extra Decks de tailles différentes, sans cartes fictives en jeu.
     Rend l'état au début du premier tour, dont la première décision peut être à option unique : l'appelant la joue
     avec step (forced(bank, s) si >= 0), ou tire une action légale (alors la seule).
 
@@ -2715,6 +2725,9 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None):
     owner = jnp.concatenate([jnp.repeat(jnp.arange(2, dtype=I32), d), jnp.repeat(jnp.arange(2, dtype=I32), x)])
     seq = jnp.concatenate([jnp.tile(jnp.arange(d, dtype=I32), 2), jnp.tile(jnp.arange(x, dtype=I32), 2)])
     zone0 = jnp.concatenate([jnp.full(nd, Z_DECK, I32), jnp.full(2 * x, Z_EXTRA, I32)])
+    if extra_counts is not None and x:
+        active_extra = jnp.tile(jnp.arange(x, dtype=I32), 2) < jnp.repeat(jnp.asarray(extra_counts, I32), x)
+        zone0 = zone0.at[nd:].set(jnp.where(active_extra, Z_EXTRA, 0))
     ar = lambda k: jnp.arange(k, dtype=I32)
     uid = jnp.concatenate([ar(d), d + x + ar(d), d + ar(x), 2 * d + x + ar(x)])
     if key is not None:

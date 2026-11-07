@@ -47,6 +47,22 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaises(compare.Inconclusive):
                 compare.translate(None, opt, state, [True] * 100)
 
+    def test_disjoint_effect_ranges_identify_the_effect_without_legality(self):
+        class ForbiddenLegality:
+            def __getitem__(self,key):raise AssertionError("légalité JAX consultée")
+        state=SimpleNamespace(cid=np.array([0]),zone=np.array([compare.core.Z_HAND]),ctrl=np.array([0]),seq=np.array([0]))
+        with patch.dict(compare.DESC,{123:[None,None]}),patch.dict(compare.EFFECT_KINDS,{123:[compare.core.K_IGNITION]*2}), \
+             patch.dict(compare.EFFECT_RANGES,{123:[compare.core.Z_HAND|compare.core.Z_MZONE,compare.core.Z_GRAVE]}):
+            self.assertEqual(compare.translate(None,('activate',123,0,'hand',0,0),state,ForbiddenLegality()),[compare.core.V_ACT0])
+            state.zone[0]=compare.core.Z_GRAVE
+            self.assertEqual(compare.translate(None,('activate',123,0,'grave',0,0),state,ForbiddenLegality()),[compare.core.V_ACT0+1])
+
+    def test_overlapping_effect_ranges_remain_ambiguous(self):
+        state=SimpleNamespace(cid=np.array([0]),zone=np.array([compare.core.Z_MZONE]),ctrl=np.array([0]),seq=np.array([0]))
+        with patch.dict(compare.DESC,{123:[None,None]}),patch.dict(compare.EFFECT_KINDS,{123:[compare.core.K_IGNITION]*2}), \
+             patch.dict(compare.EFFECT_RANGES,{123:[compare.core.Z_MZONE]*2}),self.assertRaises(compare.Inconclusive):
+            compare.translate(None,('activate',123,0,'mzone',0,0),state)
+
     def test_oracle_effect_events(self):
         duel = driver.Duel.__new__(driver.Duel)
         duel.coverage = collections.Counter()

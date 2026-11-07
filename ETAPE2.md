@@ -621,3 +621,19 @@ sa propre carte dans cette fenêtre, avec activations effectives exigées.
 Les formes des banques, de l'état par partie et du modèle sont conservées, sans
 nouveau calcul carte × carte. Contrôles, mesures CPU et limites :
 `notes/codex-procedures-2026-11-06.md`.
+
+## Procédures à coût et protection temporaire (2026-11-07)
+
+Les procédures de main exécutent maintenant leur paiement avant le placement,
+dans le programme cible, sans maillon de chaîne. Le chemin sans paiement reste
+direct. Les groupes conservés entre les callbacks réutilisent les quatre
+registres existants ; aucun tableau d'état supplémentaire. Les paiements qui
+libèrent une zone pleine restent refusés lorsque la condition ne garantissait
+pas déjà une place libre.
+
+Le cache de statistiques inclut les protections temporaires au combat.
+`new_game(..., extra_counts=...)` distingue la capacité réservée et la taille
+réelle de l'Extra Deck, permettant des decks asymétriques sans recompilation.
+La régression complète passe : 1640/1640, obs/vmap/sb, y compris les retours en
+cours de résolution de `step_batch(frac=0.25)`. Bilan, scénarios et débit CPU :
+`notes/codex-couts-registres-2026-11-06.md`.

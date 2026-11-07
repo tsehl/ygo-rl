@@ -141,6 +141,8 @@ def main():
     compare.DESC.update({c: v[4] for c, v in ok.items()})
     compare.EFFECT_EVENTS.clear()
     compare.EFFECT_EVENTS.update({c: [e[1] for e in v[1]] for c, v in ok.items()})
+    compare.EFFECT_RANGES.clear()
+    compare.EFFECT_RANGES.update({c:[e[3] for e in v[1]] for c,v in ok.items()})
     compare.EFFECT_KINDS.clear()
     compare.EFFECT_KINDS.update({c: [e[0] for e in v[1]] for c, v in ok.items()})
     step, legal = jax.jit(core.step), jax.jit(core.legal)
@@ -178,7 +180,7 @@ def main():
         extras = [list(ex), list(ex)]
         t0 = time.time()
         try:
-            out = compare.play(db, bank, cmap, seed, step, legal, verbose=a.verbose, mode="tr", given=(decks, extras))
+            out = compare.play(db, bank, cmap, seed, step, legal, verbose=a.verbose, mode="tr", given=(decks, extras), extra_capacity=15)
         except Exception as e:  # noqa: BLE001
             out = dict(ok=False, status="error", err=f"{type(e).__name__}: {e}")
         out["decks"], out["extras"] = decks, extras

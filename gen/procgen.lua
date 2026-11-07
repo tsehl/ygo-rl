@@ -208,7 +208,7 @@ function PG.verb(cl,g,e,tp)
 		Duel.SendtoGrave(g,REASON_EFFECT)
 	elseif v=="ss" then
 		Duel.SpecialSummon(g,0,tp,tp,false,false,cl.pos)
-	elseif v=="atk" or v=="def" or v=="halve_base" or v=="halve" then
+	elseif v=="atk" or v=="def" or v=="halve_base" or v=="halve" or v=="indes_battle" then
 		--Rush Recklessly, Little Swordsman (rd), Number 17 (rd + perm), Castle Walls, Shrink, Reverse Glasses
 		local c=e:GetHandler()
 		local reset=RESETS_STANDARD_PHASE_END
@@ -219,6 +219,7 @@ function PG.verb(cl,g,e,tp)
 			e1:SetType(EFFECT_TYPE_SINGLE)
 			if v=="atk" then e1:SetCode(EFFECT_UPDATE_ATTACK) e1:SetValue(cl.v)
 			elseif v=="def" then e1:SetCode(EFFECT_UPDATE_DEFENSE) e1:SetValue(cl.v)
+			elseif v=="indes_battle" then e1:SetCode(EFFECT_INDESTRUCTABLE_BATTLE) e1:SetValue(1)
 			elseif v=="halve_base" then e1:SetCode(EFFECT_SET_BASE_ATTACK) e1:SetValue(tc:GetBaseAttack()/2)
 			else e1:SetCode(EFFECT_SET_ATTACK_FINAL) e1:SetValue(tc:GetAttack()/2) end
 			e1:SetReset(reset)
@@ -406,6 +407,7 @@ function PG.effect(c,sp,id,idx)
 			end
 		end
 	elseif k=="hand_proc" then
+		local payment=PG.cost(sp.cost)
 		local e=Effect.CreateEffect(c)
 		e:SetType(EFFECT_TYPE_FIELD)
 		e:SetCode(EFFECT_SPSUMMON_PROC)
@@ -416,12 +418,16 @@ function PG.effect(c,sp,id,idx)
 			if c==nil then return true end
 			local tp=c:GetControler()
 			if Duel.GetLocationCount(tp,LOCATION_MZONE)<=0 then return false end
+			if payment and not payment(e,tp,nil,nil,nil,nil,nil,nil,0) then return false end
 			for _,check in ipairs(sp.counts) do
 				local n=group(check[1],e,tp):GetCount()
 				if n<check[2] or n>check[3] then return false end
 			end
 			return true
 		end)
+		if payment then
+			e:SetOperation(function(e,tp) payment(e,tp,nil,nil,nil,nil,nil,nil,1) end)
+		end
 		c:RegisterEffect(e)
 	elseif k=="ignition" then
 		local e=base(c,sp,id,idx)

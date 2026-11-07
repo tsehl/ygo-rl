@@ -101,6 +101,7 @@ ORACLE_EVENTS = {driver.K[name]: getattr(core, event) for name, event in {
     "EVENT_SPSUMMON_SUCCESS": "EV_SPSUMMON", "EVENT_ATTACK_ANNOUNCE": "EV_ATTACK",
     "EVENT_TO_GRAVE": "EV_TO_GRAVE", "EVENT_BATTLE_DESTROYED": "EV_BATTLE_DESTROYED",
     "EVENT_FLIP": "EV_FLIP", "EVENT_PRE_DAMAGE_CALCULATE": "EV_PRE_DMG"}.items()}
+EFFECT_RANGES = {}  # portées statiques des effets ; utilisées seulement pour ignition / rapide
 EFFECT_KINDS = {}  # types statiques des effets traduits (aucune légalité JAX consultée)
 DESC = {}  # code → description (aux.Stringid) de chaque effet, cartes traduites (translate/validate.py)
 
@@ -131,6 +132,12 @@ def translate(dec, opt, s, m=None, option_index=None):
                     allowed = {core.K_ACTIVATE, core.K_QUICK}
                     allowed |= {core.K_IGNITION} if kind == "activate" else {core.K_TRIG_O, core.K_TRIG_F}
                     es = [e for e in es if kinds[e] in allowed]
+            ranges = EFFECT_RANGES.get(opt[1])
+            kinds = EFFECT_KINDS.get(opt[1])
+            if ranges is not None and kinds is not None and len(ranges) == len(DESC[opt[1]]):
+                source_zone = ZNAME.get(opt[3], 0)
+                es = [e for e in es if kinds[e] not in (core.K_IGNITION,core.K_QUICK) or
+                      ((ranges[e] or (core.Z_MZONE if kinds[e] == core.K_IGNITION else 0)) & source_zone)]
             if len(es) > 1 and dec is not None and "effect_query" in dec.raw:
                 if option_index is None:
                     indices = [j for j, value in enumerate(dec.options) if value == opt]
@@ -178,7 +185,7 @@ def translate(dec, opt, s, m=None, option_index=None):
     if kind in ("cancel", "unpick"):
         return None
     if kind == "finish":  # sélection des matériaux Link terminée (ailleurs : jouée d'office, voir filtered)
-        return [sp(core.A_PASS)] if int(s.psel) in (core.PS_LINK, core.PS_PEND) else []
+        return [sp(core.A_PASS)] if (int(s.psel) in (core.PS_LINK, core.PS_PEND) or bool(core.sel_var(s))) else []
     if kind in ("pass", "no"):
         return [sp(core.A_PASS)]
     if kind == "yes":
@@ -205,7 +212,7 @@ def filtered(dec, s=None):
     """Indices des options retenues (sans annuler / retirer ; « terminer » seul dès qu'il est possible, sauf pendant
     le choix des matériaux Link et des cartes d'une invocation pendule, où « terminer » et ajouter un matériau sont deux choix du joueur)."""
     idx = [i for i, o in enumerate(dec.options) if o[0] not in ("cancel", "unpick")]
-    if s is not None and int(s.psel) in (core.PS_LINK, core.PS_PEND):
+    if s is not None and (int(s.psel) in (core.PS_LINK, core.PS_PEND) or bool(core.sel_var(s))):
         return idx
     if any(dec.options[i][0] == "finish" for i in idx):
         idx = [i for i in idx if dec.options[i][0] == "finish"]
@@ -364,8 +371,8 @@ NEW_GAME = jax.jit(core.new_game)  # sans step : la première décision forcée 
 FORCED = jax.jit(core.forced)
 
 
-def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None, given=None, chooser=None):
-    """given : (decks, extra) imposés (cartes procédurales, gen/compare_gen.py) ; sinon tirés selon le mode."""
+def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=None, given=None, chooser=None, extra_capacity=0):
+    """given : (decks, extra) imposés ; extra_capacity réserve des slots inactifs pour éviter les recompilations."""
     global BANK_CODE, BANK
     BANK_CODE, BANK = bank.code, bank
     rng = random.Random(seed)
@@ -513,8 +520,16 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
         return [dict(code=c, stage=stage, description=desc, count=n)
                 for (c, stage, desc), n in sorted(duel.coverage.items(), key=str)]
     try:
-        ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
-        s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
+        lengths = [len(e) for e in extra]
+        if extra_capacity:
+            if extra_capacity < max(lengths) or extra_capacity > 15:
+                raise ValueError("capacité Extra Deck insuffisante ou supérieure à 15")
+            ex = [jnp.asarray([cmap[c] for c in e]+[0]*(extra_capacity-len(e)),jnp.int32) for e in extra]
+            s = NEW_GAME(bank, jnp.asarray([cmap[c] for c in decks[0]]), jnp.asarray([cmap[c] for c in decks[1]]),
+                         None, *ex, extra_counts=jnp.asarray(lengths,jnp.int32))
+        else:
+            ex = [jnp.array([cmap[c] for c in e], jnp.int32) if e else None for e in extra]
+            s = NEW_GAME(bank, jnp.array([cmap[c] for c in decks[0]]), jnp.array([cmap[c] for c in decks[1]]), None, *ex)
         a0 = int(FORCED(bank, s))
         if a0 >= 0:
             s = step(bank, s, a0)

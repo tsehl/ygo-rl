@@ -33,6 +33,7 @@ def build(codes, fixtures=()):
                         setcode=[cards.setcodes(r[2]) for r in rows],lsc=[r[6]>>24&255 for r in rows],rsc=[r[6]>>16&255 for r in rows],
                         **cards.assemble(codes,cards=effects,ritual={},**recipes))
     compare.DESC.clear();compare.DESC.update(descriptions)
+    compare.EFFECT_RANGES.clear();compare.EFFECT_RANGES.update({c:[e[3] for e in eff] for c,eff in effects.items()})
     compare.EFFECT_KINDS.clear();compare.EFFECT_KINDS.update({c:[e[0] for e in eff] for c,eff in effects.items()})
     compare.EFFECT_EVENTS.clear();compare.EFFECT_EVENTS.update({c:[e[1] for e in eff] for c,eff in effects.items()})
     return db,bank,{c:i for i,c in enumerate(codes)}

@@ -285,3 +285,73 @@ marqués détruits au combat mais encore sur le terrain : les requêtes de group
 et prédicats sur la carte elle-même doivent les voir, tandis que le ciblage les
 exclut. Une fixture minimale vérifie que l'effet FLIP s'active réellement.
 [Bilan, mesures et suite](../notes/codex-procedures-2026-11-06.md).
+
+## Paiements de procédures et registres virtuels (2026-11-06)
+
+Le compilateur peut maintenant conserver un groupe entre `SetTarget` et
+`SetOperation` d'une procédure de main, puis payer son coût avant le placement,
+sans créer de chaîne. Les sélections de groupe simples et de taille variable
+utilisent les décisions existantes. Les contraintes supplémentaires de groupe,
+les annulations et les paiements qui libèrent une zone pleine restent des
+chantiers distincts : les formes non représentées sont refusées.
+
+Les groupes du compilateur ont des registres virtuels. Une passe de liveness
+alloue les quatre registres physiques, élimine les requêtes inutilisées et
+partage les requêtes identiques entre deux mutations. La résolution commence une
+nouvelle époque, car des réponses ont pu modifier le terrain. Les instructions
+qui modifient leur registre conservent son emplacement physique et ne partagent
+pas ce groupe avec une requête indépendante. Les limites de longueur et de
+nombre de filtres sont vérifiées après cette passe.
+
+`GetMatchingGroup` capture désormais ses références au moment de l'appel.
+`Filter`, `FilterSelect`, `FilterCount` et `Clone` travaillent sur ces groupes,
+y compris après un déplacement. Les tests de compte à la résolution sont
+réellement exécutés. Un test de non-vacuité peut être supprimé seulement si son
+bloc ne fait que déplacer le groupe testé : déplacer un groupe vide est déjà
+sans effet.
+
+La validation réserve 15 emplacements d'Extra Deck par joueur, en conservant la
+taille réelle dans `new_game(..., extra_counts=...)`. Les autres emplacements
+ont `zone=0` dès l'initialisation ; ils ne constituent aucune carte en jeu. Une
+seule forme JAX sert ainsi aux différentes tailles et aux Extra Decks
+asymétriques. Le comportement historique sans `extra_counts` est conservé.
+
+```sh
+.venv/bin/python tests/procedure_cost_oracle_check.py
+.venv/bin/python tests/group_semantics_oracle_check.py
+.venv/bin/python tests/procedure_payment_generation_oracle_check.py
+.venv/bin/python tests/procedure_cost_batch_check.py
+.venv/bin/python tests/padded_extra_oracle_check.py
+```
+
+Les procédures rituelles usuelles `AddProcGreaterCode`, `AddProcEqualCode`,
+`AddProcGreater` et `AddProcEqual` réutilisent les instructions rituelles du
+moteur. Un niveau littéral est accepté seulement s'il correspond au niveau
+de tous les monstres nommés dans la base épinglée. Les opérations, matériaux et
+zones personnalisés restent refusés. La limite de réanimation d'un monstre
+rituel sans effet est portée par la carte, sans occuper un emplacement d'effet.
+
+Les protections temporaires contre la destruction au combat sont prises en
+compte dans le cache de statistiques. Le cas qui a révélé le défaut, `Draw
+Muscle`, est rejoué avec les mêmes decks et les mêmes 98 premières décisions
+oracle que dans la campagne divergente. Les scénarios ciblés comptent aussi les
+attaques réellement dirigées vers un monstre protégé.
+
+Deux effets sans description peuvent être distingués par leur portée déclarée
+si leurs types et zones natives suffisent. Le comparateur conserve le refus
+d'ambiguïté lorsque ces métadonnées se recouvrent, sans consulter la légalité JAX.
+
+```sh
+.venv/bin/python tests/translated_ritual_oracle_check.py
+.venv/bin/python tests/draw_muscle_oracle_check.py
+.venv/bin/python tests/replay_draw_muscle_failure.py
+.venv/bin/python tests/temporary_protection_generation_oracle_check.py
+.venv/bin/python tests/disjoint_ranges_oracle_check.py
+```
+
+Catalogue de ce lot : **700 / 13 541**, dont 611 cartes du deck principal et
+89 de l'Extra Deck. Cela décrit la traduction acceptée ; les campagnes mesurent
+séparément les cartes présentes, invoquées et les effets réellement résolus.
+L'activation combinée d'un piège continu et de son effet optionnel initial est
+encore explicitement refusée dans ce lot, en attendant sa représentation dans
+le moteur. [Bilan et provenance](../notes/codex-couts-registres-2026-11-06.md).

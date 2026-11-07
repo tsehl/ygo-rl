@@ -17,6 +17,9 @@ import glob
 import os
 import re
 import sys
+import sqlite3
+from functools import lru_cache
+from contextlib import closing
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", "engine")]
@@ -36,6 +39,19 @@ MON_TYPES = (core.TYPE_MONSTER | core.TYPE_NORMAL | 0x20 | core.TYPE_FUSION | co
              | 0x200000 | 0x400000 | 0x2000000)  # SPIRIT, UNION, GEMINI, TOKEN, FLIP, TOON, SPSUMMON
 SPELL_SUB = 0x10000 | 0x20000 | 0x40000 | 0x80000 | core.TYPE_RITUAL  # QUICKPLAY, CONTINUOUS, EQUIP, FIELD
 TRAP_SUB = 0x20000 | 0x100000
+
+
+@lru_cache(maxsize=1)
+def card_metadata():
+    path = os.path.join(HERE, "..", "data", "BabelCDB", "cards.cdb")
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
+        return {code:(typ,level&255) for code,typ,level in db.execute("SELECT id,type,level FROM datas")}
+
+
+def card_type(code):
+    row = card_metadata().get(code)
+    need(row is not None, "type de carte absent pour EnableReviveLimit")
+    return row[0]
 
 
 class Unsupported(Exception):
@@ -356,7 +372,7 @@ class Prog:
 
     def reg(self):
         r = self.tr.nreg
-        need(r < core.R, "plus de 4 registres")
+        need(r < 256, "plus de 256 registres virtuels")
         self.tr.nreg += 1
         return r
 
@@ -509,6 +525,10 @@ class Translator:
                      "Fusion.RegisterSummonEff : options")
                 regs.append(("fusion_spell",))
                 return
+            if d in ("Ritual.AddProcGreaterCode", "Ritual.AddProcEqualCode", "Ritual.AddProcGreater", "Ritual.AddProcEqual"):
+                need(st.args and isinstance(self.ie_val(st.args[0], env), Handler), "rituel : carte source")
+                regs.append(self.ritual_procedure(d, st.args[1:], env))
+                return
             if d == "Pendulum.AddProcedure":
                 regs.append(("pendulum",))
                 return
@@ -518,6 +538,32 @@ class Translator:
                 return
             raise Unsupported(f"initial_effect : {d}")
         raise Unsupported(f"initial_effect : instruction {type(st).__name__}")
+
+    def ritual_procedure(self, name, args, env):
+        values = [self.ie_val(a, env) for a in args]
+        mode = core.RIT_GREATER if "Greater" in name else core.RIT_EQUAL
+        fl = Filt()
+        if name.endswith("Code"):
+            need(len(values) >= 3, "rituel : noms manquants")
+            level, desc, *codes = values
+            need(1 <= len(codes) <= 2 and all(type(c) is int and c > 0 for c in codes), "rituel : noms")
+            apply_method(fl, "IsCode", codes)
+        else:
+            values += [None] * max(0,3-len(values))
+            filter_, level, desc, *options = values
+            need(all(v is None for v in options), "rituel : matériaux, opération ou emplacement personnalisé")
+            self.apply_fn(fl, filter_, [], env)
+        need(level is None or type(level) is int, "rituel : niveau calculé")
+        if level is not None:
+            # Constant folding valide pour les données épinglées et les niveaux statiques
+            # du moteur. Les effets modifiant les niveaux restent refusés par le traducteur.
+            codes = fl.d["code"]
+            need(codes and all(c > 0 and card_metadata().get(c,(0,-1))[1] == level for c in codes),
+                 "rituel : niveau fixé différent du niveau des monstres")
+        need(desc is None or type(desc) is int, "rituel : description")
+        fl.set("typ", core.TYPE_RITUAL)
+        f = list(fl.build(core.Z_HAND, 0));f[core.F_RIT] = mode
+        return ("ritual_spell", tuple(f), mode, 1171 if desc is None else desc)
 
     # ------------------------------------------------ procédures d'invocation (Extra Deck)
     def mat_fn(self, node, env):
@@ -595,6 +641,14 @@ class Translator:
     # ------------------------------------------------ effet → briques
     def translate(self):
         regs = self.effects()
+        plain_activation = any(isinstance(e, Effect) and e.f.get("SetType") == [K["EFFECT_TYPE_ACTIVATE"]]
+                               and e.f.get("SetCode") == [K["EVENT_FREE_CHAIN"]]
+                               and not any(k in e.f for k in ("SetCost","SetTarget","SetOperation")) for e in regs)
+        other_field_effect = any(isinstance(e, Effect) and isinstance(e.f.get("SetType",[0])[0], int) and
+                                 isinstance(e.f.get("SetRange",[0])[0], int) and e.f.get("SetType",[0])[0] & (K["EFFECT_TYPE_QUICK_O"] | K["EFFECT_TYPE_TRIGGER_O"] | K["EFFECT_TYPE_TRIGGER_F"])
+                                 and e.f.get("SetRange",[0])[0] & core.Z_SZONE for e in regs)
+        need(not (plain_activation and other_field_effect and card_type(self.code) == (core.TYPE_TRAP | core.TYPE_CONTINUOUS)),
+             "activation combinée d'un piège continu")
         hand_procs = [e for e in regs if isinstance(e, Effect) and e.f.get("SetCode") == [K["EFFECT_SPSUMMON_PROC"]]]
         need(len(hand_procs) <= 1, "plusieurs procédures de main")
         self.revive = int(("revive",) in regs)
@@ -624,14 +678,21 @@ class Translator:
                                               C.FUSMAT(2, 1), C.MOVE(2), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF)]))
                     self.descs.append(None)
                     continue
+                if e[0] == "ritual_spell":
+                    _, f, mode, desc = e
+                    out.append(C.act(target=[C.FILTER(0,f),C.REQ(0,1)],
+                                     resolve=[C.FILTER(0,f),C.CHOOSE(1,0,1),C.RITMAT(2,1,mode),
+                                              C.MOVE(2),C.SPSUMMON(1,core.P_FU_ATK|core.P_FU_DEF,True)]))
+                    self.descs.append(desc)
+                    continue
                 if e[0] == "pendulum":
                     out.append(C.act())
                     self.descs.append(None)
                     continue
-                if self.proc is not None or hand_procs:  # EnableReviveLimit d'un monstre à procédure (erl vient de la recette)
+                if self.proc is not None or hand_procs or card_type(self.code) & core.TYPE_RITUAL:  # limite portée par la carte
                     continue
                 raise Unsupported("monstre à invocation limitée (EnableReviveLimit)")
-            compiled = self.effect(e)
+            compiled = self.allocate(self.effect(e))
             # Clones SINGLE équivalents pour les trois types d'invocation, mutuellement exclusifs
             # pour cette carte au même point d'événement. Les compteurs par effet restent distincts.
             # Aucun regroupement FIELD ou arbitraire.
@@ -649,7 +710,7 @@ class Translator:
                 out.append(compiled)
                 self.descs.append(e.desc)
         need(len(out) <= core.E, f"plus de {core.E} effets")
-        return out
+        return C.Effects(out, revive=self.revive) if self.revive else out
 
     def flag(self, e, k):
         return (e.f.get("SetProperty", [0])[0] or 0) & K[k]
@@ -684,14 +745,14 @@ class Translator:
         for k in ("SetLabel", "SetLabelObject", "SetValue", "SetTargetRange", "SetReset", "SetAbsoluteRange"):
             need(k not in f or T("EFFECT_TYPE_SINGLE") or T("EFFECT_TYPE_FIELD"), f"effet : {k}")
         if code == K["EFFECT_SPSUMMON_PROC"]:
-            # Les procédures sans coût réutilisent le VM de conditions, mais jamais une chaîne.
+            # Conditions et paiements réutilisent le VM ; les procédures ne créent jamais de chaîne.
             need(typ == K["EFFECT_TYPE_FIELD"] and f.get("SetRange") == [core.Z_HAND],
                  "procédure : type / zone")
             need(f.get("SetProperty", [0])[0] & ~(K["EFFECT_FLAG_UNCOPYABLE"] | K["EFFECT_FLAG_CANNOT_DISABLE"]) == 0,
                  "procédure : propriétés")
-            need(not any(k in f for k in ("SetTarget", "SetCost", "SetOperation", "SetReset",
+            need(not any(k in f for k in ("SetCost", "SetReset",
                                          "SetTargetRange", "SetAbsoluteRange", "SetLabel", "SetLabelObject")),
-                 "procédure : coût, opération ou limite")
+                 "procédure : coût séparé ou métadonnées non représentés")
             need(f.get("SetValue", [0]) == [0], "procédure : type d'invocation")
             self.nreg = 0
             self.on = 0
@@ -724,8 +785,45 @@ class Translator:
                     self.stmt(st, env, prog, cond=True)
                 self.check(body[-1].values[0], env, prog, cond=True)
                 self.flush(prog)
-            need(len(prog.ins) <= core.PT, "procédure : condition trop longue")
-            return (core.K_PROC, 0, self.count_limit(f), core.Z_HAND, prog.ins, [], [], {"revive": int(self.revive)})
+            self.in_proc = True
+            self.label_object = None
+            self.hreg = self.egreg = None
+            self.tinfo = {}
+            self.treg = None
+            target = Prog(self, "target")
+            operation = Prog(self, "resolve")
+            try:
+                for method, program in (("SetTarget", target), ("SetOperation", operation)):
+                    if method in f:
+                        fn = f[method][0]
+                        need(isinstance(fn, Fn) and fn.node is not None and len(fn.node.args) <= 9,
+                             "procédure : callback complexe")
+                        env = self.fn_env(fn.node)
+                        if len(fn.node.args) == 9:
+                            env[fn.node.args[8].id] = Handler()
+                        self.block(fn.node.body.body, env, program)
+                        self.flush(program)
+            finally:
+                self.in_proc = False
+            payment = target.ins + operation.ins
+            # Les paiements qui pourraient libérer une zone demandent un contrôle dédié.
+            # Ils sont admis ici seulement si la condition exige déjà une zone libre.
+            zones = {}
+            field_payment = False
+            for op, a, b, cc in payment:
+                if op == core.OP_FILTER:
+                    within, _ = cc
+                    zones[a] = (b[0] | b[1]) if within is None else zones.get(within, ALLZ) & (b[0] | b[1])
+                elif op == core.OP_SELF:
+                    zones[a] = core.Z_HAND
+                elif op == core.OP_CHOOSE:
+                    zones[a] = zones.get(b, ALLZ)
+                elif op == core.OP_MOVE:
+                    field_payment |= bool(zones.get(a, ALLZ) & core.Z_MZONE)
+            require_free = any(op == core.OP_REQ_FREE and b == core.Z_MZONE and cc >= 1
+                               for op, a, b, cc in prog.ins)
+            need(not field_payment or require_free, "procédure : zone libérée par le paiement")
+            return (core.K_PROC, 0, self.count_limit(f), core.Z_HAND, prog.ins, payment, [], {"revive": int(self.revive)})
         if code == K["EFFECT_FUSION_SUBSTITUTE"]:
             need(typ == K["EFFECT_TYPE_SINGLE"] and not f.get("SetProperty", [0])[0], "substitut : type / propriétés")
             need(not any(k in f for k in ("SetValue", "SetRange", "SetCountLimit", "SetReset")), "substitut : valeur / portée dynamique")
@@ -967,6 +1065,112 @@ class Translator:
         v = v[0]
         return v.name if isinstance(v, Fn) else None
 
+    @staticmethod
+    def vfilter(r, f, within=None, tgt=False):
+        # Ne pas empaqueter le registre virtuel dans les trois bits de l'ISA.
+        return (core.OP_FILTER, r, f, (within, bool(tgt)))
+
+    @staticmethod
+    def allocate(effect):
+        """SSA puis allocation des groupes vivants aux quatre registres physiques.
+
+        Les requêtes identiques sont partagées seulement sans mutation intermédiaire.
+        La résolution ouvre une nouvelle époque : des réponses ont pu changer le terrain.
+        Aucun changement aux formes de l'état JAX ni aux programmes du générateur.
+        """
+        if not any(effect[4:7]):
+            return effect
+        pure = {core.OP_FILTER, core.OP_SELF, core.OP_MINATK, core.OP_EVENT,
+                core.OP_CHAINCARD, core.OP_ATTACKER}
+        definitions = pure | {core.OP_CHOOSE, core.OP_FUSMAT, core.OP_RITMAT}
+        read_a = {core.OP_REQ, core.OP_MOVE, core.OP_SPSUMMON, core.OP_LOCK,
+                  core.OP_MODIFY, core.OP_LABEL}
+        read_b = {core.OP_MINATK, core.OP_CHOOSE, core.OP_FUSMAT, core.OP_RITMAT}
+        # Tout opcode susceptible d'observer/altérer une décision invalide les requêtes.
+        predicates = {core.OP_REQ, core.OP_REQ_FREE, core.OP_COND_CHAIN, core.OP_COND_TURN,
+                      core.OP_COND_EVP, core.OP_COND_SELF, core.OP_COND_LABEL,
+                      core.OP_COND_PHASE, core.OP_COND_ATK, core.OP_LABEL}
+        mutated = {a for program in effect[4:7] for op,a,b,c in program
+                   if op == core.OP_SPSUMMON or op == core.OP_MOVE and c == 1}
+        current, queries, entries = {}, {}, []
+        next_value = 0
+        for phase, program in enumerate(effect[4:7]):
+            if phase == core.PG_RESOLVE:
+                queries.clear()
+            for op, a, b, c in program:
+                operands = [a, b, c]
+                reads = {}
+                if op in read_a:
+                    reads[0] = current[a]
+                if op in read_b:
+                    reads[1] = current[b]
+                if op == core.OP_FILTER:
+                    within, target = c
+                    if within is not None:
+                        reads[2] = current[within]
+                    operands[2] = target
+                elif op == core.OP_DAMAGE and c:
+                    reads[2] = current[c-1]
+                writes = op in definitions or op == core.OP_SPSUMMON or (op == core.OP_MOVE and c == 1)
+                key = (op, b, operands[2], tuple(sorted(reads.items())))
+                reusable = op == core.OP_REQ or op in pure and a not in mutated
+                if reusable and key in queries:
+                    if op in pure:
+                        current[a] = queries[key]
+                    continue
+                value = None
+                if writes:
+                    value = next_value
+                    next_value += 1
+                    current[a] = value
+                entries.append((phase, op, operands, reads, value))
+                if reusable:
+                    queries[key] = value
+                elif op not in predicates:
+                    queries.clear()
+        # Supprimer les résultats purs inutilisés ; les sélections restent observables.
+        live, kept = set(), []
+        for entry in reversed(entries):
+            phase, op, operands, reads, value = entry
+            if op in pure and value not in live:
+                continue
+            if value is not None:
+                live.discard(value)
+            live.update(reads.values())
+            kept.append(entry)
+        kept.reverse()
+        last = {v: i for i, entry in enumerate(kept) for v in entry[3].values()}
+        slots, programs = {}, [[], [], []]
+        for i, (phase, op, operands, reads, value) in enumerate(kept):
+            lowered = operands.copy()
+            for index, v in reads.items():
+                need(v in slots, "registre virtuel non initialisé")
+                lowered[index] = slots[v]
+            # Les opérandes sont lus avant l'écriture, autorisant dst == src.
+            slots = {v: slot for v, slot in slots.items() if last.get(v, -1) > i}
+            if value is not None:
+                free = sorted(set(range(core.R)) - set(slots.values()))
+                need(bool(free), "plus de 4 registres vivants")
+                inplace = op == core.OP_SPSUMMON or op == core.OP_MOVE and operands[2] == 1
+                destination = lowered[0] if inplace else free[0]
+                need(destination not in slots.values(), "mutation d’un groupe partagé")
+                lowered[0] = destination
+                if last.get(value, -1) > i:
+                    slots[value] = destination
+            if op == core.OP_FILTER:
+                lowered[2] = ((lowered[2]+1) if 2 in reads else 0) | (8 if operands[2] else 0)
+            elif op == core.OP_DAMAGE and 2 in reads:
+                lowered[2] += 1
+            programs[phase].append((op, *lowered))
+        for phase, program in enumerate(programs):
+            limit = core.P-1 if phase == core.PG_RESOLVE else core.PT
+            need(len(program) <= limit, f"programme {phase} > {limit} instructions")
+        filters = {ins[2] for program in programs for ins in program if ins[0] == core.OP_FILTER}
+        if len(effect) > 7:
+            filters.update(effect[7].get("filters", ()))
+        need(len(filters) <= core.NF, f"plus de {core.NF} filtres")
+        return (*effect[:4], *programs, *effect[7:])
+
     def programs(self, e, on, cond_skip=False):
         f = e.f
         self.on = on
@@ -990,9 +1194,6 @@ class Translator:
         if "SetOperation" in f:
             self.run_fn(f["SetOperation"][0], res)
         self.flush(res)
-        for p in (cost, tgt):
-            need(len(p.ins) <= core.PT, f"programme {p.kind} > {core.PT} instructions")
-        need(len(res.ins) <= core.P, f"résolution > {core.P} instructions")
         return cost.ins, tgt.ins, res.ins
 
     # ------------------------------------------------ fonctions connues (Cost.*, aux.*)
@@ -1011,7 +1212,7 @@ class Translator:
             need(isinstance(b[0], int) and b[1] in (None, b[0]) and b[2] is None, "Cost.DetachFromSelf variable")
             r = prog.reg()
             r2 = prog.reg()
-            prog.emit(C.FILTER(r, C.F(me=core.Z_OVERLAY)), C.CHOOSE(r2, r, b[0]), C.MOVE(r2))
+            prog.emit(self.vfilter(r, C.F(me=core.Z_OVERLAY)), C.CHOOSE(r2, r, b[0]), C.MOVE(r2))
             return
         if name == "Cost.SelfBanish":
             r = prog.reg()
@@ -1061,7 +1262,7 @@ class Translator:
 
     def emit_check(self, chk, prog):
         r = prog.reg()
-        prog.emit(C.FILTER(r, chk["F"], tgt=chk["tgt"]), C.REQ(r, chk["n"]))
+        prog.emit(self.vfilter(r, chk["F"], tgt=chk["tgt"]), C.REQ(r, chk["n"]))
         chk["used"] = True
 
     # ------------------------------------------------ instructions
@@ -1088,6 +1289,9 @@ class Translator:
         if isinstance(st, (A.Call, A.Invoke)):
             self.expr(st, env, prog, statement=True)
             return
+        if isinstance(st, A.Return) and getattr(self, "in_proc", False) and len(st.values) == 1:
+            need(isinstance(st.values[0], A.TrueExpr), "procédure : retour conditionnel non représenté")
+            return "stop"
         if isinstance(st, A.Return) and not st.values:
             return "stop"
         if isinstance(st, A.Forin) and len(st.targets) == 1 and len(st.iter) == 1:
@@ -1111,13 +1315,21 @@ class Translator:
         # if chk==0 then return COND end
         if isinstance(t, A.EqToOp) and isinstance(t.left, A.Name) and isinstance(env.get(t.left.id), Arg) \
                 and env[t.left.id].name == "chk":
-            need(st.orelse is None, "chk==0 avec else")
+            need(st.orelse is None or isinstance(st.orelse, A.Block), "chk==0 avec elseif")
             b = st.body.body
             need(len(b) == 1 and isinstance(b[0], A.Return) and len(b[0].values) == 1, "chk==0 : forme")
             need(prog.kind in ("cost", "target"), "chk==0 hors coût / cible")
             self.check(b[0].values[0], env, prog)
+            if st.orelse is not None:
+                return self.block(st.orelse.body, env, prog)
             return
         body = st.body.body
+        if getattr(self, "in_proc", False):
+            if isinstance(t, A.ULNotOp) and self.is_name(t.operand, env, Reg) and len(body) == 1 and isinstance(body[0], A.Return) and not body[0].values:
+                return  # un groupe étiqueté et conservé existe toujours à ce stade
+            if st.orelse is None and body and isinstance(body[-1], A.Return) and len(body[-1].values) == 1 and isinstance(body[-1].values[0], A.TrueExpr):
+                self.check(t, env, prog)
+                return self.block(body, env, prog)
         src = self.show(t)
         if st.orelse is None and all(self.ignorable(b) for b in body):
             return
@@ -1130,6 +1342,16 @@ class Translator:
             self.res_cond(t, env, prog, negate=True)
             return
         need(st.orelse is None, "if … else")
+        # Un MOVE sur un groupe vide est déjà une opération vide. Cette preuve locale
+        # permet de garder les instructions après le if (Morphing Jar), sans présumer
+        # qu'un test de non-vacuité autorise aussi un Draw/Damage constant.
+        if isinstance(t, A.GreaterThanOp) and isinstance(t.right, A.Number) and t.right.n == 0:
+            source = t.left.operand if isinstance(t.left, A.ULengthOP) else (t.left.source if isinstance(t.left, A.Invoke) and t.left.func.id == "GetCount" else None)
+            if isinstance(source, A.Name) and isinstance(env.get(source.id), (Reg,Lazy,EventGroup)) and all(
+                    self.ignorable(st) or isinstance(st, A.Call) and dotted(st.func) in
+                    ("Duel.SendtoGrave", "Duel.SendtoHand", "Duel.Remove", "Duel.Destroy", "Duel.Release") and
+                    st.args and isinstance(st.args[0], A.Name) and st.args[0].id == source.id for st in body):
+                return self.block(body, env, prog)
         # if COND then BODY end : la résolution s'arrête si COND est faux ; seulement si rien ne suit
         need(prog.kind == "resolve" or self.always_true(t, env), f"if dans {prog.kind}")
         if not self.always_true(t, env):
@@ -1141,10 +1363,7 @@ class Translator:
         return isinstance(st, A.Call) and dotted(st.func) in IGNORED_CALLS
 
     def always_true(self, t, env):
-        """#g>0, g:GetCount()>0, tc, tc and tc:IsRelateToEffect(e)… : vrais dès que la suite a quelque chose à faire."""
-        if isinstance(t, A.GreaterThanOp) and isinstance(t.right, A.Number) and t.right.n == 0:
-            x = t.left
-            return isinstance(x, A.ULengthOP) or (isinstance(x, A.Invoke) and x.func.id == "GetCount")
+        """Présence d’une référence / relation implicite ; les comptes de groupe restent des tests réels."""
         if isinstance(t, A.Name):
             return isinstance(env.get(t.id), (Reg, Handler))
         if isinstance(t, A.Invoke) and t.func.id == "IsRelateToEffect":
@@ -1169,6 +1388,15 @@ class Translator:
             act = self.action_test(x, env, prog)
             if act:
                 continue
+            if isinstance(x, (A.EqToOp, A.NotEqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessThanOp, A.LessOrEqThanOp)) and isinstance(x.right, A.Number) and (
+                    isinstance(x.left, A.ULengthOP) or
+                    isinstance(x.left, A.Name) and isinstance(env.get(x.left.id), Count) or
+                    isinstance(x.left, A.Invoke) and x.left.func.id in ("GetCount", "FilterCount") or
+                    isinstance(x.left, A.Call) and dotted(x.left.func) in ("Duel.GetMatchingGroupCount", "Duel.GetFieldGroupCount")):
+                value = self.expr(x.left, env, prog)
+                if isinstance(value, Count):
+                    self.count_check(value, type(x), x.right.n, prog, negate=negate)
+                    continue
             # tc:IsFaceup() etc. : restreint le registre
             v = self.term_var(x, env)
             if v is not None and not negate:
@@ -1191,7 +1419,7 @@ class Translator:
             for x in xs:
                 self.filter_term(fl, x, env, cvar=name)
             r = prog.reg()
-            prog.emit(C.FILTER(r, fl.build(reg.me, reg.op), within=reg.r))
+            prog.emit(self.vfilter(r, fl.build(reg.me, reg.op), within=reg.r))
             env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler)
             if reg is self.egreg:
                 self.egreg = env[name]
@@ -1205,7 +1433,7 @@ class Translator:
                 apply_method(fl, m, [self.expr(a, env, prog) for a in args])
             base = self.as_reg(Handler(), prog)
             r = prog.reg()
-            prog.emit(C.FILTER(r, fl.build(self.hz[0], 0), within=base.r))
+            prog.emit(self.vfilter(r, fl.build(self.hz[0], 0), within=base.r))
             self.hreg = Reg(r, self.hz[0], 0, True, handler=True)
             for k, v in env.items():
                 if isinstance(v, Handler):
@@ -1263,7 +1491,7 @@ class Translator:
             x = x.left
         if isinstance(x, A.ULNotOp):
             x = x.operand
-        if isinstance(x, A.Invoke) and isinstance(x.source, A.Name) and isinstance(env.get(x.source.id), Reg):
+        if isinstance(x, A.Invoke) and isinstance(x.source, A.Name) and isinstance(env.get(x.source.id), Reg) and x.func.id not in ("GetCount", "FilterCount", "IsExists"):
             return x.source.id
         return None
 
@@ -1283,7 +1511,7 @@ class Translator:
             for x in xs:
                 self.filter_term(fl, x, env, cvar=name)
             r = prog.reg()
-            prog.emit(C.FILTER(r, fl.build(reg.me, reg.op), within=reg.r, tgt=fl.tgt), C.REQ(r, 1))
+            prog.emit(self.vfilter(r, fl.build(reg.me, reg.op), within=reg.r, tgt=fl.tgt), C.REQ(r, 1))
             env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler)
             if reg is self.egreg:
                 self.egreg = env[name]
@@ -1297,6 +1525,22 @@ class Translator:
             if self.is_name(src, env, Handler):
                 return x.func.id, x.args
         return None
+
+    def count_check(self, value, comparator, n, prog, negate=False):
+        need(value.mul == 1 and type(n) is int, "comparaison de compte pondéré")
+        if negate:
+            comparator = {A.EqToOp:A.NotEqToOp, A.NotEqToOp:A.EqToOp,
+                          A.GreaterThanOp:A.LessOrEqThanOp, A.GreaterOrEqThanOp:A.LessThanOp,
+                          A.LessThanOp:A.GreaterOrEqThanOp, A.LessOrEqThanOp:A.GreaterThanOp}[comparator]
+        reg = self.as_reg(value.reg, prog)
+        if comparator == A.NotEqToOp:
+            need(n == 0, "compte différent d'une constante non nulle")
+            prog.emit(C.REQ(reg.r, 1))
+            return
+        if comparator in (A.EqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp) and (n > 0 or comparator != A.EqToOp):
+            prog.emit(C.REQ(reg.r, n + int(comparator == A.GreaterThanOp)))
+        if comparator in (A.EqToOp, A.LessThanOp, A.LessOrEqThanOp):
+            prog.emit(C.REQ(reg.r, n - int(comparator == A.LessThanOp), maximum=True))
 
     def check_term(self, x, env, prog, cond):
         hc = self.handler_call(x, env)
@@ -1322,11 +1566,11 @@ class Translator:
                 fl = Filt()
                 apply_method(fl, m, [self.expr(a, env, prog) for a in args])
                 r = prog.reg()
-                prog.emit(C.SELF(r), C.FILTER(r, fl.build(ALLZ, ALLZ), within=r), C.REQ(r, 1))
+                prog.emit(C.SELF(r), self.vfilter(r, fl.build(ALLZ, ALLZ), within=r), C.REQ(r, 1))
                 return
             raise Unsupported(f"condition : c:{m}")
         # eg:IsExists(f, n, ex, ...) : au moins n cartes de l'événement passent le filtre
-        if isinstance(x, A.Invoke) and self.is_name(x.source, env, EventGroup) and x.func.id == "IsExists":
+        if isinstance(x, A.Invoke) and isinstance(x.source, A.Name) and isinstance(env.get(x.source.id), (EventGroup,Reg,Lazy)) and x.func.id == "IsExists":
             a = x.args
             eg = self.as_reg(env[x.source.id], prog)
             fl = Filt()
@@ -1335,17 +1579,26 @@ class Translator:
                 need(isinstance(self.expr(a[2], env, None), Handler), "eg:IsExists : exclusion")
                 fl.set("not_self", 1)
             r = prog.reg()
-            prog.emit(C.FILTER(r, fl.build(ALLZ, ALLZ), within=eg.r), C.REQ(r, self.cnum(a[1], env)))
+            prog.emit(self.vfilter(r, fl.build(ALLZ, ALLZ), within=eg.r), C.REQ(r, self.cnum(a[1], env)))
             return
         if isinstance(x, A.Call):
             d = dotted(x.func)
             a = x.args
+            if d == "aux.SelectUnselectGroup":
+                need(len(a) >= 7 and isinstance(self.expr(a[2], env, None), Player) and
+                     self.expr(a[5], env, None) is None and self.cnum(a[6], env) == 0,
+                     "SelectUnselectGroup : contrainte de groupe")
+                group = self.as_reg(self.expr(a[0], env, prog), prog)
+                mn, mx = self.cnum(a[3], env), self.cnum(a[4], env)
+                need(1 <= mn <= mx <= 15, "SelectUnselectGroup : taille")
+                prog.emit(C.REQ(group.r, mn))
+                return
             if d == "Duel.IsPlayerCanDraw":
                 p = self.expr(a[0], env, prog)
                 n = self.cnum(a[1], env) if len(a) > 1 else 1
                 need(isinstance(p, Player), "IsPlayerCanDraw")
                 r = prog.reg()
-                prog.emit(C.FILTER(r, C.F(me=core.Z_DECK) if p.p == ME else C.F(op=core.Z_DECK)), C.REQ(r, n))
+                prog.emit(self.vfilter(r, C.F(me=core.Z_DECK) if p.p == ME else C.F(op=core.Z_DECK)), C.REQ(r, n))
                 return
             if d in ("Duel.IsExistingMatchingCard", "Duel.IsExistingTarget"):
                 f, p, s, o, n, ex = a[0], a[1], a[2], a[3], a[4], a[5] if len(a) > 5 else None
@@ -1378,17 +1631,11 @@ class Translator:
         if lc is not None:
             prog.emit(C.REQ_FREE(*lc))
             return
-        if isinstance(x, (A.EqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessThanOp, A.LessOrEqThanOp)):
+        if isinstance(x, (A.EqToOp, A.NotEqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessThanOp, A.LessOrEqThanOp)):
             if isinstance(x.right, A.Number):
                 value = self.expr(x.left, env, prog)
                 if isinstance(value, Count):
-                    need(value.mul == 1 and type(x.right.n) is int, "comparaison de compte pondéré")
-                    reg = self.as_reg(value.reg, prog)
-                    n = x.right.n
-                    if isinstance(x, (A.EqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp)) and (n > 0 or not isinstance(x, A.EqToOp)):
-                        prog.emit(C.REQ(reg.r, n + int(isinstance(x, A.GreaterThanOp))))
-                    if isinstance(x, (A.EqToOp, A.LessThanOp, A.LessOrEqThanOp)):
-                        prog.emit(C.REQ(reg.r, n - int(isinstance(x, A.LessThanOp)), maximum=True))
+                    self.count_check(value, type(x), x.right.n, prog)
                     return
         # tour : Duel.GetTurnPlayer()==tp / ~=tp
         if isinstance(x, (A.EqToOp, A.NotEqToOp)):
@@ -1592,6 +1839,15 @@ class Translator:
             if node.id == "id":
                 return self.code
             raise Unsupported(f"filtre : nom {node.id}")
+        if isinstance(node, A.UMinusOp):
+            value = self.fexpr(node.operand, env)
+            need(type(value) is int, "opposé d'une valeur non constante")
+            return -value
+        if isinstance(node, A.BAndOp):
+            left = self.fexpr(node.left, env)
+            right = self.fexpr(node.right, env)
+            need(type(left) is int and type(right) is int, "conjonction bit à bit non constante")
+            return left & right
         if isinstance(node, A.Number):
             return node.n
         if isinstance(node, (A.TrueExpr, A.FalseExpr)):
@@ -1616,6 +1872,15 @@ class Translator:
             if node.id == "id":
                 return self.code
             raise Unsupported(f"nom {node.id}")
+        if isinstance(node, A.UMinusOp):
+            value = self.expr(node.operand, env, prog)
+            need(type(value) is int, "opposé d'une valeur non constante")
+            return -value
+        if isinstance(node, A.BAndOp):
+            left = self.expr(node.left, env, prog)
+            right = self.expr(node.right, env, prog)
+            need(type(left) is int and type(right) is int, "conjonction bit à bit non constante")
+            return left & right
         if isinstance(node, A.Number):
             return node.n
         if isinstance(node, (A.TrueExpr, A.FalseExpr)):
@@ -1670,7 +1935,7 @@ class Translator:
             return v
         if isinstance(v, Lazy):
             r = prog.reg()
-            prog.emit(C.FILTER(r, v.F))
+            prog.emit(self.vfilter(r, v.F))
             return Reg(r, v.F[0], v.F[1])
         if isinstance(v, Handler):
             if self.hreg is not None:
@@ -1712,7 +1977,7 @@ class Translator:
         # mn < mx : sélection de taille variable (le joueur s'arrête quand il veut après mn cartes). Au moins une carte
         # (le pilote de l'oracle ne propose l'ensemble vide qu'avec une annulation possible)
         lo = max(mn, 1)
-        prog.emit(C.FILTER(r, F_, tgt=tgt), C.CHOOSE(r2, r, mx, who=sp.p, upto=upto or (mn == 0),
+        prog.emit(self.vfilter(r, F_, tgt=tgt), C.CHOOSE(r2, r, mx, who=sp.p, upto=upto or (mn == 0),
                                                      mn=lo if lo < mx else None))
         return r2
 
@@ -1764,8 +2029,8 @@ class Translator:
                 F_, _ = self.mkfilter(A.Nil(), [], args[0], args[1], args[2], None, env)
             else:
                 F_, _ = self.mkfilter(args[0], args[5:], args[1], args[2], args[3], args[4] if len(args) > 4 else None, env)
-            lz = Lazy(F_)
-            return Count(lz) if d.endswith("Count") else lz
+            group = self.as_reg(Lazy(F_), prog) if prog is not None else Lazy(F_)
+            return Count(group) if d.endswith("Count") else group
         if d == "Duel.SelectMatchingCard" or d == "Duel.SelectTarget":
             sp = E_(0)
             tgt = d == "Duel.SelectTarget"
@@ -1853,6 +2118,18 @@ class Translator:
             return NewEff()
         if d in BOUND_FNS:
             return Fn(name=d, bound=[self.expr(a, env, prog) for a in args])
+        if d == "aux.SelectUnselectGroup":
+            need(getattr(self, "in_proc", False) and len(args) >= 7, "SelectUnselectGroup hors procédure")
+            need(E_(5) is None and E_(6) == 1, "SelectUnselectGroup : contrainte de groupe")
+            need(all(E_(i) is None for i in (9,10) if i < len(args)),
+                 "SelectUnselectGroup : fin / interruption conditionnelle")
+            player, mn, mx = E_(7) if len(args) > 7 and E_(7) is not None else E_(2), E_(3), E_(4)
+            need(isinstance(player, Player) and all(type(x) is int for x in (mn,mx)) and 1 <= mn <= mx <= 15,
+                 "SelectUnselectGroup : taille / joueur")
+            group = self.as_reg(E_(0), prog)
+            r = prog.reg()
+            prog.emit(C.CHOOSE(r,group.r,mx,who=player.p,mn=mn if mn<mx else None))
+            return Reg(r,group.me,group.op,mx==1)
         if d == "Duel.GetLocationCount":
             need(len(args) == 2, "GetLocationCount : options")
             player, zone = E_(0), E_(1)
@@ -1868,6 +2145,52 @@ class Translator:
         else:
             obj = self.expr(src, env, prog)
         args = node.args
+        if getattr(self, "in_proc", False):
+            if isinstance(obj, Eff) and m == "SetLabelObject":
+                need(len(args) == 1, "SetLabelObject : arguments")
+                self.label_object = self.as_reg(self.expr(args[0],env,prog),prog)
+                return None
+            if isinstance(obj, Eff) and m == "GetLabelObject":
+                need(self.label_object is not None and not args, "GetLabelObject sans groupe conservé")
+                return self.label_object
+            if isinstance(obj, (Reg,Lazy)) and m in ("KeepAlive","DeleteGroup"):
+                need(not args, "durée de groupe : arguments")
+                return None
+        if isinstance(obj, (Reg, Lazy, EventGroup)) and m in ("Filter", "FilterSelect", "FilterCount"):
+            selecting = m == "FilterSelect"
+            offset = int(selecting)
+            need(len(args) >= (5 if selecting else 2), "Group.Filter : arguments")
+            source = self.as_reg(obj, prog)
+            fl = Filt()
+            fv = self.expr(args[offset], env, None)
+            ex_index = 4 if selecting else 1
+            extra = [self.expr(a, env, None) for a in args[ex_index+1:]]
+            self.apply_fn(fl, fv, extra, env)
+            excluded = self.expr(args[ex_index], env, None)
+            need(excluded is None or isinstance(excluded, Handler), "Group.Filter : exclusion d'une autre carte")
+            if excluded is not None:
+                fl.set("not_self", 1)
+            r = prog.reg()
+            # Un groupe conserve ses références, même si une carte a changé de zone.
+            prog.emit(self.vfilter(r, fl.build(ALLZ | core.Z_OVERLAY, ALLZ | core.Z_OVERLAY), within=source.r, tgt=fl.tgt))
+            result = Reg(r, source.me & fl.loc, source.op & fl.loc)
+            if not selecting:
+                return Count(result) if m == "FilterCount" else result
+            player, mn, mx = [self.expr(args[i], env, prog) for i in (0,2,3)]
+            need(isinstance(player, Player) and type(mn) is int and type(mx) is int and 1 <= mn <= mx <= 15,
+                 "Group.FilterSelect : taille / joueur")
+            selected = prog.reg()
+            prog.emit(C.CHOOSE(selected, r, mx, who=player.p, mn=mn if mn<mx else None))
+            return Reg(selected, result.me, result.op, mx==1)
+        if isinstance(obj, (Reg,Lazy)) and m == "Select":
+            values=[self.expr(a,env,prog) for a in args]
+            need(len(values) >= 3 and (len(values)==3 or values[3] is None), "Group.Select : exclusion")
+            player,mn,mx=values[:3]
+            need(isinstance(player,Player) and type(mn) is int and type(mx) is int and 1 <= mn <= mx <= 15,
+                 "Group.Select : taille / joueur")
+            source=self.as_reg(obj,prog);r=prog.reg()
+            prog.emit(C.CHOOSE(r,source.r,mx,who=player.p,mn=mn if mn<mx else None))
+            return Reg(r,source.me,source.op,mx==1)
         if isinstance(obj, Eff) and m == "GetHandler":
             return Handler()
         if isinstance(obj, Eff) and m == "GetHandlerPlayer":
@@ -1878,7 +2201,13 @@ class Translator:
             return ChainEff(card=True)
         if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "GetFirst":
             return self.as_reg(obj, prog)
-        if isinstance(obj, (Reg, Lazy)) and m == "GetCount":
+        if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "Clone":
+            need(not args, "Group.Clone : arguments")
+            source = self.as_reg(obj, prog)
+            r = prog.reg()
+            prog.emit(self.vfilter(r, C.F(me=ALLZ | core.Z_OVERLAY, op=ALLZ | core.Z_OVERLAY), within=source.r))
+            return Reg(r, source.me, source.op, source.one)
+        if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "GetCount":
             return Count(obj)
         if isinstance(obj, (Reg, Lazy)) and m == "Iter":
             return self.as_reg(obj, prog)
@@ -1948,12 +2277,15 @@ class Translator:
                  mc == core.MC_BASE_ATK, "modificateur : moitié et code")
             val = 0
         need(isinstance(val, int), "modificateur : valeur variable")
+        if mc == core.MC_INDES_BATTLE:
+            need(val == 1, "modificateur : INDESTRUCTABLE_BATTLE valeur")
+            val = 0  # seuil ATK=0 : protection inconditionnelle, y compris contre une ATK nulle
         reg = self.as_reg(obj, prog)
         if isinstance(obj, Reg) and obj.handler:
             self_ = True
         elif self_:
             r = prog.reg()
-            prog.emit(C.FILTER(r, C.F(me=core.Z_MZONE, pos=core.P_FACEUP), within=reg.r))
+            prog.emit(self.vfilter(r, C.F(me=core.Z_MZONE, pos=core.P_FACEUP), within=reg.r))
             reg = Reg(r)
         if mc == core.MC_DISABLE:
             # EFFECT_DISABLE est toujours suivi d'EFFECT_DISABLE_EFFECT : un seul MODIFY

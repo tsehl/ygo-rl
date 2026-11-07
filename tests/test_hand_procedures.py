@@ -9,8 +9,8 @@ import jax
 import jax.numpy as jnp
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT/'engine'), str(ROOT/'translate')]
-import core, cards, translate as T
+sys.path[:0] = [str(ROOT/'engine'), str(ROOT/'translate'), str(ROOT/'gen')]
+import core, cards, translate as T, fuzz
 
 
 class HandProceduresTests(unittest.TestCase):
@@ -99,6 +99,51 @@ class HandProceduresTests(unittest.TestCase):
         self.assertEqual(effects[1][1],(1<<core.EV_SUMMON)|(1<<core.EV_SPSUMMON))
         self.assertEqual(effects[1][2],core.OPT_NAMEK)
 
+    def test_fixed_extra_capacity_masks_padding_before_initialization(self):
+        initialize=jax.jit(core.new_game)
+        cache_before=initialize._cache_size()
+        deck=jnp.ones(40,jnp.int32);extra=jnp.zeros(3,jnp.int32)
+        for counts in ((0,0),(1,0),(1,2),(3,3)):
+            state=initialize(self.bank,deck,deck,None,extra,extra,extra_counts=jnp.asarray(counts,jnp.int32))
+            self.assertEqual(state.cid.shape,(86,))
+            for player,count in enumerate(counts):
+                self.assertEqual(int(((state.zone==core.Z_EXTRA)&(state.ctrl==player)).sum()),count)
+            missing=6-sum(counts)
+            self.assertEqual(int((state.zone==0).sum()),missing)
+            self.assertEqual(int(((state.zone==0)&(state.pzone!=0)).sum()),0)
+            self.assertFalse(bool((state.proc&(state.zone==0)).any()))
+        self.assertEqual(initialize._cache_size(),cache_before+1)
+
+    def test_padding_does_not_hide_lost_or_reactivated_cards(self):
+        deck=jnp.ones(40,jnp.int32);extra=jnp.zeros(3,jnp.int32)
+        state=jax.jit(core.new_game)(self.bank,deck,deck,None,extra,extra,extra_counts=jnp.asarray([1,2]))
+        padding=state.zone==0
+        check=jax.jit(lambda state,pad:fuzz.check(self.bank,state,padding_mask=pad)[0])
+        self.assertEqual(int(check(state,padding)),0)
+        lost=state._replace(zone=state.zone.at[0].set(0))
+        self.assertTrue(int(check(lost,padding))&(1<<11))
+        revived=state._replace(zone=state.zone.at[jnp.argmax(padding)].set(core.Z_HAND))
+        self.assertTrue(int(check(revived,padding))&(1<<11))
+
+    def test_temporary_battle_protection_applies_and_expires(self):
+        state=self.state._replace(zone=self.state.zone.at[0].set(core.Z_MZONE),pos=self.state.pos.at[0].set(core.P_FU_DEF),
+                                  tm_n=jnp.int32(1),tm_code=self.state.tm_code.at[0].set(core.MC_INDES_BATTLE),
+                                  tm_m=self.state.tm_m.at[0,0].set(True),tm_v=self.state.tm_v.at[0,0].set(0))
+        compute=jax.jit(core.stats)
+        self.assertEqual(int(compute(self.bank,state)[4][0]),0)
+        state=state._replace(tm_m=state.tm_m.at[0,0].set(False))
+        self.assertEqual(int(compute(self.bank,state)[4][0]),core.BIG)
+
+    def test_draw_muscle_uses_the_unconditional_battle_threshold(self):
+        effects,*_=T.translate(41367003)
+        protection=[ins for ins in effects[0][6] if ins[0]==core.OP_MODIFY]
+        self.assertEqual(len(protection),1)
+        self.assertEqual(protection[0][3],0)
+
+    def test_combined_continuous_trap_activation_is_refused_until_represented(self):
+        with self.assertRaisesRegex(T.Unsupported,"activation combinée"):
+            T.translate(1802450)
+
     def test_unsupported_procedure_is_refused(self):
         source='''local s,id=GetID()
 function s.initial_effect(c)
@@ -106,7 +151,7 @@ local e=Effect.CreateEffect(c)
 e:SetType(EFFECT_TYPE_FIELD)
 e:SetCode(EFFECT_SPSUMMON_PROC)
 e:SetRange(LOCATION_HAND)
-e:SetOperation(function() end)
+e:SetOperation(function(e,tp) Duel.SelectOption(tp,1,2) end)
 c:RegisterEffect(e)
 end'''
         with tempfile.TemporaryDirectory() as tmp:

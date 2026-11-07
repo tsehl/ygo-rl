@@ -37,13 +37,17 @@ WARN = ["plus de KM effets continus actifs", "plus de TM modificateurs temporair
 ZONES = (Z_DECK, Z_HAND, Z_GRAVE, Z_REMOVED, Z_EXTRA, Z_MZONE, Z_SZONE)
 
 
-def check(bank, s):
+def check(bank, s, padding_mask=None):
     """(violations, avertissements) : masques de bits pour l'état s (après une décision)."""
     n = s.cid.shape[0]
     zi = jnp.full(n, -1)
     for i, z in enumerate(ZONES):
         zi = jnp.where(s.zone == z, i, zi)
     known = (zi >= 0) | (s.zone == Z_OVERLAY)
+    padding_changed = jnp.bool_(False)
+    if padding_mask is not None:
+        known |= padding_mask & (s.zone == 0)
+        padding_changed = (padding_mask & (s.zone != 0)).any()
     fieldz = (s.zone == Z_MZONE) | (s.zone == Z_SZONE)
     grp = s.ctrl * len(ZONES) + jnp.maximum(zi, 0)
     inz = zi >= 0
@@ -71,7 +75,7 @@ def check(bank, s):
     stuck = live & ((s.dec == D_RUN) | (s.dec == D_TRIG) | (s.dec == D_NONE))
     who_bad = ((s.ctrl < 0) | (s.ctrl > 1) | (s.owner < 0) | (s.owner > 1)).any()
     nolegal = live & ~core.legal(bank, s).any()
-    v = [nolegal, dup, seq_bad, bad_ord, ov_bad, ex_bad, lp_bad, ch_bad, pos_bad, stuck, who_bad, ~known.all()]
+    v = [nolegal, dup, seq_bad, bad_ord, ov_bad, ex_bad, lp_bad, ch_bad, pos_bad, stuck, who_bad, ~known.all() | padding_changed]
     ncand = jnp.where(live, core.act_cand(bank, s).sum(), 0)
     w = [(s.ovf & 1) != 0, (s.ovf & 2) != 0, (s.ovf & 4) != 0, (s.opt_cid != 0).all(-1).any(),
          (s.lock_cid != 0).all(-1).any(), ncand > KC]
