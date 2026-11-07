@@ -32,10 +32,16 @@ function s.initial_effect(c)
     local e=Effect.CreateEffect(c)
     e:SetDescription(aux.Stringid(id,6))
     e:SetType(EFFECT_TYPE_IGNITION)
-    e:SetRange(LOCATION_MZONE)
+    e:SetRange(COST_RANGE)
     e:SetCost(function(e,tp,eg,ep,ev,re,r,rp,chk)
-      if chk==0 then return e:GetHandler():IsReleasable() end
-      Duel.Release(e:GetHandler(),REASON_COST)
+      local c=e:GetHandler()
+      if c:IsLocation(LOCATION_HAND) then
+        if chk==0 then return c:IsAbleToGraveAsCost() end
+        Duel.SendtoGrave(c,REASON_COST)
+      else
+        if chk==0 then return c:IsReleasable() end
+        Duel.Release(c,REASON_COST)
+      end
     end)
     e:SetOperation(function() end)
     c:RegisterEffect(e)
@@ -60,6 +66,7 @@ end
 CASES=[('destroy','Duel.Destroy(g,REASON_EFFECT)',False,{0,1}),
        ('send','Duel.SendtoGrave(g,REASON_EFFECT)',False,{0}),
        ('release_cost','',True,{2,3}),
+       ('hand_cost','',True,{2}),
        ('battle','',False,{1,4}),
        ('pendulum_redirect','Duel.Destroy(g,REASON_EFFECT)',False,{0,1})]
 with tempfile.TemporaryDirectory() as folder:
@@ -67,7 +74,7 @@ with tempfile.TemporaryDirectory() as folder:
     for name,action,cost,expected in CASES:
         is_pendulum=name=='pendulum_redirect'
         db.rows[PROBE]=(PROBE,)+(monster[:2]+(monster[2]|0x1000000,)+monster[3:] if is_pendulum else monster)
-        source=probe.replace('COST_TEST','true' if cost else 'false')
+        source=probe.replace('COST_TEST','true' if cost else 'false').replace('COST_RANGE','LOCATION_HAND' if name=='hand_cost' else 'LOCATION_MZONE')
         if is_pendulum:source=source.replace('EVENT_TO_GRAVE','EVENT_TO_DECK')
         (path/f'c{PROBE}.lua').write_text(source)
         (path/f'c{SPELL}.lua').write_text(spell.replace('ACTION',action or 'return'))
