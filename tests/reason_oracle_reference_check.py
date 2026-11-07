@@ -17,7 +17,7 @@ db=driver.CardDB()
 db.add({PROBE:(monster,'Reason probe'),SPELL:(spell,'Reason action'),NORMAL:(normal,'Normal')})
 probe='''local s,id=GetID()
 function s.initial_effect(c)
-  local masks={REASON_EFFECT,REASON_DESTROY,REASON_COST,REASON_RELEASE,REASON_BATTLE}
+  local masks={REASON_EFFECT,REASON_DESTROY,REASON_COST,REASON_RELEASE,REASON_BATTLE,REASON_REDIRECT}
   for i,mask in ipairs(masks) do
     local e=Effect.CreateEffect(c)
     e:SetDescription(aux.Stringid(id,i-1))
@@ -30,7 +30,7 @@ function s.initial_effect(c)
   end
   if COST_TEST then
     local e=Effect.CreateEffect(c)
-    e:SetDescription(aux.Stringid(id,5))
+    e:SetDescription(aux.Stringid(id,6))
     e:SetType(EFFECT_TYPE_IGNITION)
     e:SetRange(LOCATION_MZONE)
     e:SetCost(function(e,tp,eg,ep,ev,re,r,rp,chk)
@@ -60,11 +60,16 @@ end
 CASES=[('destroy','Duel.Destroy(g,REASON_EFFECT)',False,{0,1}),
        ('send','Duel.SendtoGrave(g,REASON_EFFECT)',False,{0}),
        ('release_cost','',True,{2,3}),
-       ('battle','',False,{1,4})]
+       ('battle','',False,{1,4}),
+       ('pendulum_redirect','Duel.Destroy(g,REASON_EFFECT)',False,{0,1})]
 with tempfile.TemporaryDirectory() as folder:
     path=Path(folder);driver.SCRIPTS.insert(0,folder)
     for name,action,cost,expected in CASES:
-        (path/f'c{PROBE}.lua').write_text(probe.replace('COST_TEST','true' if cost else 'false'))
+        is_pendulum=name=='pendulum_redirect'
+        db.rows[PROBE]=(PROBE,)+(monster[:2]+(monster[2]|0x1000000,)+monster[3:] if is_pendulum else monster)
+        source=probe.replace('COST_TEST','true' if cost else 'false')
+        if is_pendulum:source=source.replace('EVENT_TO_GRAVE','EVENT_TO_DECK')
+        (path/f'c{PROBE}.lua').write_text(source)
         (path/f'c{SPELL}.lua').write_text(spell.replace('ACTION',action or 'return'))
         for seed in (2600,2601):
             actual=set();actions=0
@@ -77,7 +82,7 @@ with tempfile.TemporaryDirectory() as folder:
                     for code,stage,desc in duel.coverage:
                         if code==PROBE and stage=='resolved' and desc is not None:
                             idx=int(desc)&0xfffff
-                            if idx<5:actual.add(idx)
+                            if idx<6:actual.add(idx)
                     if duel.turn>=4 and actual.issuperset(expected):break
                     choice=None
                     for kind in ('chain','activate','summon','attack','to_bp','to_ep','pass'):
