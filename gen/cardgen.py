@@ -461,6 +461,19 @@ class Gen:
         ct = TYPE_TRAP | {"normal": 0, "cont": TYPE_CONTINUOUS, "counter": TYPE_COUNTER}[sub]
         c = self.base(ct)
         if sub == "cont":
+            if self.p(0.25):
+                for _ in range(20):
+                    e = dict(kind="quick", on=0, opt=self.pick([OPT_NAME, OPT_CARD]), optional=False,
+                             rng=Z_SZONE, dmg=0, conds=[],
+                             cost=self.cost([None, "lp", "discard", "tribute"], [4, 1, 1, 1]),
+                             clauses=self.clauses(dict(kind="quick", zone=Z_SZONE)))
+                    e['refund'] = e['opt'] == OPT_NAME and self.p(0.5)
+                    if fits(e) and value(e) <= CARD_CAP:
+                        break
+                a = dict(kind="act", on=0, opt=0, optional=False, rng=0, dmg=0,
+                         conds=[], cost=None, clauses=[], inline=2)
+                c["effects"] = [a, e]
+                return c
             e = self.effect("cont", c)
             a = dict(kind="act", on=0, opt=0, optional=False, rng=0, dmg=0, conds=[], clauses=[],
                      cost=("lp", 1000) if e["cont"]["code"] == MC_DISABLE else None)
@@ -784,14 +797,20 @@ def bricks(e):
             resolve.append(REQ(out, 1))  # « puis » : seulement si la première clause a touché une carte
         first = False
     if k == "act":
-        return act(cost=cost, target=target, resolve=resolve, on=e["on"], dmg=e["dmg"], opt=e["opt"])
-    if k == "ignition":
-        return ignition(cost=cost, target=target, resolve=resolve, opt=e["opt"])
-    if k == "trigger":
-        return trigger(e["on"], cost=cost, target=target, resolve=resolve, optional=e["optional"], opt=e["opt"] == OPT_NAME)
-    if k == "quick":
-        return quick(e["rng"], cost=cost, target=target, resolve=resolve, opt=e["opt"] if e["opt"] else False, on=e["on"])
-    raise ValueError(k)
+        result = act(cost=cost, target=target, resolve=resolve, on=e["on"], dmg=e["dmg"], opt=e["opt"])
+        if e.get("inline"):
+            result = (*result[:7], dict(result[7], inline=e["inline"]))
+    elif k == "ignition":
+        result = ignition(cost=cost, target=target, resolve=resolve, opt=e["opt"])
+    elif k == "trigger":
+        result = trigger(e["on"], cost=cost, target=target, resolve=resolve, optional=e["optional"], opt=e["opt"] == OPT_NAME)
+    elif k == "quick":
+        result = quick(e["rng"], cost=cost, target=target, resolve=resolve, opt=e["opt"] if e["opt"] else False, on=e["on"])
+    else:
+        raise ValueError(k)
+    if e.get('refund'):
+        result = (*result[:7], dict(result[7], refund=1))
+    return result
 
 
 def fits(e):
@@ -835,6 +854,9 @@ def to_bank(cset):
         elif kind == "ritual":
             rec["ritual"][c["code"]] = (c["atk"], c["df"], c["lv"])
     asm = cards.assemble(codes, cards=effects, **rec)
+    # Forme stable même si cette banque n'a tiré aucun piège à activation combinée.
+    if not asm['einline'].shape[1]:
+        asm['einline'] = np.zeros((len(cset), E), np.int32)
     sc = np.zeros((len(cset), NSET), np.int32)
     for i, c in enumerate(cset):
         sc[i, :len(c["setc"])] = c["setc"]
@@ -844,7 +866,8 @@ def to_bank(cset):
                           rsc=[c["rsc"] for c in cset], **asm)
     tp = bank.tprog
     pad = 2 * PT - tp.shape[2]
-    return bank._replace(tprog=jnp.pad(tp, ((0, 0), (0, 0), (0, pad), (0, 0))))
+    return bank._replace(tprog=jnp.pad(tp, ((0, 0), (0, 0), (0, pad), (0, 0))),
+                         erefund=bank.erefund if bank.erefund.shape[1] else jnp.zeros_like(bank.ekind))
 
 
 def is_extra(c):

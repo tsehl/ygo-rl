@@ -140,9 +140,9 @@ class HandProceduresTests(unittest.TestCase):
         self.assertEqual(len(protection),1)
         self.assertEqual(protection[0][3],0)
 
-    def test_combined_continuous_trap_activation_is_refused_until_represented(self):
-        with self.assertRaisesRegex(T.Unsupported,"activation combinée"):
-            T.translate(1802450)
+    def test_combined_continuous_trap_activation_carries_the_optional_effect(self):
+        effects, *_ = T.translate(1802450)
+        self.assertEqual(effects[0][7]['inline'], 2)
 
     def test_unsupported_procedure_is_refused(self):
         source='''local s,id=GetID()

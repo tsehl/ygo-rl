@@ -189,6 +189,24 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(compare.translate(dec,option,state,option_index=1),[compare.core.V_ACT0])
         self.assertEqual(calls,[0,1])
 
+    def test_description_94_alone_does_not_identify_an_inline_question(self):
+        state=SimpleNamespace(cid=np.array([0]),zone=np.array([compare.core.Z_SZONE]),
+            ctrl=np.array([0]),seq=np.array([0]),dec=compare.core.D_CHAIN,zctx=compare.core.ZC_ACT)
+        option=('chain',123,0,'szone',0,94)
+        dec=SimpleNamespace(msg=driver.K['MSG_SELECT_EFFECTYN'])
+        with patch.dict(compare.DESC,{123:[94]}),patch.dict(compare.EFFECT_KINDS,{123:[compare.core.K_QUICK]}):
+            self.assertEqual(compare.translate(dec,option,state),[compare.core.V_ACT0])
+
+    def test_inline_question_verifies_the_pending_source(self):
+        state=SimpleNamespace(cid=np.array([0,0]),zone=np.array([compare.core.Z_SZONE]*2),
+            ctrl=np.array([0,0]),seq=np.array([0,1]),dec=compare.core.D_YESNO,zctx=compare.core.ZC_INLINE,ch_src=0)
+        dec=SimpleNamespace(msg=driver.K['MSG_SELECT_EFFECTYN'])
+        with patch.object(compare,'BANK_CODE',np.array([123])):
+            self.assertEqual(compare.translate(dec,('chain',123,0,'szone',0,94),state),
+                             [compare.core.special(2,compare.core.A_YES)])
+            with self.assertRaises(compare.Mismatch):
+                compare.translate(dec,('chain',123,0,'szone',1,94),state)
+
 
     def test_inspector_recovers_a_truncated_build_stamp(self):
         import build_inspector

@@ -332,6 +332,8 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
     erng = np.zeros((c, E), np.int32)
     emod = np.zeros((c, E, MW), np.int32)
     edmg = np.zeros((c, E), np.int32)
+    einline = np.zeros((c, E), np.int32)
+    erefund = np.zeros((c, E), np.int32)
     for i, code in enumerate(codes):
         for e, (kind, on, opt, rng, *progs) in enumerate(cards.get(code, ())):
             ekind[i, e] = kind
@@ -341,6 +343,8 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             extra = progs[3] if len(progs) > 3 else {}
             progs = progs[:3]
             edmg[i, e] = extra.get("dmg", 0)
+            einline[i, e] = extra.get("inline", 0)
+            erefund[i, e] = extra.get("refund", 0)
             revive[i] |= extra.get("revive", 0)
             fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte ou condition)
             for k, v in extra.get("mod", {}).items():
@@ -397,6 +401,8 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             assert all(f[j] == dflt[j] for j in range(len(f)) if j not in core.MAT_FIELDS + (core.F_LOC_ME,)), code
             lmat[i] = f
     return dict(ekind=ekind, prog=prog, filt=filt, etrig=etrig, eopt=eopt, erng=erng, emod=emod, edmg=edmg,
+                einline=einline if einline.any() else np.zeros((c, 0), np.int32),
+                erefund=erefund if erefund.any() else np.zeros((c, 0), np.int32),
                 fmat=fmat, fmn=fmn, fsub=fsub, submat=(subzone[:, None] if subzone.any() else np.zeros((c, 0), np.int32)), erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct, lmat=lmat, lmin=lmin, lmax=lmax,
                 lneed=lneed, ldiff=ldiff)
 

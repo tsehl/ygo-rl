@@ -352,6 +352,34 @@ d'ambiguïté lorsque ces métadonnées se recouvrent, sans consulter la légali
 Catalogue de ce lot : **700 / 13 541**, dont 611 cartes du deck principal et
 89 de l'Extra Deck. Cela décrit la traduction acceptée ; les campagnes mesurent
 séparément les cartes présentes, invoquées et les effets réellement résolus.
-L'activation combinée d'un piège continu et de son effet optionnel initial est
-encore explicitement refusée dans ce lot, en attendant sa représentation dans
-le moteur. [Bilan et provenance](../notes/codex-couts-registres-2026-11-06.md).
+[Bilan et provenance](../notes/codex-couts-registres-2026-11-06.md).
+
+## Activation initiale des pièges continus et compteurs (2026-11-07)
+
+Le moteur représente la question native 94 : accepter l'effet initial d'un
+piège continu remplace l'effet du même maillon, en conservant la nature
+d'activation de carte. Refuser ne consomme pas le compteur de l'autre effet.
+La traduction accepte une activation sans callbacks et un seul effet rapide
+libre depuis la zone magie/piège. Les autres compositions sont refusées.
+
+Les compteurs `EFFECT_COUNT_CODE_OATH` sont remis lorsque l'activation est niée,
+au chargement du maillon concerné ; une simple annulation d'effet ne les remet
+pas. Les métadonnées et la nature du maillon sont visibles par le réseau.
+Les anciens checkpoints sont compatibles avec une extension nulle des poids.
+
+Le programme de test dérivé fusionne les bornes de compte avec les filtres et
+ignore les candidats inactifs par une borne de boucle nulle. Le bytecode de
+résolution et les quatre registres physiques sont conservés. Les nouvelles
+variantes de pièges sont aussi produites par le générateur et sa bibliothèque
+Lua, à formes de banques fixes.
+
+```sh
+.venv/bin/python tests/inline_activation_oracle_check.py
+.venv/bin/python tests/inline_responses_oracle_check.py
+.venv/bin/python tests/inline_generation_oracle_check.py
+.venv/bin/python tests/refundable_count_oracle_check.py
+.venv/bin/python tests/inline_batch_check.py
+```
+
+Catalogue : **701 / 13 541**, avec Sealing Ceremony of Mokuton et aucune perte.
+[Scénarios, coût et validation](../notes/codex-pieges-compteurs-2026-11-07.md).

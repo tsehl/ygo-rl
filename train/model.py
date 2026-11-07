@@ -100,7 +100,7 @@ def block(p, x, mask, h):
 
 F_INS = 3 * (1 + NBITS)                       # a, b, c
 F_FILT = FW * (1 + NBITS)
-F_EFF = 32 + 3 * 8 + MW * (1 + NBITS)         # etrig, eopt, erng, edmg (bits) ; emod
+F_EFF = 32 + 3 * 8 + MW * (1 + NBITS) + 3     # etrig, eopt, erng, edmg ; emod ; inline, remboursement
 F_HEAD = 3 + 32 + 8 + 32 + NSET * NBITS + 9 + 2 + 8 + FK   # stats, ctype, attr, race, setcode, flèches, échelles, procédures
 N_MATF = FK + 2 + 1 + 1                        # filtres de matériaux : fusion, synchro (2), Xyz, Link
 
@@ -113,8 +113,10 @@ def card_tokens(bank):
         bits(bank.setcode, NBITS).reshape(bank.setcode.shape[0], -1), bits(bank.lmark, 9), sl(bank.lsc), sl(bank.rsc),
         sl(bank.fmn), sl(bank.xct), sl(bank.lmin), sl(bank.lmax), sl(bank.lneed), sl(bank.ldiff), sl(bank.syn), sl(bank.erl), bits(bank.fsub, FK),
     ], -1)
+    inline = bank.einline if bank.einline.shape[1] else jnp.zeros_like(bank.ekind)
+    refund = bank.erefund if bank.erefund.shape[1] else jnp.zeros_like(bank.ekind)
     eff = jnp.concatenate([bits(bank.etrig, 32), bits(bank.eopt, 8), bits(bank.erng, 8), bits(bank.edmg, 8),
-                           ifeat(bank.emod).reshape(bank.emod.shape[:2] + (-1,))], -1)        # [C, E, F_EFF]
+                           ifeat(bank.emod).reshape(bank.emod.shape[:2] + (-1,)), bits(inline, 2), bits(refund, 1)], -1)
     prog = bank.prog                                                                          # [C, E, 3, P, 4]
     ins_op = prog[..., 0]
     ins = ifeat(prog[..., 1:]).reshape(prog.shape[:-1] + (-1,))                               # [C, E, 3, P, F_INS]
@@ -164,7 +166,12 @@ def encode_cards(p, tok, msk, heads=4):
     elif p["head"]["w"].shape[0] != F_HEAD:
         raise ValueError("dimension d'en-tête de checkpoint incompatible")
     x_head = dense(p["head"], head)[:, None]
-    x_eff = dense(p["eff"], tok["eff"]) + p["kind"][jnp.clip(tok["ekind"], 0, N_KIND - 1)] + pe
+    eff = tok["eff"]
+    if p["eff"]["w"].shape[0] == F_EFF - 3:
+        eff = eff[..., :-3]
+    elif p["eff"]["w"].shape[0] != F_EFF:
+        raise ValueError("dimension d'effet de checkpoint incompatible")
+    x_eff = dense(p["eff"], eff) + p["kind"][jnp.clip(tok["ekind"], 0, N_KIND - 1)] + pe
     x_ins = (dense(p["ins"], tok["ins"]) + p["op"][jnp.clip(tok["ins_op"], 0, N_OPS - 1)]
              + pe[:, None, None] + p["pos_g"][:, None] + p["pos_i"])
     x_filt = dense(p["filt"], tok["filt"]) + pe[:, None] + p["pos_f"]
@@ -183,7 +190,7 @@ def encode_cards(p, tok, msk, heads=4):
 
 # ---------------------------------------------------------------------------------------------------- politique
 
-F_DYN = 3 + 8 + 16 + 4 + 17 + 1 + (CH + 1) + 1 + 1   # atk/df/niveau, zone, seq, position, statuts, mien, chaîne, nié, en cours
+F_DYN = 3 + 8 + 16 + 4 + 17 + 1 + (CH + 1) + 1 + 1 + 1
 F_GLOB = 2 + 2 + N_PHASE + 3 + N_DEC + 1 + 8 + 1 + 12  # LP, tour, phase, flags, décision, need, zctx, chaîne, compteurs
 
 
@@ -192,7 +199,8 @@ def dyn_feats(o):
     zone = bits(o.zone, 8)
     return jnp.concatenate([sl(o.atk), sl(o.df), sl(o.level), zone, onehot(o.seq, 16), bits(o.pos, 4), bits(o.st, 17),
                             o.mine[..., None].astype(jnp.float32), onehot(o.chain, CH + 1),
-                            o.negated[..., None].astype(jnp.float32), o.pending[..., None].astype(jnp.float32)], -1)
+                            o.negated[..., None].astype(jnp.float32), o.pending[..., None].astype(jnp.float32),
+                            o.card_activation[..., None].astype(jnp.float32)], -1)
 
 
 def glob_feats(o):
@@ -216,7 +224,12 @@ def init(k, d=128, card_layers=2, layers=3):
 def policy(p, cemb, o, heads=4):
     """o : Obs (engine/obs.py) d'un lot [..]. Rend (logits [.., T*NV + N_SPECIAL] masqués, valeur [..])."""
     known = o.known[..., None]
-    x = jnp.where(known, cemb[jnp.clip(o.cid, 0, cemb.shape[0] - 1)], p["unk"]) + dense(p["dyn"], dyn_feats(o))
+    dyn = dyn_feats(o)
+    if p["dyn"]["w"].shape[0] == F_DYN - 1:
+        dyn = dyn[..., :-1]
+    elif p["dyn"]["w"].shape[0] != F_DYN:
+        raise ValueError("dimension dynamique de checkpoint incompatible")
+    x = jnp.where(known, cemb[jnp.clip(o.cid, 0, cemb.shape[0] - 1)], p["unk"]) + dense(p["dyn"], dyn)
     g = dense(p["glob"], glob_feats(o))[..., None, :]
     x = jnp.concatenate([g, x], -2)
     m = jnp.concatenate([jnp.ones(o.valid.shape[:-1] + (1,), bool), o.valid], -1)

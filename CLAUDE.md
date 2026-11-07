@@ -51,7 +51,10 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 
 - Lot coûts / groupes / rituels (`codex`, 2026-11-07) : **700 / 13 541** cartes traduites (+128, aucune perte), **59 tests unitaires**, deux campagnes traduites **30/30** (graines 166–195 et 196–225), **1640/1640 historiques**, obs/vmap/sb propres, générées **10/10**. Coûts des procédures exécutés sans chaîne, allocation des groupes virtuels vers les quatre registres, snapshots de groupes, rituels usuels, Extra Decks asymétriques sans recompilation. Protection temporaire au combat corrigée et divergence Draw Muscle rejouée avec le même préfixe natif. CPU uniquement : médiane 373 → 349 décisions/s (−6,4 %), optimisation poursuivie séparément. Sources et résultats : `notes/codex-couts-registres-2026-11-06.md`. La suite pièges continus / compteurs OATH est développée séparément et n'est pas comprise dans ce lot.
 
+- Pièges continus / compteurs (`codex`, 2026-11-07) : **701 cartes**, **73 tests**, **30/30** traduites (graines 226–255), **1640/1640 historiques**, obs/vmap/sb propres. L'effet initial optionnel conserve un seul maillon et sa nature d'activation de carte. Les compteurs OATH sont rendus au chargement d'une activation niée ; une annulation d'effet ne suffit pas. Générateur et modèles adaptés, anciens checkpoints vérifiés. Les candidats inactifs ne parcourent plus les programmes de test ; contraintes de compte regroupées avec les filtres, sans modifier le bytecode de résolution. Lot mixte 8×12 propre. CPU médianes 308 → 310 décisions/s, écart insuffisant pour annoncer un gain. Bilan : `notes/codex-pieges-compteurs-2026-11-07.md`. Les plafonds de quatre noms et de 24 candidats sont corrigés dans une autre copie en cours de vérification.
+
 ## Règles
+
 
 - **Vérifier contre l'oracle** avant tout commit qui touche le moteur. L'oracle est ygopro-core compilé localement par `setup.sh`, voir `oracle/BUILD.md`. Il faut lancer :
   - `compare.py` dans tous les modes, avec les graines de `ETAPE2.md` (`engine/regress.sh` fait tout) ;

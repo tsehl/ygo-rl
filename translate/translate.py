@@ -647,8 +647,15 @@ class Translator:
         other_field_effect = any(isinstance(e, Effect) and isinstance(e.f.get("SetType",[0])[0], int) and
                                  isinstance(e.f.get("SetRange",[0])[0], int) and e.f.get("SetType",[0])[0] & (K["EFFECT_TYPE_QUICK_O"] | K["EFFECT_TYPE_TRIGGER_O"] | K["EFFECT_TYPE_TRIGGER_F"])
                                  and e.f.get("SetRange",[0])[0] & core.Z_SZONE for e in regs)
-        need(not (plain_activation and other_field_effect and card_type(self.code) == (core.TYPE_TRAP | core.TYPE_CONTINUOUS)),
-             "activation combinée d'un piège continu")
+        inline = plain_activation and other_field_effect and card_type(self.code) == (core.TYPE_TRAP | core.TYPE_CONTINUOUS)
+        if inline:
+            need(len(regs) == 2 and all(isinstance(e, Effect) for e in regs),
+                 "activation combinée : plusieurs effets")
+            activation = [e for e in regs if e.f.get("SetType") == [K["EFFECT_TYPE_ACTIVATE"]]]
+            alternate = [e for e in regs if e.f.get("SetType") == [K["EFFECT_TYPE_QUICK_O"]]
+                         and e.f.get("SetCode") == [K["EVENT_FREE_CHAIN"]] and e.f.get("SetRange") == [core.Z_SZONE]]
+            need(len(activation) == len(alternate) == 1 and "SetCountLimit" not in activation[0].f,
+                 "activation combinée : événement ou compteur")
         hand_procs = [e for e in regs if isinstance(e, Effect) and e.f.get("SetCode") == [K["EFFECT_SPSUMMON_PROC"]]]
         need(len(hand_procs) <= 1, "plusieurs procédures de main")
         self.revive = int(("revive",) in regs)
@@ -693,6 +700,9 @@ class Translator:
                     continue
                 raise Unsupported("monstre à invocation limitée (EnableReviveLimit)")
             compiled = self.allocate(self.effect(e))
+            count = e.f.get("SetCountLimit", ())
+            if len(count) == 3 and count[2] == K["EFFECT_COUNT_CODE_OATH"] and compiled[0] != core.K_PROC:
+                compiled = (*compiled[:7], dict(compiled[7], refund=1))
             # Clones SINGLE équivalents pour les trois types d'invocation, mutuellement exclusifs
             # pour cette carte au même point d'événement. Les compteurs par effet restent distincts.
             # Aucun regroupement FIELD ou arbitraire.
@@ -710,6 +720,13 @@ class Translator:
                 out.append(compiled)
                 self.descs.append(e.desc)
         need(len(out) <= core.E, f"plus de {core.E} effets")
+        if inline:
+            initial = next(i for i, e in enumerate(out) if e[0] == core.K_ACTIVATE)
+            alternate = next(i for i, e in enumerate(out) if e[0] == core.K_QUICK)
+            need(out[alternate][1] == 0 and out[alternate][7].get("dmg", 0) == 0,
+                 "activation combinée : damage step")
+            effect = out[initial]
+            out[initial] = (*effect[:7], dict(effect[7], inline=alternate + 1))
         return C.Effects(out, revive=self.revive) if self.revive else out
 
     def flag(self, e, k):
@@ -720,8 +737,8 @@ class Translator:
         if "SetCountLimit" in f:
             cl = f["SetCountLimit"]
             need(cl[0] == 1, "SetCountLimit > 1")
-            # EFFECT_COUNT_CODE_OATH : compté même si l'activation est annulée. Le moteur ne rend jamais le compte
-            # (approximation pour les limites sans OATH, dont l'activation annulée est rendue par ygopro-core)
+            # Le cœur épinglé rend le compteur OATH lorsque l'activation est niée.
+            # La métadonnée refund est ajoutée à l'effet après compilation.
             if len(cl) == 3 and cl[2] == K["EFFECT_COUNT_CODE_OATH"]:
                 cl = cl[:2]
             need(len(cl) in (1, 2), "SetCountLimit : drapeaux non pris en charge")

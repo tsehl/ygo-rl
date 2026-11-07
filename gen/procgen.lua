@@ -366,7 +366,9 @@ local function base(c,sp,id,idx)
 	if (sp.dmg or 0)~=0 then prop=prop|EFFECT_FLAG_DAMAGE_STEP end
 	if sp.kind=="trigger" and sp.optional then prop=prop|EFFECT_FLAG_DELAY end
 	if prop~=0 then e:SetProperty(prop) end
-	if sp.opt==OPT_NAME then e:SetCountLimit(1,id) elseif sp.opt==OPT_CARD then e:SetCountLimit(1) end
+	if sp.opt==OPT_NAME then
+		e:SetCountLimit(1,id,sp.refund and EFFECT_COUNT_CODE_OATH or 0)
+	elseif sp.opt==OPT_CARD then e:SetCountLimit(1) end
 	local cond=PG.cond(sp)
 	if cond then e:SetCondition(cond) end
 	local cost=PG.cost(sp.cost)

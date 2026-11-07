@@ -40,6 +40,7 @@ class Obs(NamedTuple):
     pending: jnp.ndarray   # [T] bool : carte en cours (monstre à invoquer, attaquant, effet en résolution)
     chain: jnp.ndarray     # [T] rang du maillon de chaîne dont elle est la source (1 = premier), 0 sinon
     negated: jnp.ndarray   # [T] bool : ce maillon est nié
+    card_activation: jnp.ndarray # [T] bool : le maillon active une carte magie/piège
     act: jnp.ndarray       # [T, NV] bool : actions légales verbe × token
     special: jnp.ndarray   # [N_SPECIAL] bool : actions spéciales légales
     glob: jnp.ndarray      # [G] int : LP, tour, phase, décision, compteurs
@@ -92,6 +93,8 @@ def observe(bank, s, p=None, m=None):
     live = jnp.arange(core.CH) < s.n_chain
     link = jnp.zeros(n, I32).at[jnp.where(live, s.lk_src, n)].set(jnp.arange(1, core.CH + 1, dtype=I32), mode="drop")
     neg = jnp.zeros(n, bool).at[jnp.where(live, s.lk_src, n)].set(s.lk_neg, mode="drop")
+    card_activation = jnp.zeros(n, bool).at[jnp.where(live, s.lk_src, n)].set(
+        (s.lk_flags & core.CF_ACT) != 0, mode="drop")
     glob = jnp.stack([
         s.lp[p], s.lp[1 - p], s.turn, (s.tp == p).astype(I32), s.phase, s.ns_used.astype(I32), s.ps_used.astype(I32),
         jnp.where(s.dec_player == p, s.dec, 0), jnp.where(s.dec_player == p, s.need, 0),
@@ -105,6 +108,7 @@ def observe(bank, s, p=None, m=None):
                mine=mine[idx] & valid, pos=jnp.where(valid, s.pos[idx], 0),
                st=jnp.where(valid, (s.st[idx] & ST_PUBLIC) | own_sel, 0), pending=pend,
                chain=jnp.where(valid, link[idx], 0), negated=neg[idx] & valid,
+               card_activation=card_activation[idx] & valid,
                act=act_slot[idx] & valid[:, None], special=m[NV * n:] & (s.dec_player == p), glob=glob,
                slot=jnp.where(valid, idx, -1).astype(I32))
 

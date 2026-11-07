@@ -567,3 +567,13 @@ quatre défausses et deux bannissements effectivement joués. Protection génér
 2/2, 40 résolutions et six attaques vers un monstre protégé. Nouvelle passe
 banques 0–1, cinq parties chacune, 80 cartes principales / 10 Extra, focus :
 10/10. Provenance et détails : `notes/codex-couts-registres-2026-11-06.md`.
+
+## Pièges continus à effet rapide et compteurs OATH (2026-11-07)
+
+Le générateur produit une activation vide de piège continu accompagnée d'un
+effet rapide de terrain, avec compteurs par carte ou par nom, éventuellement
+OATH. Les banques gardent des formes fixes. Le réseau lit l'effet initial
+optionnel, le caractère remboursable du compteur et la nature publique du
+maillon. Encodeur et politique des anciens checkpoints sont vérifiés contre
+une extension nulle des poids. Scénarios ciblés et mesures CPU :
+`notes/codex-pieges-compteurs-2026-11-07.md`. Aucun entraînement CPU.

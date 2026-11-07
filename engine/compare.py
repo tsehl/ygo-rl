@@ -111,6 +111,12 @@ def translate(dec, opt, s, m=None, option_index=None):
     kind = opt[0]
     N = s.cid.shape[0]
     sp = lambda k: NV * N + k
+    if (kind == "chain" and dec is not None and getattr(dec, "msg", None) == driver.K["MSG_SELECT_EFFECTYN"] and opt[5] == 94
+            and int(s.dec) == core.D_YESNO and int(s.zctx) == core.ZC_INLINE):
+        source = slot(s, opt[2], opt[3], opt[4])
+        if source != int(s.ch_src) or int(BANK_CODE[int(s.cid[source])]) != opt[1]:
+            raise Mismatch("source différente pour l'activation combinée")
+        return [sp(core.A_YES)]
     if kind in ("summon", "mset", "repos", "attack", "sset", "activate", "chain"):
         verb = dict(summon=V_SUMMON, mset=V_MSET, repos=V_REPOS, attack=V_ATTACK, sset=V_SSET, activate=V_ACT0,
                     chain=V_ACT0)[kind]

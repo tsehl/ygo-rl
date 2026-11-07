@@ -637,3 +637,14 @@ réelle de l'Extra Deck, permettant des decks asymétriques sans recompilation.
 La régression complète passe : 1640/1640, obs/vmap/sb, y compris les retours en
 cours de résolution de `step_batch(frac=0.25)`. Bilan, scénarios et débit CPU :
 `notes/codex-couts-registres-2026-11-06.md`.
+
+## Effet initial des pièges continus et compteurs (2026-11-07)
+
+La question native 94 utilise la décision oui/non existante. Accepter remplace
+l'effet du même maillon ; des flags conservent sa nature d'activation de carte
+et la nécessité de sa source continue. Les compteurs OATH sont rendus au
+chargement d'un maillon dont l'activation a été niée, distinctement d'une simple
+annulation d'effet. Les programmes de test dérivés regroupent les bornes avec
+les filtres et masquent les boucles des candidats inactifs. État : +52 octets
+par partie, pas de nouveau registre ni opcode. Régression complète propre.
+Voir `notes/codex-pieges-compteurs-2026-11-07.md`.
