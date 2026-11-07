@@ -35,3 +35,5 @@ Une sonde native reproductible, `tests/reason_oracle_reference_check.py`, vérif
 Cas ciblé supplémentaire : un monstre Pendule détruit par effet depuis le terrain part dans l'Extra Deck face recto. Dans les deux parties de la sonde native, ses raisons incluent EFFECT et DESTROY mais pas REDIRECT. Il ne faut donc pas ajouter ce bit automatiquement pour cette redirection de règle. Le premier essai, qui l'attendait, a échoué ; le test corrigé vérifie explicitement son absence.
 
 Autre distinction vérifiée dans deux parties par cas : envoyer sa propre carte depuis la main en coût donne COST seul ; la libérer depuis le terrain en coût donne COST + RELEASE. Le prototype garde les deux comportements dans la même instruction, avec un paramètre conditionné par la zone d'origine.
+
+La même sonde teste trois raisons explicites de `Duel.DiscardHand` (deux parties chacune). EFFECT seul reste EFFECT ; COST seul reste COST ; COST + DISCARD conserve les deux bits. Le noyau n'ajoute donc pas systématiquement DISCARD : il faut utiliser la raison fournie au lieu de l'inférer du nom de l'appel.
