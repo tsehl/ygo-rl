@@ -109,7 +109,6 @@ WP_DRAW, WP_STANDBY, WP_BSTART, WP_BEND, WP_END = range(5)
 
 HAND_LIMIT = 6
 N_MAIN_ZONES = 5
-KO = 4  # registres « par nom » (une fois par tour, activations interdites) par joueur
 
 # effets
 E = 2           # effets par carte
@@ -118,6 +117,8 @@ PT = 6          # instructions testées par programme de coût / cible (test_ok)
 R = 4           # registres ensembles
 NF = 4          # filtres par effet
 KC = 24         # (carte, effet) candidats à l'activation testés par legal (main + terrain du joueur qui décide)
+MAX_SLOTS = 192  # couvre 60+15 cartes par joueur et les emplacements de jetons sur le terrain
+ACT_ROUNDS = (MAX_SLOTS * E + KC - 1) // KC  # borne constante : pas de matrice N × N
 KA = 2          # candidats testés par auto_pass (au-delà : pas de passe automatique, legal décide)
 K_NONE, K_ACTIVATE, K_IGNITION, K_TRIG_F, K_TRIG_O, K_QUICK, K_CONT, K_PROC = range(8)  # déclencheur obligatoire / optionnel ;
 # K_QUICK : effet rapide de monstre (vitesse 2), activable depuis les zones erng ; K_CONT : effet continu, appliqué
@@ -377,8 +378,8 @@ class State(NamedTuple):
     rb_m: jnp.ndarray    # [N] monstres adverses à la (re)déclaration de l'attaque (opp_mzone d'ygopro-core)
     rb_t: jnp.ndarray    # horloge à la (re)déclaration : un monstre déplacé depuis n'est plus le même (fieldid_r)
     rpl: jnp.ndarray     # attaque relancée (is_replaying_attack : pas de nouvel EVENT_ATTACK_ANNOUNCE)
-    opt_cid: jnp.ndarray   # [2, KO] cid + 1 des effets « une fois par tour » déjà utilisés
-    lock_cid: jnp.ndarray  # [2, KO] cid + 1 des cartes dont le joueur ne peut plus activer les effets ce tour
+    opt_cid: jnp.ndarray   # [2, N*E] clés + 1 des effets « une fois par tour » déjà utilisés
+    lock_cid: jnp.ndarray  # [2, N] cid + 1 des cartes dont le joueur ne peut plus activer les effets ce tour
     # stats courantes (cache recalculé par refresh après chaque micro-pas) et modificateurs temporaires
     atk_c: jnp.ndarray   # [N] ATK courante (hors zone monstres : ATK de base)
     df_c: jnp.ndarray    # [N]
@@ -664,7 +665,7 @@ def brk(s):
 
 
 def name_in(table, cid):
-    """cid [...] présent dans le registre par nom `table` [KO] ?"""
+    """cid [...] présent dans le registre par nom `table` ?"""
     return (table == (cid + 1)[..., None]).any(-1)
 
 
@@ -675,9 +676,9 @@ def opt_key(cid, opt):
 
 
 def name_add(table, cid):
-    """Ajoute cid au registre [KO] (première case libre ; la dernière est écrasée si tout est plein)."""
-    i = jnp.where((table == 0).any(), jnp.argmax(table == 0), KO - 1)
-    return table.at[i].set(cid + 1)
+    """Ajoute un nom sans dupliquer les entrées ; les capacités couvrent tous les noms du duel."""
+    i = jnp.where((table == 0).any(), jnp.argmax(table == 0), table.shape[0] - 1)
+    return jnp.where(name_in(table, cid), table, table.at[i].set(cid + 1))
 
 
 def clear_ev(s):
@@ -713,10 +714,14 @@ def act_ok(bank, s, h, e, p, enabled=None):
     cid = s.cid[h]
     # une carte aux effets annulés peut encore les activer (is_activateable ne teste pas STATUS_DISABLED) : ils sont
     # annulés à la résolution (load_link)
-    return (test_ok(bank, s, h, e, p, enabled=enabled) & ((bank.ekind[cid, e] == K_PROC) | ~name_in(s.lock_cid[p], cid))
-            & ~((opt_key(cid, bank.eopt[cid, e]) >= 0) & name_in(s.opt_cid[p], opt_key(cid, bank.eopt[cid, e])))
-            & ~(((bank.eopt[cid, e] == OPT_CARD) | (bank.eopt[cid, e] == OPT_CARD_NR))
-                & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
+    def check():
+        return (test_ok(bank, s, h, e, p, enabled=enabled) & ((bank.ekind[cid, e] == K_PROC) | ~name_in(s.lock_cid[p], cid))
+                & ~((opt_key(cid, bank.eopt[cid, e]) >= 0) & name_in(s.opt_cid[p], opt_key(cid, bank.eopt[cid, e])))
+                & ~(((bank.eopt[cid, e] == OPT_CARD) | (bank.eopt[cid, e] == OPT_CARD_NR))
+                    & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
+    if enabled is None:
+        return check()
+    return lax.fori_loop(0, jnp.where(enabled, 1, 0), lambda _, previous: check(), jnp.bool_(True))
 
 
 def trig_next(bank, s):
@@ -729,10 +734,18 @@ def trig_eval(bank, s):
     fenêtre de réponse (après la chaîne bâtie : l'adversaire du dernier maillon a la priorité)."""
     # étape SEGOC de chaque déclencheur en attente ; activabilité testée une seule fois pour les 4 étapes
     stage = (s.ctrl != s.tp) + 2 * (bank.ekind[s.cid, s.tg_e] == K_TRIG_O)
-    hs = jnp.nonzero(s.tg, size=KC, fill_value=0)[0]
-    valid = (jnp.arange(KC) < s.tg.sum()) & (s.dec == D_TRIG) & ~s.done
-    okc = jax.vmap(lambda h, active: act_ok(bank, s, h, s.tg_e[h], s.ctrl[h], enabled=active))(hs, valid) & valid
-    ok = s.tg & (jnp.zeros_like(s.seq).at[hs].add(okc.astype(I32)) > 0)
+    def more(carry):
+        remaining, _, rounds = carry
+        return remaining.any() & (rounds < ACT_ROUNDS)
+    def batch(carry):
+        remaining, accepted, rounds = carry
+        hs = jnp.nonzero(remaining, size=KC, fill_value=0)[0]
+        valid = jnp.arange(KC) < remaining.sum()
+        passed = jax.vmap(lambda h, active: act_ok(bank, s, h, s.tg_e[h], s.ctrl[h], enabled=active))(hs, valid) & valid
+        accepted |= jnp.zeros_like(s.seq).at[hs].add(passed.astype(I32)) > 0
+        return remaining.at[hs].set(False), accepted, rounds + 1
+    pending = s.tg & (s.dec == D_TRIG) & ~s.done
+    _, ok, _ = lax.while_loop(more, batch, (pending, jnp.zeros_like(s.tg), _i(0)))
     avail = (ok[None, :] & (stage[None, :] == jnp.arange(4)[:, None])).any(1) & (jnp.arange(4) >= s.tst)
     nxt = jnp.argmax(avail).astype(I32)
 
@@ -2029,12 +2042,15 @@ def current_ins(bank, s):
     return bank.prog[s.cid[s.ch_src], s.ch_eff, s.pg, s.pc]
 
 
-def use_count(bank, s, c, e, p):
+def use_count(bank, s, c, e, p, enabled=True):
     """Consomme la limite d'une activation ou d'une procédure, sans construire de maillon."""
     opt = bank.eopt[s.cid[c], e]
     key = opt_key(s.cid[c], opt)
-    return s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(key >= 0, name_add(s.opt_cid[p], key), s.opt_cid[p])),
-                      st=s.st.at[c].set(s.st[c] | jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))))
+    def add(_, table):
+        return table.at[p].set(name_add(table[p], key))
+    counts = lax.fori_loop(0, jnp.where(enabled & (key >= 0), 1, 0), add, s.opt_cid)
+    bits = jnp.where(opt == OPT_CARD, ST_CNT << e, jnp.where(opt == OPT_CARD_NR, ST_CNTN << e, 0))
+    return s._replace(opt_cid=counts, st=s.st.at[c].set(s.st[c] | jnp.where(enabled, bits, 0)))
 
 
 def proc_ready(s, card):
@@ -2049,7 +2065,7 @@ def begin_act(bank, s, c, e, enabled=True):
     n = s.cid.shape[0]
     leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) == 0)
     p = s.dec_player
-    s = use_count(bank, s, c, e, p)
+    s = use_count(bank, s, c, e, p, enabled=enabled)
     # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
     # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
     tdis = (s.tm_m[:, c] & (s.mv[c] <= s.tm_t) & (s.tm_code == MC_DISABLE)).any() & (s.zone[c] == Z_MZONE)
@@ -2088,7 +2104,9 @@ def load_link(bank, s, k):
         e, p = s.lk_eff[k], s.lk_p[k]
         key = opt_key(s.cid[c], bank.eopt[s.cid[c], e])
         refund = (bank.erefund[s.cid[c], e] != 0) & ((s.lk_flags[k] & CF_ACT_NEG) != 0) & (key >= 0)
-        s = s._replace(opt_cid=s.opt_cid.at[p].set(jnp.where(refund & (s.opt_cid[p] == key + 1), 0, s.opt_cid[p])))
+        def restore(_, table):
+            return table.at[p].set(jnp.where(table[p] == key + 1, 0, table[p]))
+        s = s._replace(opt_cid=lax.fori_loop(0, refund.astype(I32), restore, s.opt_cid))
     dis = ((s.fl_c[c] & FL_DISABLED) != 0) & (s.zone[c] == Z_MZONE) & (s.mv[c] <= s.lk_t[k])
     continuous = (s.lk_flags[k] & CF_CONT) != 0
     dis |= continuous & ((s.zone[c] != Z_SZONE) | ((s.pos[c] & P_FACEUP) == 0) | (s.mv[c] > s.lk_t[k]))
@@ -2374,11 +2392,19 @@ def legal(bank, s, fus=True):
     ]
     trig_w = chn & (s.wk == W_TRIG)
     cand = act_cand(bank, s)
-    # coût + cible testés seulement sur les KC premiers candidats (sinon N × programmes × N : quadratique sous vmap)
-    ce, ch = jnp.nonzero(cand, size=KC, fill_value=0)
-    valid = jnp.arange(KC) < cand.sum()
-    okc = jax.vmap(lambda h, e, active: act_ok(bank, s, h, e, p, enabled=active))(ch, ce, valid) & valid
-    ok = jnp.zeros((E, n), I32).at[ce, ch].add(okc.astype(I32)) > 0
+    # Tous les candidats, en blocs de KC ; 16 blocs au maximum dans l'arène bornée.
+    # Le noyau reste KC × N, et les parties ordinaires ne font qu'un bloc.
+    def more(carry):
+        remaining, _, rounds = carry
+        return remaining.any() & (rounds < ACT_ROUNDS)
+    def batch(carry):
+        remaining, accepted, rounds = carry
+        ce, ch = jnp.nonzero(remaining, size=KC, fill_value=0)
+        valid = jnp.arange(KC) < remaining.sum()
+        passed = jax.vmap(lambda h, e, active: act_ok(bank, s, h, e, p, enabled=active))(ch, ce, valid) & valid
+        accepted |= jnp.zeros((E, n), I32).at[ce, ch].add(passed.astype(I32)) > 0
+        return remaining.at[ce, ch].set(False), accepted, rounds + 1
+    _, ok, _ = lax.while_loop(more, batch, (cand, jnp.zeros((E, n), bool), _i(0)))
     verbs = jnp.concatenate([jnp.stack(verbs), cand & ok])
     sp = jnp.zeros(N_SPECIAL, bool)
     sp = sp.at[A_TO_BP].set(idle & (s.phase == PH_MAIN1) & (s.turn > 1))
@@ -2586,7 +2612,7 @@ def apply(bank, s, a):
             if not bank.einline.shape[1]:
                 return s
             e = bank.einline[s.cid[s.ch_src], s.ch_eff] - 1
-            s = use_count(bank, s, s.ch_src, e, s.ch_p)
+            s = use_count(bank, s, s.ch_src, e, s.ch_p, enabled=yn & inline & (k == A_YES))
             return s._replace(ch_eff=e, pc=_i(0), pg=_i(PG_COST), dec=_i(D_RUN), zctx=_i(ZC_ACT))
         return _switch(jnp.where(yn, jnp.where(inline, jnp.where(k == A_YES, 10, 11),
                                  jnp.where(rq, jnp.where(k == A_YES, 8, 9), jnp.where(k == A_YES, 6, 7))),
@@ -2800,6 +2826,8 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
     x = 0 if extra0 is None else extra0.shape[0]
     nd = 2 * d
     n = nd + 2 * x
+    if n > MAX_SLOTS:
+        raise ValueError(f"capacité d'arène dépassée : {n} > {MAX_SLOTS}")
     cid = jnp.concatenate([deck0, deck1] + ([] if x == 0 else [extra0, extra1])).astype(I32)
     owner = jnp.concatenate([jnp.repeat(jnp.arange(2, dtype=I32), d), jnp.repeat(jnp.arange(2, dtype=I32), x)])
     seq = jnp.concatenate([jnp.tile(jnp.arange(d, dtype=I32), 2), jnp.tile(jnp.arange(x, dtype=I32), 2)])
@@ -2829,8 +2857,8 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tew=jnp.zeros((NEV, n), bool), teg=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
-              tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, rb_m=jnp.zeros(n, bool), rb_t=_i(0), rpl=f, opt_cid=jnp.zeros((2, KO), I32),
-              lock_cid=jnp.zeros((2, KO), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
+              tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, rb_m=jnp.zeros(n, bool), rb_t=_i(0), rpl=f, opt_cid=jnp.zeros((2, n * E), I32),
+              lock_cid=jnp.zeros((2, n), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),

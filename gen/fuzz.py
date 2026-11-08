@@ -8,7 +8,7 @@ Usage : python fuzz.py [--seeds 0-3] [--b 64] [--t 600] [--main 400] [--extra 80
 --dump : pour chaque violation, rejoue la partie fautive seule et affiche ses cartes et la décision fautive.
 
 Violations (bits de `check`) : erreurs du moteur. Avertissements (bits de `warn`) : limites des tables du moteur
-atteintes (comportement alors approché, pas une erreur de code) ; à surveiller pour dimensionner KM, TM, KO, KC.
+atteintes (comportement alors approché, pas une erreur de code) ; à surveiller pour dimensionner KM, TM et les candidats.
 """
 import argparse
 import os
@@ -25,15 +25,15 @@ import jax.numpy as jnp  # noqa: E402
 
 import core  # noqa: E402
 from core import (Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_GRAVE, Z_REMOVED, Z_EXTRA, Z_OVERLAY, TYPE_EXTRA, TYPE_XYZ,  # noqa: E402
-                  D_RUN, D_TRIG, D_NONE, CH, TM, KO, KC)
+                  D_RUN, D_TRIG, D_NONE, CH, TM, KC)
 
 VIOL = ["pas d'action légale", "case de terrain occupée deux fois", "case de terrain hors limites",
         "zone ordonnée non contiguë", "matériau Xyz incohérent", "monstre de l'Extra Deck en main ou dans le deck",
         "LP <= 0 sans fin de partie", "chaîne hors limites", "position invalide", "décision interne non résolue",
         "contrôleur / propriétaire invalide", "zone inconnue"]
 WARN = ["plus de KM effets continus actifs", "plus de TM modificateurs temporaires", "plus de EXK monstres fusion",
-        "table « une fois par tour » pleine (KO)", "table des noms interdits pleine (KO)",
-        "plus de KC effets candidats à l'activation"]
+        "table « une fois par tour » pleine", "table des noms interdits pleine",
+        "arène des candidats à l'activation dépassée"]
 ZONES = (Z_DECK, Z_HAND, Z_GRAVE, Z_REMOVED, Z_EXTRA, Z_MZONE, Z_SZONE)
 
 
@@ -78,7 +78,7 @@ def check(bank, s, padding_mask=None):
     v = [nolegal, dup, seq_bad, bad_ord, ov_bad, ex_bad, lp_bad, ch_bad, pos_bad, stuck, who_bad, ~known.all() | padding_changed]
     ncand = jnp.where(live, core.act_cand(bank, s).sum(), 0)
     w = [(s.ovf & 1) != 0, (s.ovf & 2) != 0, (s.ovf & 4) != 0, (s.opt_cid != 0).all(-1).any(),
-         (s.lock_cid != 0).all(-1).any(), ncand > KC]
+         (s.lock_cid != 0).all(-1).any(), ncand > core.ACT_ROUNDS * KC]
     bits = lambda xs: sum(jnp.where(x, 1 << i, 0) for i, x in enumerate(xs)).astype(jnp.int32)
     return bits(v), bits(w)
 
