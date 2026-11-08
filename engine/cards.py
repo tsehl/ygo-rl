@@ -58,7 +58,12 @@ def CHOOSE(dst, src, n, who=ME, upto=False, mn=None):
     return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
 def MOVE(r, zone=Z_GRAVE): return (OP_MOVE, r, zone, 0)
 def DESTROY(r): return (OP_MOVE, r, Z_GRAVE, 1)  # Duel.Destroy : les indestructibles par effet restent, r = détruites
-def SPSUMMON(r, pos, proc=False): return (OP_SPSUMMON, r, pos, int(proc))  # proc : invocation correcte (rituel)
+def SPSUMMON(r, pos, proc=False, *, fusion=False, tag=0):
+    if tag and (proc or fusion):
+        raise ValueError("marqueur générique incompatible avec une procédure")
+    if not 0 <= tag <= 65535:
+        raise ValueError("marqueur d'invocation hors limites")
+    return (OP_SPSUMMON, r, pos, -(tag + 1) if tag else 2 if fusion else int(proc))  # proc : invocation correcte (rituel / fusion)
 def DRAW(who, n): return (OP_DRAW, who, n, 0)
 def DAMAGE(who, n, per=None): return (OP_DAMAGE, who, n, 0 if per is None else per + 1)  # n × |registre per|
 def RECOVER(who, n): return (OP_RECOVER, who, n, 0)
@@ -186,7 +191,7 @@ CARDS = {
     66788016: [act(target=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1)],                               # Fissure
                    resolve=[FILTER(0, OPP_FACEUP_MON), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1), DESTROY(2)])],
     83764718: [act(target=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, GRAVE_MON_SS, tgt=True), CHOOSE(1, 0, 1)],  # Monster Reborn
-                   resolve=[SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
+                   resolve=[SPSUMMON(1, P_FU_ATK | P_FU_DEF, tag=1010)])],  # SUMMON_WITH_MONSTER_REBORN
     79571449: [act(target=[FILTER(0, MY_DECK), REQ(0, 3)],                                      # Graceful Charity
                    resolve=[DRAW(ME, 3), SHUFFLE_HAND(ME), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 2), MOVE(1)])],
     18144506: [act(target=[FILTER(0, OPP_ST), REQ(0, 1)], resolve=[FILTER(0, OPP_ST), DESTROY(0)])],  # Feather Duster
@@ -279,7 +284,7 @@ CARDS = {
     # jalon 5, volet a : fusion
     24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
                    resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2),
-                            SPSUMMON(1, P_FU_ATK | P_FU_DEF)])],
+                            SPSUMMON(1, P_FU_ATK | P_FU_DEF, fusion=True)])],
     # jalon 5, volet d : Xyz ; détacher = choisir parmi ses propres matériaux (filtre Z_OVERLAY) et les envoyer au cimetière
     69610924: [ignition(opt=OPT_CARD, cost=[FILTER(0, F(me=Z_OVERLAY)), CHOOSE(1, 0, 1), MOVE(1)],      # Leviathan Dragon
                         resolve=[SELF(0), FILTER(1, F(me=Z_MZONE, pos=P_FACEUP), within=0),

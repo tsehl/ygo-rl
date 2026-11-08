@@ -217,6 +217,8 @@ class Gen:
     def clauses(self, ctx):
         c1 = self.card_clause(ctx) if self.p(0.75) else self.plain_clause()
         out = [c1]
+        if c1["verb"] == "ss" and self.p(0.5):
+            c1["tag"] = self.pick([1, 2, 3, 7, 15, 31, 63, 127, 255])
         if self.p(0.25) and c1["verb"] not in ("burn_per",):
             out.append(self.then_clause())
         return out
@@ -301,8 +303,15 @@ class Gen:
                 e["conds"] = [("self", 0, ONFIELD, 0)]
             elif trig == "battle_destroyed":
                 e["conds"] = [("self", Z_GRAVE, 0, 0)]
-            elif trig == "spsummon" and card["ctype"] & TYPE_LINK and self.p(0.5):
-                e["conds"] = [("self", 0, 0, ST_LINKSUM)]
+            elif trig == "spsummon" and self.p(0.5):
+                import core
+                typ = core.SUMMON_SPECIAL
+                for flag, value in ((TYPE_FUSION, core.SUMMON_FUSION), (TYPE_RITUAL, core.SUMMON_RITUAL),
+                                    (TYPE_SYNCHRO, core.SUMMON_SYNCHRO), (TYPE_XYZ, core.SUMMON_XYZ),
+                                    (TYPE_LINK, core.SUMMON_LINK)):
+                    if card["ctype"] & flag:
+                        typ = value
+                e["conds"] = [("self", 0, 0, core.summon_mask(typ))]
             e["optional"] = self.p(0.6)
             e["opt"] = OPT_NAME if self.p(0.5) else OPT_NONE
             e["cost"] = self.cost([None, "lp"], [6, 1]) if e["optional"] else None
@@ -701,7 +710,7 @@ def verb_bricks(c, r):
     if v == "tograve":
         return [MOVE(r, Z_GRAVE)]
     if v == "ss":
-        return [SPSUMMON(r, c["pos"])]
+        return [SPSUMMON(r, c["pos"], tag=c.get("tag", 0))]
     if v == "atk":
         return [MODIFY(r, MC_ATK, c["v"], dur=TD_PERM if c.get("perm") else core.TD_TURN, rd=bool(c.get("rd")))]
     if v == "def":
@@ -783,7 +792,7 @@ def bricks(e):
     if k == "fusion_spell":
         f = _F(e["f"])
         return act(target=[FILTER(0, f), REQ(0, 1)],
-                   resolve=[FILTER(0, f), CHOOSE(1, 0, 1), cards.FUSMAT(2, 1), MOVE(2), SPSUMMON(1, P_FU_ATK | P_FU_DEF)])
+                   resolve=[FILTER(0, f), CHOOSE(1, 0, 1), cards.FUSMAT(2, 1), MOVE(2), SPSUMMON(1, P_FU_ATK | P_FU_DEF, fusion=True)])
     if k == "ritual":
         return ritual_spell(e["code"], e["mode"])[0]
     cost = cond_bricks(e["conds"]) + cost_bricks(e["cost"])

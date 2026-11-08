@@ -194,7 +194,7 @@ class Filt:
 
     def __init__(self):
         self.d = dict(pos=0, typ=0, not_self=0, atk=[-core.BIG, core.BIG], df=[-core.BIG, core.BIG], attr=0, race=0,
-                      setc=0, code=None, st=0, lv=[-core.BIG, core.BIG], spsum=0, nodis=0)
+                      setc=0, code=None, st=0, lv=[-core.BIG, core.BIG], spsum=0, nodis=0, zx=0)
         self.loc = ALLZ  # restriction de zones (IsLocation)
         self.ctrl = None  # IsControler
         self.tgt = False
@@ -231,7 +231,17 @@ class Filt:
             d["code"] = (0, 0)
         for k in ("atk", "df", "lv"):
             d[k] = tuple(d[k])
+        if d["zx"] & core.ZX_EXTRA:
+            need(d["typ"] != 0 and d["typ"] & ~(core.TYPE_FUSION | core.TYPE_SYNCHRO | core.TYPE_XYZ) == 0,
+                 "GetLocationCountFromEx : filtre hors fusion / synchro / Xyz")
         return C.F(me=me, op=op, **d)
+
+
+SUMMON_METHODS = {"IsNormalSummoned": core.SUMMON_NORMAL, "IsTributeSummoned": core.SUMMON_TRIBUTE,
+                  "IsSpecialSummoned": core.SUMMON_SPECIAL, "IsFusionSummoned": core.SUMMON_FUSION,
+                  "IsRitualSummoned": core.SUMMON_RITUAL, "IsSynchroSummoned": core.SUMMON_SYNCHRO,
+                  "IsXyzSummoned": core.SUMMON_XYZ, "IsPendulumSummoned": core.SUMMON_PENDULUM,
+                  "IsLinkSummoned": core.SUMMON_LINK}
 
 
 CARD_METHODS_IGNORED = {
@@ -244,6 +254,12 @@ CARD_METHODS_IGNORED = {
 FILTER_METHODS = {"IsCanBeSpecialSummoned", "IsFaceup", "IsFacedown", "IsAttackPos", "IsDefensePos", "IsPosition"}
 
 
+def generic_summon_tag(value):
+    need(type(value) is int and value >= 0 and (value & ~(core.SUMMON_SPECIAL | 65535)) == 0,
+         "invocation spéciale : type non représenté")
+    return value & 65535
+
+
 def apply_method(fl, name, args):
     """c:name(args) dans un filtre ; args déjà évalués (constantes)."""
     def num(i):
@@ -252,6 +268,12 @@ def apply_method(fl, name, args):
     args = list(args)
     while args and args[-1] is None:  # c:IsAttribute(a, lc, sumtype, tp) (matériaux) : contexte non lié
         args.pop()
+    if name in SUMMON_METHODS or name == "IsSummonType":
+        need(len(args) == (1 if name == "IsSummonType" else 0), "type d'invocation : arguments")
+        typ = SUMMON_METHODS[name] if name in SUMMON_METHODS else num(0)
+        need(typ & 0x80ff0000 == 0, "type d'invocation : masque non représenté")
+        fl.set("st", core.summon_mask(typ))
+        return
     if name in CARD_METHODS_IGNORED:
         if name == "IsCanBeEffectTarget":
             fl.tgt = True
@@ -308,6 +330,8 @@ def apply_method(fl, name, args):
         fl.ctrl = args[0].p
     elif name == "IsCanBeSpecialSummoned":
         # (e, sumtype, sp, nocheck, nolimit[, pos[, toplayer]])
+        need(len(args) >= 2, "filtre : type d'invocation manquant")
+        generic_summon_tag(args[1])
         need(len(args) >= 5 and args[3] is False and args[4] is False, "filtre : IsCanBeSpecialSummoned(nocheck/nolimit)")
         need(len(args) < 7, "filtre : IsCanBeSpecialSummoned vers l'adversaire")
         need(isinstance(args[2], Player) and args[2].p == ME, "filtre : IsCanBeSpecialSummoned par l'adversaire")
@@ -682,7 +706,7 @@ class Translator:
                 if e[0] == "fusion_spell":
                     out.append(C.act(target=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.REQ(0, 1)],
                                      resolve=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.CHOOSE(1, 0, 1),
-                                              C.FUSMAT(2, 1), C.MOVE(2), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF)]))
+                                              C.FUSMAT(2, 1), C.MOVE(2), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF, fusion=True)]))
                     self.descs.append(None)
                     continue
                 if e[0] == "ritual_spell":
@@ -1573,11 +1597,11 @@ class Translator:
             if m == "IsLocation":
                 prog.emit(C.COND_SELF(zone=self.cnum(args[0], env)))
                 return
-            if m == "IsSummonType" and dotted(args[0]) == "SUMMON_TYPE_LINK":
-                prog.emit(C.COND_SELF(st=core.ST_LINKSUM))
-                return
-            if m == "IsSpecialSummoned":
-                prog.emit(C.COND_SELF(st=core.ST_SPSUM))
+            if m in SUMMON_METHODS or m == "IsSummonType":
+                need(len(args) == (1 if m == "IsSummonType" else 0), "type d'invocation : arguments")
+                typ = SUMMON_METHODS[m] if m in SUMMON_METHODS else self.cnum(args[0],env)
+                need(typ & 0x80ff0000 == 0, "type d'invocation : masque non représenté")
+                prog.emit(C.COND_SELF(st=core.summon_mask(typ)))
                 return
             if m in FILTER_METHODS:  # propriété de la carte elle-même : SELF ∩ filtre, au moins une carte
                 fl = Filt()
@@ -1809,6 +1833,16 @@ class Translator:
             for t in ts:
                 u |= t
             fl.set("typ", u)
+            return
+        if isinstance(x, A.GreaterThanOp) and isinstance(x.left, A.Call) and dotted(x.left.func) == "Duel.GetLocationCountFromEx":
+            args = x.left.args
+            need(len(args) == 4 and self.fexpr(x.right, env) == 0,
+                 "GetLocationCountFromEx : options / seuil")
+            players = [self.fexpr(a, env) for a in args[:2]]
+            need(all(isinstance(v, Player) and v.p == ME for v in players)
+                 and isinstance(args[2], A.Nil) and isinstance(args[3], A.Name) and args[3].id == cvar,
+                 "GetLocationCountFromEx : joueur / matériaux / carte")
+            fl.set("zx", fl.d["zx"] | core.ZX_EXTRA)
             return
         # comparaisons : c:GetAttack()>=n …
         if isinstance(x, (A.GreaterOrEqThanOp, A.LessOrEqThanOp, A.GreaterThanOp, A.LessThanOp, A.EqToOp)):
@@ -2090,6 +2124,7 @@ class Translator:
                 prog.emit(C.MOVE(reg.r, core.Z_REMOVED))
             return Count(reg)
         if d == "Duel.SpecialSummon":
+            tag = generic_summon_tag(E_(1))
             reg = self.as_reg(E_(0), prog)
             sp, to = E_(2), E_(3)
             need(isinstance(sp, Player) and sp.p == ME and isinstance(to, Player) and to.p == ME,
@@ -2098,7 +2133,7 @@ class Translator:
             pos = E_(6)
             need(pos in (core.P_FACEUP, core.P_FU_ATK, core.P_FU_DEF, core.P_FU_DEF | core.P_FD_DEF), "position")
             need(len(args) <= 7, "invocation spéciale dans des zones choisies")
-            prog.emit(C.SPSUMMON(reg.r, pos))
+            prog.emit(C.SPSUMMON(reg.r, pos, tag=tag))
             return Count(reg)
         if d in ("Duel.Draw", "Duel.Damage", "Duel.Recover"):
             p, n = E_(0), E_(1)

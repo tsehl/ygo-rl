@@ -56,6 +56,11 @@ ST_CNTN = 1024  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFF
 ST_FLIP_TURN = 4096  # invoquée par flip ce tour (STATUS_FLIP_SUMMON_TURN)
 ST_SPSUM, ST_LINKSUM = 8192, 16384  # invoquée spécialement / par lien (IsSpecialSummoned, IsLinkSummoned) : tant
 # qu'elle reste sur le terrain
+SUMMON_NORMAL, SUMMON_TRIBUTE, SUMMON_SPECIAL = 0x10000000, 0x11000000, 0x40000000
+SUMMON_FUSION, SUMMON_RITUAL, SUMMON_SYNCHRO = 0x43000000, 0x45000000, 0x46000000
+SUMMON_XYZ, SUMMON_PENDULUM, SUMMON_LINK = 0x49000000, 0x4a000000, 0x4c000000
+# suminfo : type natif (bits 24..30 et 0..15), zone d'origine (16..23), joueur (31).
+# L'information survit aux déplacements ; une nouvelle invocation la remplace.
 ST_ACTDIS = 32768  # activation niée (STATUS_ACTIVATE_DISABLED) : un pendule va alors au cimetière, pas dans l'Extra Deck
 ST_PSTEP = 65536  # placée par l'invocation pendule en cours (EVENT_SPSUMMON du groupe à la fin)
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | ST_CNT | (ST_CNT << 1) | ST_FLIP_TURN
@@ -136,7 +141,7 @@ N_OPS = 31
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
     F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX = range(22)
 FW = 22  # F_ZX : bits ZX_* (co-lié, case principale)
-ZX_COLINK, ZX_MAIN = 1, 2  # GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+ZX_COLINK, ZX_MAIN, ZX_EXTRA = 1, 2, 4  # GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
@@ -299,6 +304,7 @@ def test_prog(prog, c):
 
 
 class State(NamedTuple):
+    suminfo: jnp.ndarray # [N] dernière invocation : type, zone d’origine et joueur
     cid: jnp.ndarray     # [N] index dans la banque
     zone: jnp.ndarray    # [N]
     seq: jnp.ndarray     # [N] case (terrain) ou rang dans la zone (deck : dessus = seq max)
@@ -495,6 +501,28 @@ def compact(s, leaving):
     before = jnp.cumsum(bins, axis=1) - bins       # partants de seq strictement inférieure
     shift = before[grp, s.seq]
     return s._replace(seq=jnp.where((oz >= 0) & ~leaving, s.seq - shift, s.seq))
+
+
+def summon_mask(typ, negate=False):
+    """Sélecteur négatif pour F_ST / COND_SELF : bits de type natif compactés."""
+    assert typ & 0x00ff0000 == 0
+    return -(((typ >> 24) & 255) | ((typ & 65535) << 8) | (int(negate) << 24))
+
+
+def summon_matches(info, encoded):
+    packed = -encoded
+    mask = ((packed & 255) << 24) | ((packed >> 8) & 65535)
+    return (((info & 0x7f00ffff) & mask) == mask) ^ ((packed & (1 << 24)) != 0)
+
+
+def effect_summon_type(mode):
+    """SPSUMMON : procédure positive ; marqueur générique encodé -(tag+1)."""
+    ordinary = jnp.where(mode == 1, SUMMON_RITUAL, jnp.where(mode == 2, SUMMON_FUSION, SUMMON_SPECIAL))
+    return jnp.where(mode < 0, SUMMON_SPECIAL | (-mode - 1), ordinary)
+
+
+def summon_info(typ, location, player):
+    return _i(typ) | (location << 16) | (player << 31)
 
 
 def move(s, c, zone, seq, ctrl, pos):
@@ -1039,6 +1067,14 @@ def set_match(bank, cid, sc):
     return ((cs != 0) & ((cs & 0xFFF) == (sc & 0xFFF)) & ((cs & sc) == sc)).any(-1)
 
 
+def special_allowed(bank, s, proper=False):
+    """Invocabilité courante par effet ; une vraie procédure contourne la seule limite de réanimation."""
+    revive = (bank.erl[s.cid] == 0) | ((bank.erl[s.cid] == 1) &
+             (s.proc | ((s.zone == Z_EXTRA) & ((s.pos & P_FACEUP) == 0))))
+    return ((s.zone != Z_MZONE) & ((s.fl_c & FL_NO_SS) == 0)
+            & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0) & (revive | proper))
+
+
 def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     """Évalue un filtre (enregistrement fixe) pour le joueur p, carte source h. O(N).
     bdes : exclut les monstres détruits au combat (sélections) ; False pour les cibles des effets continus.
@@ -1061,14 +1097,12 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     code = bank.code[s.cid]
     # F_CODE1 < 0 : tout sauf le nom -F_CODE1 (not c:IsCode(id))
     m &= jnp.where(f[F_CODE1] < 0, code != -f[F_CODE1], (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2]))
-    m &= (f[F_ST] == 0) | ((s.st & f[F_ST]) != 0)
+    m &= (f[F_ST] == 0) | jnp.where(f[F_ST] < 0, summon_matches(s.suminfo, f[F_ST]), (s.st & f[F_ST]) != 0)
     lv = bank.level[s.cid]
     nolv = (bank.ctype[s.cid] & (TYPE_XYZ | TYPE_LINK)) != 0  # sans niveau : seulement un filtre sans borne
     m &= jnp.where(nolv, (f[F_LV_LO] <= -BIG) & (f[F_LV_HI] >= BIG), (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI]))
-    # IsCanBeSpecialSummoned : pas d'interdiction, et une carte à réanimation limitée doit avoir été bien invoquée
-    # F_SPSUM = 2 : en défense seulement (IsCanBeSpecialSummoned(..., POS_FACEUP_DEFENSE)), jamais un Link
-    m &= (f[F_SPSUM] == 0) | (((s.fl_c & FL_NO_SS) == 0) & ((bank.erl[s.cid] == 0) | ((bank.erl[s.cid] == 1) & s.proc))
-                              & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0)
+    # IsCanBeSpecialSummoned : conditions courantes, et Link uniquement en attaque.
+    m &= (f[F_SPSUM] == 0) | (special_allowed(bank, s)
                               & ~((f[F_SPSUM] == 2) & ((bank.ctype[s.cid] & TYPE_LINK) != 0)))
     # fusion / rituel : SummonEffFilter et Ritual.Filter demandent aussi IsCanBeSpecialSummoned (fl_c est à jour ici,
     # pas forcément quand fz_c / rz_c sont calculés)
@@ -1078,6 +1112,13 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
     m &= ((f[F_ZX] & ZX_COLINK) == 0) | s.cl_c
     m &= ((f[F_ZX] & ZX_MAIN) == 0) | (s.seq < N_MAIN_ZONES)
+    need_extra = (f[F_ZX] & ZX_EXTRA) != 0
+    extra_space = lax.fori_loop(0, need_extra.astype(I32), lambda _, previous: ex_zones(s, p).any(), jnp.bool_(True))
+    faceup_pend = (s.zone == Z_EXTRA) & ((ct & TYPE_PENDULUM) != 0) & ((s.pos & P_FACEUP) != 0)
+    need_pend = need_extra & (m & faceup_pend).any()
+    pend_space = lax.fori_loop(0, need_pend.astype(I32),
+        lambda _, previous: pend_extra_zones(bank, s, p).any(), jnp.bool_(True))
+    m &= jnp.where(faceup_pend, pend_space, extra_space)
     if targ:
         m &= ~untargetable(bank, s, h)
     # un monstre Link n'a pas de DEF (IsDefense* faux) : seulement un filtre sans borne
@@ -1225,7 +1266,7 @@ def stats(bank, s):
 def stats_key(s):
     """Entrées de stats() qui changent pendant la partie (hors ses propres sorties) : si elles n'ont pas bougé, refresh
     est inutile (il est idempotent sur un état inchangé)."""
-    return (s.zone, s.pos, s.st, s.ctrl, s.phase, s.tp, s.turn, s.clk, s.tm_n, s.tm_m)
+    return (s.zone, s.pos, s.st, s.ctrl, s.phase, s.tp, s.turn, s.clk, s.tm_n, s.tm_m, s.suminfo)
 
 
 def changed(prev, s):
@@ -1431,6 +1472,12 @@ def ex_zones(s, p):
     me, op = zone_used(s, p, Z_MZONE), zone_used(s, 1 - p, Z_MZONE)
     emz = ~me[5] & ~me[6]
     return jnp.concatenate([~me[:5], jnp.stack([emz & ~op[6], emz & ~op[5]])])
+
+
+def pend_extra_zones(bank, s, p):
+    """Pendule recto de l'Extra Deck : cases principales désignées et une zone extra."""
+    ez = ex_zones(s, p)
+    return jnp.concatenate([ez[:N_MAIN_ZONES] & link_arrows(bank, s, p).any(0), ez[N_MAIN_ZONES:]])
 
 
 def has_fusion(bank, s):
@@ -1999,7 +2046,7 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins, count_asserts=False):
     branches[OP_COND_TURN] = lambda: cond(s.tp == rel(p, a))
     branches[OP_COND_EVP] = lambda: cond((evm & s.ev_g.any(axis=1) & (s.ev_p == rel(p, b))).any())
     branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0))
-                                          & ((c == 0) | ((s.st[h] & c) != 0)))
+                                          & ((c == 0) | jnp.where(c < 0, summon_matches(s.suminfo[h], c), (s.st[h] & c) != 0)))
     branches[OP_COND_LABEL] = lambda: cond(s.ch_lab != 0)
     branches[OP_COND_PHASE] = lambda: cond((s.phase & a) != 0)
     branches[OP_COND_ATK] = lambda: cond(jnp.where(a == 0, s.atk, s.atk_tgt) == h)  # la carte attaque / est attaquée
@@ -2188,11 +2235,36 @@ def exec_one(bank, s):
                      lambda s: adv(s._replace(reg=s.reg.at[ra].set(False))), s)
 
     def spsummon(s):
-        # un Link ne peut pas être invoqué sans la position d'attaque (field::is_player_can_spsummon : sumpos &=
-        # POS_FACEUP_ATTACK, puis refus si sumpos == 0) : il reste où il est
-        lk = (bank.ctype[s.cid] & TYPE_LINK) != 0
-        s = s._replace(reg=s.reg.at[ra].set(s.reg[ra] & ~(lk & ((b & P_FU_ATK) == 0))))
-        return _cond(s.reg[ra].any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
+        active = (op == OP_SPSUMMON) & s.reg[ra].any()
+        typ = effect_summon_type(c)
+        attempted = s.reg[ra] & active
+        s = s._replace(suminfo=jnp.where(attempted, summon_info(typ, s.zone, p), s.suminfo))
+        def prepare(_, carry):
+            group, failed_space = carry
+            lk = (bank.ctype[s.cid] & TYPE_LINK) != 0
+            group &= special_allowed(bank, s, proper=c > 0) & ~(lk & ((b & P_FU_ATK) == 0))
+            # Une réponse peut avoir rempli les cases ou interdit l'invocation après le ciblage.
+            space = jnp.where(s.zone == Z_EXTRA, ex_zones(s, p).any(), free_main(s, p) > 0)
+            faceup_pend = ((s.zone == Z_EXTRA) & ((bank.ctype[s.cid] & TYPE_PENDULUM) != 0)
+                           & ((s.pos & P_FACEUP) != 0))
+            pend_space = lax.fori_loop(0, (group & faceup_pend).any().astype(I32),
+                lambda _, previous: pend_extra_zones(bank, s, p).any(), jnp.bool_(True))
+            space = jnp.where(faceup_pend, pend_space, space)
+            selected = jnp.argmax(group)
+            need_link = group.any() & (s.zone[selected] == Z_EXTRA) & lk[selected]
+            link_space = lax.fori_loop(0, need_link.astype(I32),
+                lambda _, previous: link_zones(bank, s, p, selected).any(), jnp.bool_(True))
+            available = space & (~lk | link_space)
+            failed_space = group & ~available & (s.zone != Z_GRAVE)
+            return group & available, failed_space
+        group, failed_space = lax.fori_loop(0, active.astype(I32), prepare,
+            (s.reg[ra], jnp.zeros_like(s.reg[ra])))
+        # SpSummonStep / ss_tograve_set : un manque de place envoie la carte au
+        # cimetière par règle ; une interdiction d'invoquer ne le fait pas.
+        s = lax.fori_loop(0, failed_space.any().astype(I32),
+            lambda _, state: group_to_grave(bank, state, failed_space), s)
+        s = s._replace(reg=s.reg.at[ra].set(group))
+        return _cond(group.any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
 
     def lock(s):  # p ne peut plus activer les effets des cartes de ce nom ce tour
         return adv(_cond(s.reg[ra].any(), lambda s: s._replace(
@@ -2417,6 +2489,8 @@ def legal(bank, s, fus=True):
     pc = jnp.where((s.zctx == ZC_PROC) | (s.zctx == ZC_PEND), jnp.maximum(s.pend, 0), spc)  # carte invoquée
     is_lk = (ct[pc] & TYPE_LINK) != 0
     exz = lax.cond(is_lk & (s.dec == D_ZONE), lambda s: link_zones(bank, s, p, pc), lambda s: ex_zones(s, p), s)
+    faceup_pend = ((ct[pc] & TYPE_PENDULUM) != 0) & ((s.pos[pc] & P_FACEUP) != 0) & ~is_lk
+    exz = jnp.where(faceup_pend, jnp.concatenate([exz[:N_MAIN_ZONES] & plz, exz[N_MAIN_ZONES:]]), exz)
     zok = jnp.where(fromex, exz, ~used & (jnp.arange(7) < N_MAIN_ZONES))
     zok = jnp.where(s.zctx == ZC_PEND, pend_zones(bank, s, p, pc, plz), zok)
     # activation d'un pendule : zones pendule (cases 0 et 4)
@@ -2447,6 +2521,8 @@ def apply(bank, s, a):
 
     def summon(s, is_set):
         need = tributes_needed(bank, s, c)
+        info = summon_info(jnp.where(need > 0, SUMMON_TRIBUTE, SUMMON_NORMAL), _i(Z_HAND), s.tp)
+        s = s._replace(suminfo=s.suminfo.at[c].set(jnp.where(s.zone[c] == Z_HAND, info, s.suminfo[c])))
         s = s._replace(pend=c, pend_set=jnp.bool_(is_set), need=need, picks=_i(0), zctx=_i(ZC_SUMMON))
         s = s._replace(dec=jnp.where(need > 0, D_TRIBUTE, D_ZONE).astype(I32))
         # depuis l'Extra Deck : invocation synchro (matériaux choisis un par un en D_TRIBUTE, puis case et position)
@@ -2461,6 +2537,8 @@ def apply(bank, s, a):
         new = jnp.where(s.pos[c] == P_FU_ATK, P_FU_DEF, P_FU_ATK)
         fd = (jnp.arange(n) == c) & (s.pos[c] == P_FD_DEF)  # verso → recto : invocation par flip
         s = raise_ev(raise_ev(s, EV_FLIP_SUMMON, fd, s.tp), EV_FLIP, fd, s.tp)
+        info = (s.suminfo[c] & 0x7fffffff) | (s.tp << 31)
+        s = s._replace(suminfo=s.suminfo.at[c].set(jnp.where(fd[c], info, s.suminfo[c])))
         s = enable(s._replace(pos=s.pos.at[c].set(new),
                               st=s.st.at[c].set(s.st[c] | ST_FORM_CHANGED | jnp.where(fd[c], ST_FLIP_TURN, 0))), fd)
         return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
@@ -2552,6 +2630,11 @@ def apply(bank, s, a):
     def proc_place(s):  # fin d'une invocation par procédure (synchro) : pas de chaîne, fenêtre comme une invocation
         c = s.pend
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
+        ct = bank.ctype[s.cid[c]]
+        typ = jnp.where((ct & TYPE_LINK) != 0, SUMMON_LINK,
+                        jnp.where((ct & TYPE_XYZ) != 0, SUMMON_XYZ,
+                                  jnp.where((ct & TYPE_SYNCHRO) != 0, SUMMON_SYNCHRO, SUMMON_SPECIAL)))
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.tp)))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
         s = raise_ev(brk(s), EV_SPSUMMON, jnp.arange(n) == c, s.tp)  # break_effect après les matériaux
@@ -2579,6 +2662,7 @@ def apply(bank, s, a):
     def pend_place(s):
         c = s.pend
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(SUMMON_PENDULUM,s.zone[c],s.tp)))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
         s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM | ST_PSTEP))
@@ -2591,14 +2675,17 @@ def apply(bank, s, a):
     def eff_position(s):
         c = jnp.argmax(s.reg[jnp.clip(current_ins(bank, s)[1], 0, R - 1)])
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
-        # invocation fusion (depuis l'Extra Deck) ou rituelle (SPSUMMON avec proc) : correctement invoquée
-        fromex = (s.zone[c] == Z_EXTRA) | (current_ins(bank, s)[3] != 0)
+        # Seule une invocation de procédure explicite est correctement accomplie.
+        proper = current_ins(bank, s)[3]
+        completed = proper > 0
+        typ = effect_summon_type(proper)
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.ch_p)))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
         # Duel.SpecialSummon : EVENT_SPSUMMON_SUCCESS avec ep = PLAYER_NONE (operations.cpp, special_summon, étape 4) ;
         # une procédure (proc_place, pend_next) donne ep = le joueur qui invoque
         s = raise_ev(s, EV_SPSUMMON, jnp.arange(n) == c, _i(2))
-        s = s._replace(proc=s.proc.at[c].set(s.proc[c] | fromex))
+        s = s._replace(proc=s.proc.at[c].set(s.proc[c] | completed))
         return s._replace(st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM), pc=s.pc + 1, dec=_i(D_RUN))
 
     def to_ep(s):
@@ -2846,7 +2933,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
         cid, owner, seq, zone0, uid = cid[perm], owner[perm], seq[perm], zone0[perm], uid[perm]
     z = jnp.zeros(n, I32)
     f = jnp.bool_(False)
-    s = State(cid=cid, zone=zone0,
+    s = State(suminfo=z, cid=cid, zone=zone0,
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0), smin=_i(0),

@@ -80,7 +80,7 @@ def perturb(s, p):
     perm = rng.permutation(N)                      # renumérotation des slots
     inv = np.argsort(perm)
     sl = lambda x: np.where(x >= 0, inv[x], -1)
-    s = s._replace(**{f: getattr(s, f)[perm] for f in ("cid", "zone", "seq", "ctrl", "owner", "pos", "st", "pzone", "tg", "tg_e",
+    s = s._replace(**{f: getattr(s, f)[perm] for f in ("cid", "zone", "seq", "ctrl", "owner", "pos", "st", "pzone", "suminfo", "tg", "tg_e",
                                                   "atk_c", "df_c", "batk_c", "en_t", "cav", "cav_t", "fl_c", "ib_c",
                                                   "proc", "fz_c", "rz_c", "sz_c", "xz_c", "lz_c", "uid")},
                    ov_par=sl(s.ov_par)[perm], tm_m=s.tm_m[:, perm], tm_v=s.tm_v[:, perm],
