@@ -326,11 +326,7 @@ local function resolve(cl,first,e,tp,eg,ep,ev,re)
 	end
 	if v=="ss" and sel~="all" and not free(tp) then return false,false end
 	local g
-	if sel=="target" and cl.first_only then
-		local tc=Duel.GetFirstTarget()
-		if not tc or not tc:IsRelateToEffect(e) then return false,false end
-		g=Group.FromCards(tc):Filter(fn(f,e,tp),nil)
-	elseif sel=="target" or sel=="event" then
+	if sel=="target" or sel=="event" then
 		g=(Duel.GetTargetCards(e) or Group.CreateGroup()):Filter(fn(f,e,tp),nil)
 	elseif sel=="all" then
 		g=group(f,e,tp)
