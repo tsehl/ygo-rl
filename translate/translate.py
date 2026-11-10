@@ -2146,7 +2146,9 @@ class Translator:
             else:
                 need(self.on, "eg sans événement")
                 prog.emit(C.EVENT(r, self.on, trig=self.field_trig))
-            self.egreg = Reg(r)
+            single_events = (1 << core.EV_SUMMON) | (1 << core.EV_FLIP_SUMMON)
+            singleton = bool(self.on) and not (self.on & ~single_events) and not self.chaining
+            self.egreg = Reg(r, one=singleton)
             return self.egreg
         if isinstance(v, Attacker):
             r = prog.reg()
@@ -2210,11 +2212,7 @@ class Translator:
         if d == "Duel.GetFirstTarget" or d == "Duel.GetTargetCards":
             need(self.treg is not None, "cibles inconnues")
             need(d != "Duel.GetFirstTarget" or nret == 1, "plusieurs retours de GetFirstTarget")
-            if d == "Duel.GetFirstTarget" and not self.treg.one:
-                need(prog is not None and prog.kind == "resolve", "première cible hors résolution")
-                r = prog.reg()
-                prog.emit(C.FIRST(r, self.treg.r, original=True))
-                return Reg(r, self.treg.me, self.treg.op, one=True, target=True)
+            need(self.treg.one, "groupe de cibles multiples non représenté")
             return self.treg
         if d == "Duel.GetAttacker":
             r = prog.reg()
@@ -2224,6 +2222,7 @@ class Translator:
             need(prog is not None and prog.kind == "target", "SetTargetCard hors ciblage")
             need(self.treg is None, "deux groupes de cibles")
             self.treg = self.as_reg(E_(0), prog)
+            need(self.treg.one, "groupe de cibles multiples non représenté")
             self.treg.target = True
             prog.emit(C.LABEL(self.treg.r, target=True))
             return None
@@ -2241,6 +2240,7 @@ class Translator:
             need(prog is not None and (prog.kind != "resolve" or not tgt), "SelectTarget à la résolution")
             F_, _ = self.mkfilter(args[1], args[8:], args[2], args[3], args[4], args[7] if len(args) > 7 else None, env, tgt=tgt)
             mn, mx = self.cnum(args[5], env), self.cnum(args[6], env)
+            need(not tgt or mx == 1, "sélection de cibles multiples non représentée")
             r = self.select(prog, F_, sp, mn, mx, tgt)
             reg = Reg(r, F_[0], F_[1], one=(mx == 1), target=tgt)
             if tgt:
@@ -2434,12 +2434,8 @@ class Translator:
                 return obj
             need(prog is not None, "GetFirst sans programme représentable")
             source = self.as_reg(obj, prog)
-            if source.one:
-                return source
-            r = prog.reg()
-            original = source is self.treg and prog.kind == "resolve"
-            prog.emit(C.FIRST(r, source.r, original=original))
-            return Reg(r, source.me, source.op, one=True, target=original)
+            need(source.one, "GetFirst sur un groupe potentiellement multiple non représenté")
+            return source
         if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "Clone":
             need(not args, "Group.Clone : arguments")
             source = self.as_reg(obj, prog)

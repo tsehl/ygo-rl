@@ -77,10 +77,8 @@ class SourceRelationTests(unittest.TestCase):
                 self.assertEqual(effects[0][6][0], cards.REQ(0, 1, related=True))
                 path.write_text(script.replace('LOCATION_SZONE,0,1,1,e:GetHandler()',
                                                'LOCATION_SZONE,0,1,2,e:GetHandler()'))
-                multiple, *_ = translate.translate(600930051)
-                ops = multiple[0][6]
-                self.assertTrue(any(ins[0] == core.OP_MINATK and ins[3] == 3 for ins in ops))
-                self.assertTrue(any(ins[0] == core.OP_REQ and ins[3] == 2 for ins in ops))
+                with self.assertRaisesRegex(translate.Unsupported, 'cibles multiples'):
+                    translate.translate(600930051)
             finally:
                 translate.OFFICIAL = old
 
