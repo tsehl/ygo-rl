@@ -88,18 +88,24 @@ class InlineTests(unittest.TestCase):
             params = jax.tree.map(lambda x: jnp.asarray(x, jnp.float32), pickle.load(handle))
         migrated = dict(params)
         migrated['cards'] = dict(params['cards'])
-        for field, width in (('head', model.F_HEAD), ('eff', model.F_EFF)):
+        for field, width in (('head', model.F_HEAD), ('eff', model.F_EFF), ('ins', model.F_INS), ('filt', model.F_FILT), ('matf', model.F_FILT)):
             old = params['cards'][field]
             migrated['cards'][field] = dict(old, w=jnp.pad(old['w'], ((0, width-old['w'].shape[0]), (0, 0))))
         old = params['dyn']
         migrated['dyn'] = dict(old, w=jnp.pad(old['w'], ((0, model.F_DYN-old['w'].shape[0]), (0, 0))))
-        tokens, mask = model.card_tokens(self.bank)
+        feature_bank = self.bank._replace(
+            filt=self.bank.filt.at[0, 1, 0, core.F_REASON].set(core.REASON_LINK),
+            prog=self.bank.prog.at[0, 1, core.PG_RESOLVE, 0, 3].set(core.MOVE_REASON_EXPLICIT | (core.REASON_LINK << 1)))
+        tokens, mask = model.card_tokens(feature_bank)
         encode = jax.jit(model.encode_cards)
         actual = encode(params['cards'], tokens, mask)
         expected = encode(migrated['cards'], tokens, mask)
         np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
         s = jax.jit(core.push_link)(self.bank, self.answer(self.begin(), True))
+        s = s._replace(zone=s.zone.at[1].set(core.Z_GRAVE), pos=s.pos.at[1].set(core.P_GRAVE),
+                       reason=s.reason.at[1].set(core.REASON_LINK | core.REASON_MATERIAL))
         view = jax.jit(obs.observe)(self.bank, s)
+        self.assertTrue(bool(jnp.any(view.reason == (core.REASON_LINK | core.REASON_MATERIAL))))
         infer = jax.jit(model.policy)
         for a, b in zip(infer(params, actual, view), infer(migrated, expected, view)):
             np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-5)
@@ -115,7 +121,7 @@ class InlineTests(unittest.TestCase):
         state = jax.jit(core.begin_act)(bank, self.state, jnp.int32(0), jnp.int32(0))
         state = jax.jit(core.apply)(bank, state, jnp.int32(core.special(80, core.A_YES)))
         state = jax.jit(core.push_link)(bank, state)
-        key = core.opt_key(jnp.int32(0), jnp.int32(core.OPT_NAMEK+2))
+        key = core.opt_key(jnp.int32(0), jnp.int32(core.OPT_NAMEK+2), 1)
         self.assertTrue(bool(core.name_in(state.opt_cid[0], key)))
         disabled = state._replace(lk_neg=state.lk_neg.at[0].set(True))
         load = jax.jit(core.load_link)

@@ -61,6 +61,13 @@ SUMMON_FUSION, SUMMON_RITUAL, SUMMON_SYNCHRO = 0x43000000, 0x45000000, 0x4600000
 SUMMON_XYZ, SUMMON_PENDULUM, SUMMON_LINK = 0x49000000, 0x4a000000, 0x4c000000
 # suminfo : type natif (bits 24..30 et 0..15), zone d'origine (16..23), joueur (31).
 # L'information survit aux déplacements ; une nouvelle invocation la remplace.
+# Raisons natives composables (ocgapi_constants.h).
+REASON_DESTROY, REASON_RELEASE, REASON_MATERIAL, REASON_SUMMON = 1, 2, 8, 16
+REASON_BATTLE, REASON_EFFECT, REASON_COST, REASON_RULE = 32, 64, 128, 1024
+REASON_LOST_TARGET, REASON_DISCARD = 512, 16384
+REASON_FUSION, REASON_SYNCHRO, REASON_RITUAL, REASON_XYZ, REASON_LINK = 0x40000, 0x80000, 0x100000, 0x200000, 0x10000000
+MOVE_REASON_EXPLICIT = 1 << 30
+
 ST_ACTDIS = 32768  # activation niée (STATUS_ACTIVATE_DISABLED) : un pendule va alors au cimetière, pas dans l'Extra Deck
 ST_PSTEP = 65536  # placée par l'invocation pendule en cours (EVENT_SPSUMMON du groupe à la fin)
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | ST_CNT | (ST_CNT << 1) | ST_FLIP_TURN
@@ -139,8 +146,8 @@ N_OPS = 31
 # sur ce label à la résolution ; OP_YESNO : le joueur de l'effet choisit de continuer (D_YESNO)
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
-    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX = range(22)
-FW = 22  # F_ZX : bits ZX_* (co-lié, case principale)
+    F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX, F_REASON, F_NOTTYPE = range(24)
+FW = 24  # F_ZX : bits ZX_* (co-lié, case principale)
 ZX_COLINK, ZX_MAIN, ZX_EXTRA = 1, 2, 4  # GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
@@ -304,6 +311,7 @@ def test_prog(prog, c):
 
 
 class State(NamedTuple):
+    reason: jnp.ndarray # [N] dernier masque de raisons natif connu
     suminfo: jnp.ndarray # [N] dernière invocation : type, zone d’origine et joueur
     cid: jnp.ndarray     # [N] index dans la banque
     zone: jnp.ndarray    # [N]
@@ -539,7 +547,7 @@ def enable(s, mask):
 LOC_RANK = (Z_DECK, Z_HAND, Z_MZONE, Z_SZONE, Z_GRAVE, Z_REMOVED)
 
 
-def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None):
+def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None, reason=0):
     """Envoie les cartes `mask` dans la zone ordonnée `zone` (cimetière, main) de leur propriétaire, d'un coup.
     Comme ygopro-core (card_operation_sort), elles y arrivent triées par contrôleur (joueur du tour d'abord),
     zone d'origine, puis seq (croissante sur le terrain et en main, décroissante pour deck/cimetière/bannies). O(N).
@@ -575,6 +583,7 @@ def group_send(s, mask, zone, pos, zone2=None, pos2=None, alt=None):
             base = count(s, zone, o)
         seq = jnp.where(mo, base + rank, seq)
     s = compact(s, mask)
+    s = s._replace(reason=jnp.where(mask, reason, s.reason))
     if alt is not None and zone2 == Z_EXTRA and pos2 == P_FD_DEF:  # les pendules recto se décalent
         fu = (s.zone == Z_EXTRA) & (s.pos == P_FU_DEF) & ~mask
         nin = jnp.stack([(mask & alt & (s.owner == o)).sum() for o in (0, 1)])
@@ -614,7 +623,7 @@ def drop_overlays(s):
 
     def drop(s):  # seulement s'il y en a : refresh est appelé plus souvent dans step que dans step_batch (clk, ev_p)
         s2 = s._replace(seq=jnp.where(ovm, s.seq[par] * 8 + s.seq, s.seq), ctrl=jnp.where(ovm, s.ctrl[par], s.ctrl))
-        s2 = group_send(s2, ovm, Z_GRAVE, P_GRAVE)
+        s2 = group_send(s2, ovm, Z_GRAVE, P_GRAVE, reason=REASON_RULE | REASON_LOST_TARGET)
         return raise_ev(s2._replace(ov_par=jnp.where(ovm, -1, s2.ov_par)), EV_TO_GRAVE, ovm, s.tp)
     return _cond(ovm.any(), drop, lambda s: s, s)
 
@@ -632,22 +641,22 @@ def attach(s, sel, par):
                       en_t=jnp.where(sel, s.clk + 1, s.en_t), clk=s.clk + 1)
 
 
-def group_to_hand(bank, s, mask):
+def group_to_hand(bank, s, mask, reason=0):
     """Renvoi en main ; un monstre de l'Extra Deck retourne dans l'Extra Deck (verso)."""
     ex = mask & ((bank.ctype[s.cid] & TYPE_EXTRA) != 0)
-    return group_send(s, mask, Z_HAND, P_HAND, Z_EXTRA, P_FD_DEF, alt=ex)
+    return group_send(s, mask, Z_HAND, P_HAND, Z_EXTRA, P_FD_DEF, alt=ex, reason=reason)
 
 
-def group_to_grave(bank, s, mask):
+def group_to_grave(bank, s, mask, reason=0):
     """Envoi au cimetière. Un pendule qui quitte le terrain (zone monstres, ou zone magie/piège sans activation niée)
     va plutôt dans l'Extra Deck, recto, après les autres cartes (field::send_to, pas d'EVENT_TO_GRAVE)."""
     pen = (bank.ctype[s.cid] & TYPE_PENDULUM) != 0
     red = mask & pen & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ACTDIS) == 0)))
-    return raise_ev(group_send(s, mask, Z_GRAVE, P_GRAVE, Z_EXTRA, P_FU_DEF, alt=red), EV_TO_GRAVE, mask & ~red, s.tp)
+    return raise_ev(group_send(s, mask, Z_GRAVE, P_GRAVE, Z_EXTRA, P_FU_DEF, alt=red, reason=reason), EV_TO_GRAVE, mask & ~red, s.tp)
 
 
-def selected_to_grave(bank, s):
-    return group_to_grave(bank, s, (s.st & ST_SEL) != 0)._replace(picks=_i(0))
+def selected_to_grave(bank, s, reason=0):
+    return group_to_grave(bank, s, (s.st & ST_SEL) != 0, reason)._replace(picks=_i(0))
 
 
 def lose(s, p, cond):
@@ -697,10 +706,10 @@ def name_in(table, cid):
     return (table == (cid + 1)[..., None]).any(-1)
 
 
-def opt_key(cid, opt):
-    """Clé du registre par nom pour une limite OPT_NAME / OPT_NAMEK+k-1 : cid (+ k << 16) ; -1 sans limite par nom."""
+def opt_key(cid, opt, oath=0):
+    """Clé par nom : identifiant, index natif 8 bits et indicateur OATH."""
     k = jnp.where(opt >= OPT_NAMEK, opt - OPT_NAMEK + 1, 0)
-    return jnp.where((opt == OPT_NAME) | (opt >= OPT_NAMEK), cid + (k << 16), -1)
+    return jnp.where((opt == OPT_NAME) | (opt >= OPT_NAMEK), cid + (k << 16) + (_i(oath) << 24), -1)
 
 
 def name_add(table, cid):
@@ -743,8 +752,10 @@ def act_ok(bank, s, h, e, p, enabled=None):
     # une carte aux effets annulés peut encore les activer (is_activateable ne teste pas STATUS_DISABLED) : ils sont
     # annulés à la résolution (load_link)
     def check():
+        oath = bank.erefund[cid, e] if bank.erefund.shape[1] else 0
+        key = opt_key(cid, bank.eopt[cid, e], oath)
         return (test_ok(bank, s, h, e, p, enabled=enabled) & ((bank.ekind[cid, e] == K_PROC) | ~name_in(s.lock_cid[p], cid))
-                & ~((opt_key(cid, bank.eopt[cid, e]) >= 0) & name_in(s.opt_cid[p], opt_key(cid, bank.eopt[cid, e])))
+                & ~((key >= 0) & name_in(s.opt_cid[p], key))
                 & ~(((bank.eopt[cid, e] == OPT_CARD) | (bank.eopt[cid, e] == OPT_CARD_NR))
                     & ((s.st[h] & ((ST_CNT | ST_CNTN) << e)) != 0)))
     if enabled is None:
@@ -963,7 +974,7 @@ def dmg_send(bank, s):
     """Fin du damage step : les monstres détruits au combat encore sur le terrain vont au cimetière, puis point
     d'événement (« détruit au combat », « envoyé au cimetière »)."""
     m = ((s.st & ST_BDES) != 0) & (s.zone == Z_MZONE)
-    s = raise_ev(group_to_grave(bank, s, m), EV_BATTLE_DESTROYED, m, s.tp)
+    s = raise_ev(group_to_grave(bank, s, m, REASON_BATTLE | REASON_DESTROY), EV_BATTLE_DESTROYED, m, s.tp)
     return trig_point(bank, open_quick(s, s.tp, R_DMG2, chained=False))
 
 
@@ -1075,6 +1086,12 @@ def special_allowed(bank, s, proper=False):
             & ((bank.ctype[s.cid] & TYPE_MONSTER) != 0) & (revive | proper))
 
 
+def reason_matches(actual, selector):
+    """Positif : au moins un bit ; négatif : tous les bits demandés."""
+    mask = jnp.abs(selector)
+    return jnp.where(selector < 0, (actual & mask) == mask, (actual & mask) != 0)
+
+
 def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     """Évalue un filtre (enregistrement fixe) pour le joueur p, carte source h. O(N).
     bdes : exclut les monstres détruits au combat (sélections) ; False pour les cibles des effets continus.
@@ -1089,6 +1106,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     ct = bank.ctype[s.cid]
     ct = jnp.where(((ct & TYPE_PENDULUM) != 0) & (s.zone == Z_SZONE), P_SPELL, ct)  # zone pendule : magie pendule
     m &= (f[F_TYPE] == 0) | ((ct & f[F_TYPE]) != 0)
+    m &= (ct & f[F_NOTTYPE]) == 0
     m &= ~((f[F_NOT_SELF] != 0) & (jnp.arange(n) == h))
     atk, df = s.atk_c, s.df_c
     m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
@@ -1110,6 +1128,7 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     m &= (f[F_FUS] == 0) | (s.fz_c & nss)
     m &= (f[F_RIT] == 0) | ((((s.rz_c >> jnp.maximum(f[F_RIT] - 1, 0)) & 1) != 0) & nss)
     m &= (f[F_NODIS] == 0) | ((s.fl_c & FL_DISABLED) == 0)
+    m &= (f[F_REASON] == 0) | reason_matches(s.reason, f[F_REASON])
     m &= ((f[F_ZX] & ZX_COLINK) == 0) | s.cl_c
     m &= ((f[F_ZX] & ZX_MAIN) == 0) | (s.seq < N_MAIN_ZONES)
     need_extra = (f[F_ZX] & ZX_EXTRA) != 0
@@ -1266,7 +1285,7 @@ def stats(bank, s):
 def stats_key(s):
     """Entrées de stats() qui changent pendant la partie (hors ses propres sorties) : si elles n'ont pas bougé, refresh
     est inutile (il est idempotent sur un état inchangé)."""
-    return (s.zone, s.pos, s.st, s.ctrl, s.phase, s.tp, s.turn, s.clk, s.tm_n, s.tm_m, s.suminfo)
+    return (s.zone, s.pos, s.st, s.ctrl, s.phase, s.tp, s.turn, s.clk, s.tm_n, s.tm_m, s.reason, s.suminfo)
 
 
 def changed(prev, s):
@@ -1307,13 +1326,14 @@ def refresh_b(bank, prev, s, frac=8):
 SUBS = [[(q >> j) & 1 for j in range(FK)] for q in range(1 << FK)]  # sous-ensembles des emplacements de matériaux
 
 
-MAT_FIELDS = (F_TYPE, F_ATTR, F_RACE, F_SET, F_CODE1, F_CODE2, F_LV_LO, F_LV_HI)  # champs permis dans une recette
+MAT_FIELDS = (F_TYPE, F_NOTTYPE, F_ATTR, F_RACE, F_SET, F_CODE1, F_CODE2, F_LV_LO, F_LV_HI)  # champs permis dans une recette
 
 
 def mat_mask(bank, s, f):
     """Filtre de matériau allégé (seulement les champs MAT_FIELDS, sans la zone) : moins cher que filter_mask."""
     ct, code, lv = bank.ctype[s.cid], bank.code[s.cid], bank.level[s.cid]
     m = (f[F_TYPE] == 0) | ((ct & f[F_TYPE]) != 0)
+    m &= (ct & f[F_NOTTYPE]) == 0
     m &= (f[F_ATTR] == 0) | ((bank.attr[s.cid] & f[F_ATTR]) != 0)
     m &= (f[F_RACE] == 0) | ((bank.race[s.cid] & f[F_RACE]) != 0)
     m &= (f[F_SET] == 0) | set_match(bank, s.cid, f[F_SET])
@@ -2046,7 +2066,9 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins, count_asserts=False):
     branches[OP_COND_TURN] = lambda: cond(s.tp == rel(p, a))
     branches[OP_COND_EVP] = lambda: cond((evm & s.ev_g.any(axis=1) & (s.ev_p == rel(p, b))).any())
     branches[OP_COND_SELF] = lambda: cond(((a == 0) | ((s.zone[h] & a) != 0)) & ((b == 0) | ((s.pzone[h] & b) != 0))
-                                          & ((c == 0) | jnp.where(c < 0, summon_matches(s.suminfo[h], c), (s.st[h] & c) != 0)))
+                                          & ((c == 0) | jnp.where(c < 0,
+                                                jnp.where((-c & (1 << 30)) != 0, reason_matches(s.reason[h], -c & 0x1fffffff),
+                                                          summon_matches(s.suminfo[h], c)), (s.st[h] & c) != 0)))
     branches[OP_COND_LABEL] = lambda: cond(s.ch_lab != 0)
     branches[OP_COND_PHASE] = lambda: cond((s.phase & a) != 0)
     branches[OP_COND_ATK] = lambda: cond(jnp.where(a == 0, s.atk, s.atk_tgt) == h)  # la carte attaque / est attaquée
@@ -2092,7 +2114,8 @@ def current_ins(bank, s):
 def use_count(bank, s, c, e, p, enabled=True):
     """Consomme la limite d'une activation ou d'une procédure, sans construire de maillon."""
     opt = bank.eopt[s.cid[c], e]
-    key = opt_key(s.cid[c], opt)
+    oath = bank.erefund[s.cid[c], e] if bank.erefund.shape[1] else 0
+    key = opt_key(s.cid[c], opt, oath)
     def add(_, table):
         return table.at[p].set(name_add(table[p], key))
     counts = lax.fori_loop(0, jnp.where(enabled & (key >= 0), 1, 0), add, s.opt_cid)
@@ -2149,7 +2172,7 @@ def load_link(bank, s, k):
     c = jnp.maximum(s.lk_src[k], 0)
     if bank.erefund.shape[1]:
         e, p = s.lk_eff[k], s.lk_p[k]
-        key = opt_key(s.cid[c], bank.eopt[s.cid[c], e])
+        key = opt_key(s.cid[c], bank.eopt[s.cid[c], e], bank.erefund[s.cid[c], e])
         refund = (bank.erefund[s.cid[c], e] != 0) & ((s.lk_flags[k] & CF_ACT_NEG) != 0) & (key >= 0)
         def restore(_, table):
             return table.at[p].set(jnp.where(table[p] == key + 1, 0, table[p]))
@@ -2168,7 +2191,7 @@ def chain_end(bank, s):
     """Chaîne résolue : les magies/pièges activés encore sur le terrain partent ensemble au cimetière, puis
     nouvelle fenêtre pour le joueur du tour."""
     n = s.cid.shape[0]
-    s = group_to_grave(bank, s, (s.st & ST_LEAVE) != 0)
+    s = group_to_grave(bank, s, (s.st & ST_LEAVE) != 0, REASON_RULE)
     s = s._replace(n_chain=_i(0), ch_src=_i(-1), ch_k=_i(0), pg=_i(0), pc=_i(0), reg=jnp.zeros((R, n), bool))
     return trig_point(bank, open_quick(s, s.tp, chained=True))
 
@@ -2215,12 +2238,18 @@ def exec_one(bank, s):
     def move_(s):  # vers le cimetière (détruire, libérer, défausser, envoyer), la main du propriétaire ou les bannies
         # c = 1 : destruction (Duel.Destroy) : les cartes indestructibles par les effets restent ; le registre ne garde
         # que les cartes détruites (Destroy(...) ~= 0)
-        t = target(s) & ~((c == 1) & ((s.fl_c & FL_INDES_EFF) != 0) & (s.zone == Z_MZONE))
-        s = s._replace(reg=jnp.where(c == 1, s.reg.at[ra].set(t), s.reg))
+        destroying = (c & 1) != 0
+        supplied = (c & MOVE_REASON_EXPLICIT) != 0
+        raw_reason = (c >> 1) & 0x1fffffff
+        base = jnp.where(supplied, raw_reason, jnp.where(s.pg == PG_COST, REASON_COST, REASON_EFFECT))
+        reason = base | jnp.where(destroying, REASON_DESTROY, 0)
+        reason |= jnp.where((c < 0) & (s.zone[h] == Z_MZONE), REASON_RELEASE, 0)
+        t = target(s) & ~(destroying & ((s.fl_c & FL_INDES_EFF) != 0) & (s.zone == Z_MZONE))
+        s = s._replace(reg=jnp.where(destroying, s.reg.at[ra].set(t), s.reg))
         return adv(_switch(jnp.where(b == Z_HAND, 1, jnp.where(b == Z_REMOVED, 2, 0)),
-                              [lambda s: group_to_grave(bank, s, t),
-                               lambda s: group_to_hand(bank, s, t),
-                               lambda s: group_send(s, t, Z_REMOVED, P_GRAVE)], s))
+                              [lambda s: group_to_grave(bank, s, t, reason),
+                               lambda s: group_to_hand(bank, s, t, reason),
+                               lambda s: group_send(s, t, Z_REMOVED, P_GRAVE, reason=reason)], s))
 
     def fusmat(s):  # matériaux du monstre fusion du registre b, choisis un par un par p (D_SELECT), rangés dans a
         f = jnp.argmax(s.reg[jnp.clip(b, 0, R - 1)])
@@ -2262,7 +2291,7 @@ def exec_one(bank, s):
         # SpSummonStep / ss_tograve_set : un manque de place envoie la carte au
         # cimetière par règle ; une interdiction d'invoquer ne le fait pas.
         s = lax.fori_loop(0, failed_space.any().astype(I32),
-            lambda _, state: group_to_grave(bank, state, failed_space), s)
+            lambda _, state: group_to_grave(bank, state, failed_space, REASON_RULE), s)
         s = s._replace(reg=s.reg.at[ra].set(group))
         return _cond(group.any(), lambda s: s._replace(dec=_i(D_ZONE), zctx=_i(ZC_SPSUM), dec_player=p), adv, s)
 
@@ -2550,7 +2579,7 @@ def apply(bank, s, a):
         # aucune cible possible (CANNOT_BE_BATTLE_TARGET) : attack_announce_failed, l'attaque compte, pas de fenêtre
         ok = (opp & ((s.fl_c & FL_NO_BTARGET) == 0)).any()
         return _cond(has_target, lambda s: _cond(ok, lambda s: s._replace(dec=_i(D_TARGET)), to_battle, s),
-                            lambda s: declare(s, _i(-1), jnp.bool_(False)), s)
+                            lambda s: trig_point(bank, declare(s, _i(-1), jnp.bool_(False))), s)
 
     def select(s):
         def pick(s):
@@ -2565,15 +2594,16 @@ def apply(bank, s, a):
                             jnp.where(s.psel == PS_XYZ, xdone, (s.psel == 0) & (s.need == 0)))
             done = lambda s: _cond(s.psel == PS_XYZ,
                                    lambda s: attach(s, sel, s.pend)._replace(picks=_i(0)),  # matériaux Xyz attachés
-                                   lambda s: selected_to_grave(bank, s), s)._replace(dec=_i(D_ZONE), psel=_i(0))
+                                   lambda s: selected_to_grave(bank, s, jnp.where(s.psel == PS_SYN,
+                                       REASON_SYNCHRO | REASON_MATERIAL, REASON_SUMMON | REASON_MATERIAL | REASON_RELEASE)), s)._replace(dec=_i(D_ZONE), psel=_i(0))
             return _cond(fin, done, lambda s: s, s)
 
         def target(s):
-            return declare(s, c, s.rpl)
+            return trig_point(bank, declare(s, c, s.rpl))
 
         def discard(s):
             s = pick(s)
-            return _cond(s.need == 0, lambda s: trig_point(bank, open_quick(selected_to_grave(bank, s), s.tp, R_HAND,
+            return _cond(s.need == 0, lambda s: trig_point(bank, open_quick(selected_to_grave(bank, s, REASON_RULE | REASON_DISCARD | 0x100), s.tp, R_HAND,
                                                                             chained=False)), lambda s: s, s)
 
         def eff_select(s):
@@ -2709,7 +2739,7 @@ def apply(bank, s, a):
             to_ep, zone, position,
             lambda s: _cond(s.dec == D_TRIBUTE,  # fin de la sélection des matériaux Link : au cimetière, puis la case
                             lambda s: _cond(s.psel == PS_PEND, pend_next,  # pendule : placement carte par carte
-                                            lambda s: selected_to_grave(bank, s)._replace(dec=_i(D_ZONE), psel=_i(0)), s),
+                                            lambda s: selected_to_grave(bank, s, REASON_LINK | REASON_MATERIAL)._replace(dec=_i(D_ZONE), psel=_i(0)), s),
                             lambda s: _cond(s.dec == D_SELECT, lambda s: sel_finish(bank, s), lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
                                             lambda s: pass_priority(bank, s), s), s), s),
             lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
@@ -2933,7 +2963,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
         cid, owner, seq, zone0, uid = cid[perm], owner[perm], seq[perm], zone0[perm], uid[perm]
     z = jnp.zeros(n, I32)
     f = jnp.bool_(False)
-    s = State(suminfo=z, cid=cid, zone=zone0,
+    s = State(reason=z, suminfo=z, cid=cid, zone=zone0,
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0), smin=_i(0),

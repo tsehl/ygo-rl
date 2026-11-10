@@ -26,6 +26,7 @@ ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, 
 
 
 class Obs(NamedTuple):
+    reason: jnp.ndarray # [T] raison visible du dernier déplacement
     suminfo: jnp.ndarray # [T] type, origine et joueur de la dernière invocation visible
     valid: jnp.ndarray     # [T] bool
     known: jnp.ndarray     # [T] bool : identité visible
@@ -104,7 +105,8 @@ def observe(bank, s, p=None, m=None):
           for z in (core.Z_HAND, core.Z_DECK, core.Z_MZONE, core.Z_SZONE, core.Z_GRAVE, core.Z_REMOVED)],
     ]).astype(I32)
     zero = lambda x: jnp.where(kn, x, 0)
-    return Obs(suminfo=zero(s.suminfo[idx]), valid=valid, known=kn, cid=jnp.where(kn, c, -1), atk=zero(s.atk_c[idx]), df=zero(s.df_c[idx]),
+    tracked_reason = ((s.zone[idx] & (core.Z_GRAVE | core.Z_REMOVED | core.Z_EXTRA)) != 0)
+    return Obs(reason=jnp.where(tracked_reason, zero(s.reason[idx]), 0), suminfo=zero(s.suminfo[idx]), valid=valid, known=kn, cid=jnp.where(kn, c, -1), atk=zero(s.atk_c[idx]), df=zero(s.df_c[idx]),
                level=zero(bank.level[c]), zone=jnp.where(valid, s.zone[idx], 0), seq=jnp.where(valid & ~deck[idx], vseq[idx], 0),
                mine=mine[idx] & valid, pos=jnp.where(valid, s.pos[idx], 0),
                st=jnp.where(valid, (s.st[idx] & ST_PUBLIC) | own_sel, 0), pending=pend,

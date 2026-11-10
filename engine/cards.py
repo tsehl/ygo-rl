@@ -27,14 +27,14 @@ ME, OPP = 0, 1
 
 
 def F(me=0, op=0, pos=0, typ=0, not_self=0, atk=(-BIG, BIG), df=(-BIG, BIG), attr=0, race=0, setc=0, code=(0, 0),
-      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0, rit=0, zx=0):
-    """setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
+      st=0, lv=(-BIG, BIG), spsum=0, nodis=0, fus=0, rit=0, zx=0, reason=0, not_typ=0):
+    """not_typ : types exclus ; setc : archétype (setcode ygopro) ; code : un ou deux noms de carte (ids ygopro) ; st : l'un de ces bits de
     statut ; spsum : peut être invoquée spécialement (IsCanBeSpecialSummoned) ; nodis : effets non annulés ;
     fus : monstre fusion invocable maintenant avec la main et le terrain (recette réalisable) ; rit : monstre rituel
     invocable maintenant par rituel en mode RIT_GREATER / RIT_EQUAL ; zx : bits ZX_* (co-lié, case principale)."""
     code = (code, code) if isinstance(code, int) else code
     return (me, op, pos, typ, not_self, atk[0], atk[1], df[0], df[1], attr, race, setc, code[0], code[1], st, lv[0], lv[1],
-            spsum, nodis, fus, rit, zx)
+            spsum, nodis, fus, rit, zx, reason, not_typ)
 
 
 class Effects(list):
@@ -56,8 +56,17 @@ def CHOOSE(dst, src, n, who=ME, upto=False, mn=None):
     if mn is not None:
         return (OP_CHOOSE, dst, src, mn | (n << 4) | (who << 8) | (1 << 9))
     return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
-def MOVE(r, zone=Z_GRAVE): return (OP_MOVE, r, zone, 0)
-def DESTROY(r): return (OP_MOVE, r, Z_GRAVE, 1)  # Duel.Destroy : les indestructibles par effet restent, r = détruites
+def MOVE(r, zone=Z_GRAVE, *, reason=None, release_if_field=False):
+    if reason is not None and not 0 <= reason <= 0x1fffffff:
+        raise ValueError("raison de déplacement hors limites")
+    if release_if_field and reason is None:
+        raise ValueError("libération conditionnelle sans raison explicite")
+    encoded = 0 if reason is None else core.MOVE_REASON_EXPLICIT | (reason << 1)
+    if release_if_field:
+        encoded = (encoded | (1 << 31)) - (1 << 32)
+    return (OP_MOVE, r, zone, encoded)
+def DESTROY(r, *, reason=None):
+    return (*MOVE(r, Z_GRAVE, reason=reason)[:3], MOVE(r, Z_GRAVE, reason=reason)[3] | 1)  # Duel.Destroy : les indestructibles par effet restent, r = détruites
 def SPSUMMON(r, pos, proc=False, *, fusion=False, tag=0):
     if tag and (proc or fusion):
         raise ValueError("marqueur générique incompatible avec une procédure")
@@ -77,6 +86,10 @@ def EVENT(r, ev, trig=False): return (OP_EVENT, r, ev, int(trig))  # cartes conc
 def COND_TURN(who): return (OP_COND_TURN, who, 0, 0)     # c'est le tour de who
 def COND_EVP(ev, who): return (OP_COND_EVP, ev, who, 0)  # l'un des événements ev vient de who
 def COND_SELF(zone=0, prev=0, st=0): return (OP_COND_SELF, zone, prev, st)  # la carte est dans zone / venait de prev / a l'un des statuts st
+def COND_REASON(mask):
+    if not 0 < mask <= 0x1fffffff:
+        raise ValueError("masque de raison hors limites")
+    return COND_SELF(st=-((1 << 30) | mask))
 def LABEL(r): return (OP_LABEL, r, 0, 0)            # e:SetLabel(registre r non vide) à l'activation
 def COND_LABEL(): return (OP_COND_LABEL, 0, 0, 0)   # à la résolution : le label est mis
 def YESNO(): return (OP_YESNO, 0, 0, 0)             # Duel.SelectYesNo : non arrête l'effet
@@ -96,7 +109,7 @@ def ritual_spell(code, mode):
     """Sort rituel (Ritual.AddProcGreaterCode / AddProcEqualCode) pour le monstre rituel code, depuis la main."""
     f = F(me=Z_HAND, code=code, rit=mode)
     return [act(target=[FILTER(0, f), REQ(0, 1)],
-                resolve=[FILTER(0, f), CHOOSE(1, 0, 1), RITMAT(2, 1, mode), MOVE(2), SPSUMMON(1, P_FU_ATK | P_FU_DEF, True)])]
+                resolve=[FILTER(0, f), CHOOSE(1, 0, 1), RITMAT(2, 1, mode), MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_RITUAL | core.REASON_RELEASE), SPSUMMON(1, P_FU_ATK | P_FU_DEF, True)])]
 
 
 def ev(*codes):
@@ -153,7 +166,7 @@ def knightmare(tgt, indes):
     Continu : les monstres co-liés de son contrôleur ne peuvent pas être détruits (indes : au combat / par les effets)."""
     colinked = F(me=Z_MZONE, zx=ZX_COLINK)
     return [trigger(ev(EV_SPSUMMON), optional=True, opt=True,
-                    cost=[COND_SELF(st=ST_LINKSUM), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1)],
+                    cost=[COND_SELF(st=ST_LINKSUM), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1, reason=core.REASON_COST | core.REASON_DISCARD)],
                     target=[FILTER(2, tgt, tgt=True), CHOOSE(3, 2, 1), SELF(0), FILTER(0, colinked, within=0), LABEL(0)],
                     resolve=[DESTROY(3), REQ(3, 1), COND_LABEL(), FILTER(0, MY_DECK), REQ(0, 1), YESNO(), DRAW(ME, 1)]),
             cont(Z_MZONE, indes, 0, tgt=colinked)]
@@ -193,19 +206,19 @@ CARDS = {
     83764718: [act(target=[REQ_FREE(ME, Z_MZONE, 1), FILTER(0, GRAVE_MON_SS, tgt=True), CHOOSE(1, 0, 1)],  # Monster Reborn
                    resolve=[SPSUMMON(1, P_FU_ATK | P_FU_DEF, tag=1010)])],  # SUMMON_WITH_MONSTER_REBORN
     79571449: [act(target=[FILTER(0, MY_DECK), REQ(0, 3)],                                      # Graceful Charity
-                   resolve=[DRAW(ME, 3), SHUFFLE_HAND(ME), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 2), MOVE(1)])],
+                   resolve=[DRAW(ME, 3), SHUFFLE_HAND(ME), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 2), MOVE(1, reason=core.REASON_EFFECT | core.REASON_DISCARD)])],
     18144506: [act(target=[FILTER(0, OPP_ST), REQ(0, 1)], resolve=[FILTER(0, OPP_ST), DESTROY(0)])],  # Feather Duster
-    74131780: [ignition(cost=[SELF(0), MOVE(0)],                                                # Exiled Force
+    74131780: [ignition(cost=[SELF(0), MOVE(0, reason=core.REASON_COST | core.REASON_RELEASE)],                                                # Exiled Force
                         target=[FILTER(1, F(me=Z_MZONE, op=Z_MZONE, not_self=1), tgt=True), CHOOSE(2, 1, 1)],
                         resolve=[DESTROY(2)])],
-    11384280: [ignition(cost=[FILTER(0, F(me=Z_MZONE)), CHOOSE(1, 0, 1), MOVE(1)],              # Cannon Soldier
+    11384280: [ignition(cost=[FILTER(0, F(me=Z_MZONE)), CHOOSE(1, 0, 1), MOVE(1, reason=core.REASON_COST | core.REASON_RELEASE)],              # Cannon Soldier
                         resolve=[DAMAGE(OPP, 500)])],
     # jalon 3a : chaînes
     83968380: [act(target=[FILTER(0, MY_DECK), REQ(0, 1)], resolve=[DRAW(ME, 1)])],               # Jar of Greed
     24068492: [act(target=[FILTER(0, OPP_MON), REQ(0, 1)],                                       # Just Desserts
                    resolve=[FILTER(0, OPP_MON), DAMAGE(OPP, 500, per=0)])],
     5318639: [act(target=[FILTER(0, FIELD_ST, tgt=True), CHOOSE(1, 0, 1)], resolve=[DESTROY(1)])],            # Mystical Space Typhoon
-    77414722: [act(cost=[COND_CHAIN(TYPE_SPELL), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1)],  # Magic Jammer
+    77414722: [act(cost=[COND_CHAIN(TYPE_SPELL), FILTER(0, F(me=Z_HAND)), CHOOSE(1, 0, 1), MOVE(1, reason=core.REASON_COST | core.REASON_DISCARD)],  # Magic Jammer
                    resolve=[NEGATE(), CHAINCARD(0), DESTROY(0)])],
     3819470: [act(cost=[COND_CHAIN(TYPE_TRAP), PAY_LP(1000)], resolve=[NEGATE(), CHAINCARD(0), DESTROY(0)])],  # Seven Tools
     # jalon 3b : pièges sur événement
@@ -249,7 +262,7 @@ CARDS = {
                    resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 1500)])],
     13314457: [trigger(ev(EV_TO_GRAVE), target=[COND_SELF(prev=ONFIELD)],                                 # Deepsea Macrotrema
                        resolve=[FILTER(0, F(me=Z_MZONE, pos=P_FACEUP, attr=WATER)), MODIFY(0, MC_ATK, 500)])],
-    25109950: [ignition(cost=[FILTER(0, F(me=Z_MZONE, not_self=1)), CHOOSE(1, 0, 1), MOVE(1)],         # Little Swordsman of Aile
+    25109950: [ignition(cost=[FILTER(0, F(me=Z_MZONE, not_self=1)), CHOOSE(1, 0, 1), MOVE(1, reason=core.REASON_COST | core.REASON_RELEASE)],         # Little Swordsman of Aile
                         target=[SELF(2)], resolve=[FILTER(3, F(me=Z_MZONE, pos=P_FACEUP), within=2), MODIFY(3, MC_ATK, 700, rd=True)])],
     # jalon 4, volet 2 : damage step, SET_ATTACK / SET_ATTACK_FINAL / SET_BASE_ATTACK
     70046172: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                         # Rush Recklessly
@@ -283,7 +296,7 @@ CARDS = {
                               MODIFY(3, MC_DISABLE)])],
     # jalon 5, volet a : fusion
     24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
-                   resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2),
+                   resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_FUSION),
                             SPSUMMON(1, P_FU_ATK | P_FU_DEF, fusion=True)])],
     # jalon 5, volet d : Xyz ; détacher = choisir parmi ses propres matériaux (filtre Z_OVERLAY) et les envoyer au cimetière
     69610924: [ignition(opt=OPT_CARD, cost=[FILTER(0, F(me=Z_OVERLAY)), CHOOSE(1, 0, 1), MOVE(1)],      # Leviathan Dragon
@@ -441,6 +454,8 @@ J4D_MONSTERS = [97268402]
 J4D = set(J4D_SPELLS) | set(J4D_MONSTERS)
 # jalon 5 : recettes de fusion (un filtre par matériau, pris sur la main et le terrain) ; EnableReviveLimit pour tous
 def MAT(**kw):  # filtre d'un matériau de fusion : main et terrain du joueur
+    if kw.get("reason", 0):
+        raise ValueError("raison non représentée pour les matériaux")
     return F(me=Z_HAND | Z_MZONE, **kw)
 
 

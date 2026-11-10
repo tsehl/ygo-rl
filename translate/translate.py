@@ -194,7 +194,7 @@ class Filt:
 
     def __init__(self):
         self.d = dict(pos=0, typ=0, not_self=0, atk=[-core.BIG, core.BIG], df=[-core.BIG, core.BIG], attr=0, race=0,
-                      setc=0, code=None, st=0, lv=[-core.BIG, core.BIG], spsum=0, nodis=0, zx=0)
+                      setc=0, code=None, st=0, lv=[-core.BIG, core.BIG], spsum=0, nodis=0, zx=0, reason=0, not_typ=0)
         self.loc = ALLZ  # restriction de zones (IsLocation)
         self.ctrl = None  # IsControler
         self.tgt = False
@@ -214,6 +214,28 @@ class Filt:
         elif k in ("attr", "race", "setc", "st"):
             need(d[k] == 0 or d[k] == v, f"filtre : deux conditions {k}")
             d[k] = v
+        elif k == "not_typ":
+            need(type(v) is int and 0 < v < (1 << 31), "filtre : types exclus")
+            d[k] |= v
+        elif k == "reason":
+            need(type(v) is int and 0 < v <= 0x1fffffff, "filtre : masque de raison")
+            old = d[k]
+            if old == 0:
+                d[k] = v
+            elif old == v:
+                pass
+            elif old > 0 and old & v == v:
+                d[k] = v
+            elif old > 0 and old & v == old:
+                pass
+            elif old > 0 and old & (old - 1) == 0 and v & (v - 1) == 0:
+                d[k] = -(old | v)
+            elif old < 0 and (-old & v) != 0:
+                pass
+            elif old < 0 and v & (v - 1) == 0:
+                d[k] = -(-old | v)
+            else:
+                raise Unsupported("filtre : conjonction complexe de raisons")
         elif k == "code":
             need(d["code"] is None, "filtre : deux conditions de nom")
             d["code"] = v
@@ -231,6 +253,9 @@ class Filt:
             d["code"] = (0, 0)
         for k in ("atk", "df", "lv"):
             d[k] = tuple(d[k])
+        if d["reason"]:
+            tracked = core.Z_GRAVE | core.Z_REMOVED | core.Z_EXTRA
+            need((me | op) & ~tracked == 0, "filtre : raison hors zones suivies")
         if d["zx"] & core.ZX_EXTRA:
             need(d["typ"] != 0 and d["typ"] & ~(core.TYPE_FUSION | core.TYPE_SYNCHRO | core.TYPE_XYZ) == 0,
                  "GetLocationCountFromEx : filtre hors fusion / synchro / Xyz")
@@ -268,6 +293,10 @@ def apply_method(fl, name, args):
     args = list(args)
     while args and args[-1] is None:  # c:IsAttribute(a, lc, sumtype, tp) (matériaux) : contexte non lié
         args.pop()
+    if name == "IsReason":
+        need(len(args) == 1, "filtre : IsReason arguments")
+        fl.set("reason", num(0))
+        return
     if name in SUMMON_METHODS or name == "IsSummonType":
         need(len(args) == (1 if name == "IsSummonType" else 0), "type d'invocation : arguments")
         typ = SUMMON_METHODS[name] if name in SUMMON_METHODS else num(0)
@@ -706,14 +735,14 @@ class Translator:
                 if e[0] == "fusion_spell":
                     out.append(C.act(target=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.REQ(0, 1)],
                                      resolve=[C.FILTER(0, C.F(me=core.Z_EXTRA, fus=1)), C.CHOOSE(1, 0, 1),
-                                              C.FUSMAT(2, 1), C.MOVE(2), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF, fusion=True)]))
+                                              C.FUSMAT(2, 1), C.MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_FUSION), C.SPSUMMON(1, core.P_FU_ATK | core.P_FU_DEF, fusion=True)]))
                     self.descs.append(None)
                     continue
                 if e[0] == "ritual_spell":
                     _, f, mode, desc = e
                     out.append(C.act(target=[C.FILTER(0,f),C.REQ(0,1)],
                                      resolve=[C.FILTER(0,f),C.CHOOSE(1,0,1),C.RITMAT(2,1,mode),
-                                              C.MOVE(2),C.SPSUMMON(1,core.P_FU_ATK|core.P_FU_DEF,True)]))
+                                              C.MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_RITUAL | core.REASON_RELEASE),C.SPSUMMON(1,core.P_FU_ATK|core.P_FU_DEF,True)]))
                     self.descs.append(desc)
                     continue
                 if e[0] == "pendulum":
@@ -725,7 +754,7 @@ class Translator:
                 raise Unsupported("monstre à invocation limitée (EnableReviveLimit)")
             compiled = self.allocate(self.effect(e))
             count = e.f.get("SetCountLimit", ())
-            if len(count) == 3 and count[2] == K["EFFECT_COUNT_CODE_OATH"] and compiled[0] != core.K_PROC:
+            if len(count) == 3 and count[2] == K["EFFECT_COUNT_CODE_OATH"]:
                 compiled = (*compiled[:7], dict(compiled[7], refund=1))
             # Clones SINGLE équivalents pour les trois types d'invocation, mutuellement exclusifs
             # pour cette carte au même point d'événement. Les compteurs par effet restent distincts.
@@ -769,7 +798,7 @@ class Translator:
             if len(cl) == 1:
                 opt = core.OPT_CARD
             elif isinstance(cl[1], tuple):
-                need(len(cl) == 2 and len(cl[1]) == 2 and cl[1][0] == self.code and isinstance(cl[1][1], int),
+                need(len(cl) == 2 and len(cl[1]) == 2 and cl[1][0] == self.code and type(cl[1][1]) is int and 0 <= cl[1][1] <= 255,
                      "SetCountLimit(1, {autre code / drapeaux})")
                 opt = core.OPT_NAME if cl[1][1] == 0 else core.OPT_NAMEK + cl[1][1] - 1
             else:
@@ -1132,7 +1161,7 @@ class Translator:
                       core.OP_COND_EVP, core.OP_COND_SELF, core.OP_COND_LABEL,
                       core.OP_COND_PHASE, core.OP_COND_ATK, core.OP_LABEL}
         mutated = {a for program in effect[4:7] for op,a,b,c in program
-                   if op == core.OP_SPSUMMON or op == core.OP_MOVE and c == 1}
+                   if op == core.OP_SPSUMMON or op == core.OP_MOVE and c & 1}
         current, queries, entries = {}, {}, []
         next_value = 0
         for phase, program in enumerate(effect[4:7]):
@@ -1152,7 +1181,7 @@ class Translator:
                     operands[2] = target
                 elif op == core.OP_DAMAGE and c:
                     reads[2] = current[c-1]
-                writes = op in definitions or op == core.OP_SPSUMMON or (op == core.OP_MOVE and c == 1)
+                writes = op in definitions or op == core.OP_SPSUMMON or (op == core.OP_MOVE and c & 1)
                 key = (op, b, operands[2], tuple(sorted(reads.items())))
                 reusable = op == core.OP_REQ or op in pure and a not in mutated
                 if reusable and key in queries:
@@ -1192,7 +1221,7 @@ class Translator:
             if value is not None:
                 free = sorted(set(range(core.R)) - set(slots.values()))
                 need(bool(free), "plus de 4 registres vivants")
-                inplace = op == core.OP_SPSUMMON or op == core.OP_MOVE and operands[2] == 1
+                inplace = op == core.OP_SPSUMMON or op == core.OP_MOVE and operands[2] & 1
                 destination = lowered[0] if inplace else free[0]
                 need(destination not in slots.values(), "mutation d’un groupe partagé")
                 lowered[0] = destination
@@ -1242,7 +1271,12 @@ class Translator:
         if name == "Cost.SelfToGrave" or name == "Cost.SelfTribute" or name == "Cost.SelfDiscardToGrave" \
                 or name == "Cost.SelfDiscard":
             r = prog.reg()
-            prog.emit(C.SELF(r), C.MOVE(r))
+            reason = core.REASON_COST
+            if name == "Cost.SelfTribute":
+                reason |= core.REASON_RELEASE
+            if name in ("Cost.SelfDiscardToGrave", "Cost.SelfDiscard"):
+                reason |= core.REASON_DISCARD
+            prog.emit(C.SELF(r), C.MOVE(r, reason=reason))
             return
         if name == "Cost.PayLP":
             need(len(self.cur_fn.bound) == 1 and isinstance(self.cur_fn.bound[0], int), "Cost.PayLP")
@@ -1253,11 +1287,11 @@ class Translator:
             need(isinstance(b[0], int) and b[1] in (None, b[0]) and b[2] is None, "Cost.DetachFromSelf variable")
             r = prog.reg()
             r2 = prog.reg()
-            prog.emit(self.vfilter(r, C.F(me=core.Z_OVERLAY)), C.CHOOSE(r2, r, b[0]), C.MOVE(r2))
+            prog.emit(self.vfilter(r, C.F(me=core.Z_OVERLAY)), C.CHOOSE(r2, r, b[0]), C.MOVE(r2, reason=core.REASON_COST))
             return
         if name == "Cost.SelfBanish":
             r = prog.reg()
-            prog.emit(C.SELF(r), C.MOVE(r, core.Z_REMOVED))
+            prog.emit(C.SELF(r), C.MOVE(r, core.Z_REMOVED, reason=core.REASON_COST))
             return
         raise Unsupported(f"fonction {name}")
 
@@ -1591,6 +1625,15 @@ class Translator:
                      "IsAbleToDeckAsCost", "IsAbleToGrave", "IsAbleToHand", "IsAbleToRemove", "IsDestructable",
                      "IsRelateToEffect"):
                 return
+            if m == "IsReason":
+                need(len(args) == 1, "IsReason : arguments")
+                mask = self.cnum(args[0], env)
+                need(0 < mask <= 0x1fffffff, "IsReason : masque")
+                tracked = (1 << core.EV_TO_GRAVE) | (1 << core.EV_BATTLE_DESTROYED)
+                need(self.on != 0 and (self.on & ~tracked) == 0,
+                     "IsReason : contexte de mouvement non représenté")
+                prog.emit(C.COND_REASON(mask))
+                return
             if m == "IsPreviousLocation":
                 prog.emit(C.COND_SELF(prev=self.cnum(args[0], env)))
                 return
@@ -1610,6 +1653,16 @@ class Translator:
                 prog.emit(C.SELF(r), self.vfilter(r, fl.build(ALLZ, ALLZ), within=r), C.REQ(r, 1))
                 return
             raise Unsupported(f"condition : c:{m}")
+        if (isinstance(x, A.Invoke) and isinstance(x.source, A.Call)
+                and dotted(x.source.func) == "Duel.GetAttacker" and x.func.id == "IsControler"):
+            need(self.on == (1 << core.EV_BATTLE_DESTROYED) and len(x.args) == 1,
+                 "contrôleur de l'attaquant hors événement de destruction au combat")
+            player = self.expr(x.args[0], env, prog)
+            need(isinstance(player, Player), "contrôleur de l'attaquant non lié")
+            r = prog.reg()
+            filt = C.F(me=ALLZ if player.p == ME else 0, op=ALLZ if player.p == OPP else 0)
+            prog.emit(C.ATTACKER(r), self.vfilter(r, filt, within=r), C.REQ(r, 1))
+            return
         # eg:IsExists(f, n, ex, ...) : au moins n cartes de l'événement passent le filtre
         if isinstance(x, A.Invoke) and isinstance(x.source, A.Name) and isinstance(env.get(x.source.id), (EventGroup,Reg,Lazy)) and x.func.id == "IsExists":
             a = x.args
@@ -1821,18 +1874,22 @@ class Translator:
                 self.apply_fn(fl, Fn(sub, d), [self.fexpr(a, env) for a in x.args[1:]], env)
                 return
         if isinstance(x, A.OrLoOp):
-            # c:IsType(A) or c:IsType(B), c:IsSpell() or c:IsTrap() : union des types
-            ts = []
+            # Une union de types ou de raisons réutilise le masque « au moins un bit ».
+            axis, values = None, []
             for y in self.disj(x):
                 g = Filt()
                 self.filter_term(g, y, env, cvar)
-                need(g.d["typ"] and all(g.d[k] == Filt().d[k] for k in g.d if k != "typ") and g.loc == ALLZ,
+                field = "typ" if g.d["typ"] > 0 else "reason" if g.d["reason"] > 0 else None
+                need(field is not None and (axis is None or axis == field) and
+                     all(g.d[k] == Filt().d[k] for k in g.d if k != field) and
+                     g.loc == ALLZ and g.ctrl is None and not g.tgt,
                      f"filtre : ou {self.show(x)}")
-                ts.append(g.d["typ"])
-            u = 0
-            for t in ts:
-                u |= t
-            fl.set("typ", u)
+                axis = field
+                values.append(g.d[field])
+            union = 0
+            for value in values:
+                union |= value
+            fl.set(axis, union)
             return
         if isinstance(x, A.GreaterThanOp) and isinstance(x.left, A.Call) and dotted(x.left.func) == "Duel.GetLocationCountFromEx":
             args = x.left.args
@@ -1864,6 +1921,9 @@ class Translator:
                 return
             if m == "IsImmuneToEffect":
                 self.notes.add("IsImmuneToEffect ignoré")
+                return
+            if m == "IsType" and len(x.operand.args) == 1:
+                fl.set("not_typ", self.fexpr(x.operand.args[0], env))
                 return
             if m == "IsCode" and len(x.operand.args) == 1:
                 v = self.fexpr(x.operand.args[0], env)
@@ -2098,7 +2158,9 @@ class Translator:
             F_, _ = self.mkfilter(args[1], args[6:], args[0], A.Name("LOCATION_HAND"), A.Number(0),
                                   args[5] if len(args) > 5 else None, env)
             r = self.select(prog, F_, sp, self.cnum(args[2], env), self.cnum(args[3], env), False)
-            prog.emit(C.MOVE(r))
+            reason = E_(4)
+            need(type(reason) is int and 0 <= reason <= 0x1fffffff, "DiscardHand : raison")
+            prog.emit(C.MOVE(r, reason=reason))
             return 1
         if d == "Duel.SelectReleaseGroupCost":
             need(self.cnum(args[2], env) == 1 and self.cnum(args[3], env) == 1, "SelectReleaseGroupCost")
@@ -2113,15 +2175,24 @@ class Translator:
             reg = self.as_reg(v, prog)
             if d == "Duel.Destroy":
                 need(len(args) == 2, "Destroy vers une autre zone")
-                prog.emit(C.DESTROY(reg.r))
+                reason = E_(1)
+                need(type(reason) is int and 0 <= reason <= 0x1fffffff, "Destroy : raison")
+                prog.emit(C.DESTROY(reg.r, reason=reason))
             elif d == "Duel.SendtoGrave" or d == "Duel.Release":
-                prog.emit(C.MOVE(reg.r))
+                need(len(args) == 2, f"{d} : joueur ou options")
+                reason = E_(1)
+                need(type(reason) is int and 0 <= reason <= 0x1fffffff, f"{d} : raison")
+                prog.emit(C.MOVE(reg.r, reason=reason | (core.REASON_RELEASE if d == "Duel.Release" else 0)))
             elif d == "Duel.SendtoHand":
-                need(E_(1) is None, "SendtoHand vers un joueur")
-                prog.emit(C.MOVE(reg.r, core.Z_HAND))
+                need(len(args) == 3 and E_(1) is None, "SendtoHand vers un joueur ou options")
+                reason = E_(2)
+                need(type(reason) is int and 0 <= reason <= 0x1fffffff, "SendtoHand : raison")
+                prog.emit(C.MOVE(reg.r, core.Z_HAND, reason=reason))
             else:
-                need(E_(1) == core.P_FACEUP, "bannir face cachée")
-                prog.emit(C.MOVE(reg.r, core.Z_REMOVED))
+                need(len(args) == 3 and E_(1) == core.P_FACEUP, "bannir face cachée ou options")
+                reason = E_(2)
+                need(type(reason) is int and 0 <= reason <= 0x1fffffff, "Remove : raison")
+                prog.emit(C.MOVE(reg.r, core.Z_REMOVED, reason=reason))
             return Count(reg)
         if d == "Duel.SpecialSummon":
             tag = generic_summon_tag(E_(1))

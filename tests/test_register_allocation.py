@@ -61,6 +61,16 @@ class RegisterAllocationTests(unittest.TestCase):
         self.assertEqual(e[6][3],C.DESTROY(1))
         self.assertEqual(e[6][4],C.DAMAGE(0,100,per=1))
 
+    def test_explicit_destroy_reason_preserves_mutated_group(self):
+        f=C.F(me=core.Z_MZONE)
+        e=self.lower(resolve=[T.Translator.vfilter(10,f),T.Translator.vfilter(11,f),
+                              C.DESTROY(11,reason=core.REASON_EFFECT),
+                              C.DAMAGE(0,100,per=10),C.DAMAGE(0,100,per=11)])
+        self.assertEqual(len(e[6]),5)
+        self.assertNotEqual(e[6][0][1],e[6][1][1])
+        self.assertEqual(e[6][2][1],e[6][4][3]-1)
+        self.assertEqual(e[6][0][1],e[6][3][3]-1)
+
     def test_independent_queries_do_not_share_a_mutated_group(self):
         f=C.F(me=core.Z_MZONE)
         e=self.lower(resolve=[T.Translator.vfilter(10,f),T.Translator.vfilter(11,f),

@@ -23,6 +23,14 @@ local function who(w,tp) return w==ME and tp or 1-tp end
 local function bounded(r) return r~=nil and (r[1]>-BIG or r[2]<BIG) end
 
 function PG.status(c,st)
+	if st<0 then
+		local packed=-st
+		if packed&(1<<30)~=0 then return c:IsReason(packed&0x1fffffff) end
+		local mask=((packed&255)<<24)|((packed>>8)&65535)
+		local matched=c:IsSummonType(mask)
+		if packed&(1<<24)~=0 then return not matched end
+		return matched
+	end
 	if st&ST_SUMMON_TURN~=0 and c:IsStatus(STATUS_SUMMON_TURN+STATUS_FLIP_SUMMON_TURN+STATUS_SPSUMMON_TURN) then return true end
 	if st&ST_FLIP_TURN~=0 and c:IsStatus(STATUS_FLIP_SUMMON_TURN) then return true end
 	if st&ST_SPSUM~=0 and c:IsSpecialSummoned() then return true end
@@ -44,7 +52,15 @@ function PG.match(c,f,e,tp,noloc)
 	end
 	if f.pos and not c:IsPosition(f.pos) then return false end
 	if f.typ and not c:IsType(f.typ) then return false end
+	if f.not_typ and c:IsType(f.not_typ) then return false end
 	if f.not_self and c==e:GetHandler() then return false end
+	if f.reason then
+		if f.reason>0 and not c:IsReason(f.reason) then return false end
+		if f.reason<0 then
+			local bits=-f.reason
+			for i=0,28 do if bits&(1<<i)~=0 and not c:IsReason(1<<i) then return false end end
+		end
+	end
 	if f.attr and not c:IsAttribute(f.attr) then return false end
 	if f.race and not c:IsRace(f.race) then return false end
 	if f.setc and not c:IsSetCard(f.setc) then return false end
@@ -77,10 +93,12 @@ local function group(f,e,tp,tg) return Duel.GetMatchingGroup(fn(f,e,tp,tg),tp,f.
 
 --Filtre d'un matériau (recettes de fusion / synchro / Xyz / Link : attribut, type, archétype, nom, niveau)
 function PG.mat(m)
-	if m.code and not (m.attr or m.race or m.setc or m.lv) then return m.code[1] end
-	if not (m.attr or m.race or m.setc or m.code or bounded(m.lv)) then return nil end
+	if m.code and m.code[1]==m.code[2] and not (m.attr or m.race or m.setc or m.lv or m.typ or m.not_typ) then return m.code[1] end
+	if not (m.attr or m.race or m.setc or m.code or m.typ or m.not_typ or bounded(m.lv)) then return nil end
 	return function(c,sc,st,tp)
 		if tp==nil then sc,st,tp=nil,nil,nil end  --appel sans contexte d'invocation (Synchro.NonTuner…)
+		if m.typ and not c:IsType(m.typ) then return false end
+		if m.not_typ and c:IsType(m.not_typ) then return false end
 		if m.attr and not (tp and c:IsAttribute(m.attr,sc,st,tp) or not tp and c:IsAttribute(m.attr)) then return false end
 		if m.race and not (tp and c:IsRace(m.race,sc,st,tp) or not tp and c:IsRace(m.race)) then return false end
 		if m.setc and not (tp and c:IsSetCard(m.setc,sc,st,tp) or not tp and c:IsSetCard(m.setc)) then return false end
@@ -207,7 +225,7 @@ function PG.verb(cl,g,e,tp)
 	elseif v=="tograve" then
 		Duel.SendtoGrave(g,REASON_EFFECT)
 	elseif v=="ss" then
-		Duel.SpecialSummon(g,0,tp,tp,false,false,cl.pos)
+		Duel.SpecialSummon(g,cl.tag or 0,tp,tp,false,false,cl.pos)
 	elseif v=="atk" or v=="def" or v=="halve_base" or v=="halve" or v=="indes_battle" then
 		--Rush Recklessly, Little Swordsman (rd), Number 17 (rd + perm), Castle Walls, Shrink, Reverse Glasses
 		local c=e:GetHandler()

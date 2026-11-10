@@ -93,7 +93,12 @@ class Gen:
 
     def mon(self, nq=None, **kw):
         kw.setdefault("typ", TYPE_MONSTER)
+        if kw["typ"] == TYPE_MONSTER and self.p(0.15):
+            kw["not_typ"] = kw.get("not_typ", 0) | TYPE_EFFECT
         nq = self.pick([0, 1, 1, 2]) if nq is None else nq
+        if (kw.get("me", 0) | kw.get("op", 0)) == Z_GRAVE and self.p(0.15):
+            kw["reason"] = self.pick([core.REASON_EFFECT, core.REASON_DESTROY, core.REASON_BATTLE,
+                                      core.REASON_COST, -(core.REASON_EFFECT | core.REASON_DESTROY)])
         return self.qual(kw, nq)
 
     # ------------------------------------------------------------------ clauses
@@ -304,7 +309,6 @@ class Gen:
             elif trig == "battle_destroyed":
                 e["conds"] = [("self", Z_GRAVE, 0, 0)]
             elif trig == "spsummon" and self.p(0.5):
-                import core
                 typ = core.SUMMON_SPECIAL
                 for flag, value in ((TYPE_FUSION, core.SUMMON_FUSION), (TYPE_RITUAL, core.SUMMON_RITUAL),
                                     (TYPE_SYNCHRO, core.SUMMON_SYNCHRO), (TYPE_XYZ, core.SUMMON_XYZ),
@@ -312,6 +316,10 @@ class Gen:
                     if card["ctype"] & flag:
                         typ = value
                 e["conds"] = [("self", 0, 0, core.summon_mask(typ))]
+            if trig in ("to_gy_field", "to_gy", "battle_destroyed") and self.p(0.35):
+                mask = self.pick([core.REASON_EFFECT, core.REASON_DESTROY, core.REASON_BATTLE,
+                                  core.REASON_COST, core.REASON_COST | core.REASON_EFFECT])
+                e["conds"].append(("self", 0, 0, -((1 << 30) | mask)))
             e["optional"] = self.p(0.6)
             e["opt"] = OPT_NAME if self.p(0.5) else OPT_NONE
             e["cost"] = self.cost([None, "lp"], [6, 1]) if e["optional"] else None
@@ -667,15 +675,15 @@ def cost_bricks(cost):
     if t == "lp":
         return [PAY_LP(cost[1])]
     if t == "discard":
-        return [FILTER(a, F(me=Z_HAND, not_self=1)), CHOOSE(b, a, 1), MOVE(b)]
+        return [FILTER(a, F(me=Z_HAND, not_self=1)), CHOOSE(b, a, 1), MOVE(b, reason=core.REASON_COST | core.REASON_DISCARD)]
     if t == "self":
-        return [SELF(a), MOVE(a)]
+        return [SELF(a), MOVE(a, reason=core.REASON_COST, release_if_field=True)]
     if t == "tribute":
-        return [FILTER(a, F(me=Z_MZONE, not_self=1)), CHOOSE(b, a, 1), MOVE(b)]
+        return [FILTER(a, F(me=Z_MZONE, not_self=1)), CHOOSE(b, a, 1), MOVE(b, reason=core.REASON_COST | core.REASON_RELEASE)]
     if t == "banish_gy":
-        return [FILTER(a, F(me=Z_GRAVE, typ=TYPE_MONSTER)), CHOOSE(b, a, 1), MOVE(b, Z_REMOVED)]
+        return [FILTER(a, F(me=Z_GRAVE, typ=TYPE_MONSTER)), CHOOSE(b, a, 1), MOVE(b, Z_REMOVED, reason=core.REASON_COST)]
     if t == "detach":
-        return [FILTER(a, F(me=Z_OVERLAY)), CHOOSE(b, a, cost[1]), MOVE(b)]
+        return [FILTER(a, F(me=Z_OVERLAY)), CHOOSE(b, a, cost[1]), MOVE(b, reason=core.REASON_COST)]
     raise ValueError(cost)
 
 
@@ -781,7 +789,8 @@ def bricks(e):
             program.append(FILTER(r,_F(f)))
             if mn > 0: program.append(REQ(r,mn))
             if mx < BIG: program.append(REQ(r,mx,maximum=True))
-        return (core.K_PROC,0,e["opt"],Z_HAND,program,cost_bricks(e.get("cost")),[])
+        return (core.K_PROC,0,e["opt"],Z_HAND,program,cost_bricks(e.get("cost")),[],
+                {"refund": int(e["opt"] == OPT_NAME)})
     if k == "pend":
         return act()
     if k == "cont":
@@ -792,7 +801,7 @@ def bricks(e):
     if k == "fusion_spell":
         f = _F(e["f"])
         return act(target=[FILTER(0, f), REQ(0, 1)],
-                   resolve=[FILTER(0, f), CHOOSE(1, 0, 1), cards.FUSMAT(2, 1), MOVE(2), SPSUMMON(1, P_FU_ATK | P_FU_DEF, fusion=True)])
+                   resolve=[FILTER(0, f), CHOOSE(1, 0, 1), cards.FUSMAT(2, 1), MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_FUSION), SPSUMMON(1, P_FU_ATK | P_FU_DEF, fusion=True)])
     if k == "ritual":
         return ritual_spell(e["code"], e["mode"])[0]
     cost = cond_bricks(e["conds"]) + cost_bricks(e["cost"])
@@ -853,7 +862,14 @@ def to_bank(cset):
         kind, r = c["recipe"]
         mat = lambda kw: cards.MAT(**kw)
         if kind == "fusion":
-            rec["fusion"][c["code"]] = [mat(x) for x in r]
+            # Seuls les noms bruts permettent un substitut dans Fusion.AddProcMix.
+            mask = 0
+            for j, material in enumerate(r):
+                code = material.get("code")
+                same_code = isinstance(code, (int, np.integer)) or isinstance(code, (list, tuple)) and len(code) == 2 and code[0] == code[1]
+                if code and same_code and not any(material.get(k) for k in ("attr", "race", "setc", "lv", "typ", "not_typ")):
+                    mask |= 1 << j
+            rec["fusion"][c["code"]] = cards.FusionRecipe([mat(x) for x in r], mask)
         elif kind == "synchro":
             rec["synchro"][c["code"]] = (mat(r[0]), mat(r[1]))
         elif kind == "xyz":
