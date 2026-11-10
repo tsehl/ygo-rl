@@ -46,16 +46,17 @@ class Effects(list):
 
 def FILTER(r, f, within=None, tgt=False):  # ∩ registre within ; tgt : sélection avec ciblage (IsCanBeEffectTarget)
     return (OP_FILTER, r, f, (0 if within is None else within + 1) | (8 if tgt else 0))
-def SELF(r): return (OP_SELF, r, 0, 0)
-def REQ(r, n, maximum=False): return (OP_REQ, r, n, int(maximum))  # >= n, ou <= n
+def SELF(r, related=False): return (OP_SELF, r, int(related), 0)
+def REQ(r, n, maximum=False, related=False): return (OP_REQ, r, n, int(maximum) | (int(related) << 1))  # >= n, ou <= n
 def REQ_FREE(who, zone, n): return (OP_REQ_FREE, who, zone, n)
 def MINATK(dst, src): return (OP_MINATK, dst, src, 0)
-def CHOOSE(dst, src, n, who=ME, upto=False, mn=None):
+def FIRST(dst, src, original=False): return (OP_MINATK, dst, src, 1 | (int(original) << 1))
+def CHOOSE(dst, src, n, who=ME, upto=False, mn=None, tgt=False):
     """n cartes (moins s'il n'y a pas assez de candidats) ; upto : test d'activation sans minimum. mn : sélection de
     taille variable (Select*(mn, n) pendant la résolution) : le joueur s'arrête quand il veut après mn cartes (A_PASS)."""
     if mn is not None:
-        return (OP_CHOOSE, dst, src, mn | (n << 4) | (who << 8) | (1 << 9))
-    return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8))
+        return (OP_CHOOSE, dst, src, mn | (n << 4) | (who << 8) | (1 << 9) | (int(tgt) << 10))
+    return (OP_CHOOSE, dst, src, (0 if upto else n) | (n << 4) | (who << 8) | (int(tgt) << 10))
 def MOVE(r, zone=Z_GRAVE, *, reason=None, release_if_field=False):
     if reason is not None and not 0 <= reason <= 0x1fffffff:
         raise ValueError("raison de déplacement hors limites")
@@ -90,7 +91,7 @@ def COND_REASON(mask):
     if not 0 < mask <= 0x1fffffff:
         raise ValueError("masque de raison hors limites")
     return COND_SELF(st=-((1 << 30) | mask))
-def LABEL(r): return (OP_LABEL, r, 0, 0)            # e:SetLabel(registre r non vide) à l'activation
+def LABEL(r, target=False): return (OP_LABEL, r, int(target), 0)            # e:SetLabel(registre r non vide) à l'activation
 def COND_LABEL(): return (OP_COND_LABEL, 0, 0, 0)   # à la résolution : le label est mis
 def YESNO(): return (OP_YESNO, 0, 0, 0)             # Duel.SelectYesNo : non arrête l'effet
 def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des cartes de ce nom ce tour

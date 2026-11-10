@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import cards  # noqa: E402
 import core  # noqa: E402
-from cards import (F, FILTER, SELF, REQ, REQ_FREE, CHOOSE, MOVE, DESTROY, SPSUMMON, DRAW,  # noqa: E402
+from cards import (F, FILTER, SELF, REQ, REQ_FREE, CHOOSE, MOVE, DESTROY, SPSUMMON, DRAW, FIRST,  # noqa: E402
                    DAMAGE, RECOVER, COND_CHAIN, COND_CHAIN_FIELD, CHAINCARD, NEGATE, PAY_LP, EVENT, COND_TURN,
                    COND_EVP, COND_SELF, MODIFY, COND_PHASE, LOCK, MINATK, act, ignition, trigger, quick, cont, ev, ritual_spell,
                    ME, OPP)
@@ -132,7 +132,10 @@ class Gen:
             if sel == "all" and where in ("opp_card", "any_mon") and verb != "destroy":
                 sel = "target"
             k = 2 if sel == "target" and self.p(0.15) else 1
-            return dict(verb=verb, sel=sel, f=f, k=k, v=0)
+            clause = dict(verb=verb, sel=sel, f=f, k=k, v=0)
+            if sel == "target" and k > 1 and self.p(0.5):
+                clause["first_only"] = True
+            return clause
         if verb == "tohand":
             if self.p(0.6):  # recherche dans le deck
                 f = self.mon(self.pick([1, 1, 2]), me=Z_DECK) if self.p(0.7) else dict(
@@ -243,6 +246,8 @@ class Gen:
         """Un effet de genre kind pour la carte card (spécification, sans briques)."""
         mon = card["ctype"] & TYPE_MONSTER
         e = dict(kind=kind, on=0, opt=OPT_NONE, optional=False, rng=0, dmg=0, conds=[], cost=None, clauses=[])
+        if kind in ("act", "ignition", "quick") and self.p(0.12):
+            e["related"] = True  # l’effet dépend encore de sa source à la résolution
         if kind == "act":  # magie / piège
             ct = card["ctype"]
             if ct & TYPE_COUNTER:
@@ -761,8 +766,10 @@ def clause_bricks(c, on, first):
             return [], [FILTER(0, _F(f))] + verb_bricks(c, 0), 0
         return [], pre_r + [FILTER(0, _F(f)), CHOOSE(1, 0, k)] + verb_bricks(c, 1), 1
     if sel == "target":
-        return (pre_t + [FILTER(0, _F(f), tgt=True), CHOOSE(1, 0, k)],
-                pre_r + [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
+        first = [FIRST(2, 1, original=True), REQ(2, 1, related=True)] if c.get("first_only") else []
+        source = 2 if c.get("first_only") else 1
+        return (pre_t + [FILTER(0, _F(f), tgt=True), CHOOSE(1, 0, k, tgt=True)],
+                pre_r + first + [FILTER(2, _F(f), within=source)] + verb_bricks(c, 2), 2)
     if sel == "all":
         return [FILTER(0, _F(f)), REQ(0, 1)], [FILTER(2, _F(f))] + verb_bricks(c, 2), 2
     if sel == "pick":
@@ -772,7 +779,7 @@ def clause_bricks(c, on, first):
         return ([FILTER(0, _F(f)), REQ(0, 1)],
                 [FILTER(0, _F(f)), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1)] + verb_bricks(c, 2), 2)
     if sel == "event":
-        return ([EVENT(0, on), FILTER(1, _F(f), within=0, tgt=True), REQ(1, 1)],
+        return ([EVENT(0, on), FILTER(1, _F(f), within=0, tgt=True), REQ(1, 1), cards.LABEL(1, target=True)],
                 [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
     if sel == "self":
         return (pre_t + [SELF(0), FILTER(1, _F(f), within=0), REQ(1, 1)],
@@ -805,7 +812,7 @@ def bricks(e):
     if k == "ritual":
         return ritual_spell(e["code"], e["mode"])[0]
     cost = cond_bricks(e["conds"]) + cost_bricks(e["cost"])
-    target, resolve = [], []
+    target, resolve = [], [SELF(0, related=True), REQ(0, 1)] if e.get("related") else []
     first = True
     for c in e["clauses"]:
         t, r, out = clause_bricks(c, e["on"], first)

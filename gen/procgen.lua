@@ -326,7 +326,11 @@ local function resolve(cl,first,e,tp,eg,ep,ev,re)
 	end
 	if v=="ss" and sel~="all" and not free(tp) then return false,false end
 	local g
-	if sel=="target" or sel=="event" then
+	if sel=="target" and cl.first_only then
+		local tc=Duel.GetFirstTarget()
+		if not tc or not tc:IsRelateToEffect(e) then return false,false end
+		g=Group.FromCards(tc):Filter(fn(f,e,tp),nil)
+	elseif sel=="target" or sel=="event" then
 		g=(Duel.GetTargetCards(e) or Group.CreateGroup()):Filter(fn(f,e,tp),nil)
 	elseif sel=="all" then
 		g=group(f,e,tp)
@@ -367,6 +371,7 @@ end
 function PG.operation(sp)
 	local cls=sp.clauses
 	return function(e,tp,eg,ep,ev,re,r,rp)
+		if sp.related and not e:GetHandler():IsRelateToEffect(e) then return end
 		local go,hit=resolve(cls[1],true,e,tp,eg,ep,ev,re)
 		if not go then return end
 		if cls[2] and hit then resolve(cls[2],false,e,tp,eg,ep,ev,re) end
