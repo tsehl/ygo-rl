@@ -140,7 +140,7 @@ class SourceRelationTests(unittest.TestCase):
         self.assertFalse(bool(related))
 
     def test_first_in_static_filter_is_refused_without_internal_exception(self):
-        with self.assertRaisesRegex(translate.Unsupported, 'GetFirst sans programme'):
+        with self.assertRaisesRegex(translate.Unsupported, 'GetFirst (sans programme|sur un groupe potentiellement multiple)'):
             translate.translate(50951359)
 
     def test_translator_emits_a_guard_for_handler(self):

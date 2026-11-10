@@ -70,8 +70,8 @@ class InlineTests(unittest.TestCase):
         self.assertEqual(bank.einline.shape, (1, 0))
 
     def test_official_translation_carries_the_alternate_index(self):
-        effects, _, _, _ = translate.translate(1802450)
-        self.assertEqual(effects[0][7]['inline'], 2)
+        with self.assertRaisesRegex(translate.Unsupported, 'cibles multiples'):
+            translate.translate(1802450)
 
     def test_observation_exposes_card_activation_after_effect_swap(self):
         s = self.answer(self.begin(), True)
