@@ -1,0 +1,195 @@
+5000 {'ok': True, 'decisions': 523, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5001 {'ok': True, 'decisions': 583, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5002 {'ok': True, 'decisions': 605, 'turns': 62, 'winner': 1, 'status': 'passed'}
+5003 {'ok': True, 'decisions': 645, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5004 {'ok': True, 'decisions': 609, 'turns': 67, 'winner': 1, 'status': 'passed'}
+5005 {'ok': True, 'decisions': 285, 'turns': 27, 'winner': 1, 'status': 'passed'}
+5006 {'ok': True, 'decisions': 516, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5007 {'ok': True, 'decisions': 541, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5008 {'ok': True, 'decisions': 630, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5009 {'ok': True, 'decisions': 514, 'turns': 49, 'winner': 0, 'status': 'passed'}
+5010 {'ok': True, 'decisions': 702, 'turns': 67, 'winner': 1, 'status': 'passed'}
+5011 {'ok': True, 'decisions': 297, 'turns': 35, 'winner': 1, 'status': 'passed'}
+5012 {'ok': True, 'decisions': 581, 'turns': 64, 'winner': 0, 'status': 'passed'}
+5013 {'ok': True, 'decisions': 677, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5014 {'ok': True, 'decisions': 521, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5015 {'ok': True, 'decisions': 704, 'turns': 64, 'winner': 0, 'status': 'passed'}
+5016 {'ok': True, 'decisions': 323, 'turns': 32, 'winner': 1, 'status': 'passed'}
+5017 {'ok': True, 'decisions': 468, 'turns': 52, 'winner': 1, 'status': 'passed'}
+5018 {'ok': True, 'decisions': 612, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5019 {'ok': True, 'decisions': 555, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5020 {'ok': True, 'decisions': 619, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5021 {'ok': True, 'decisions': 447, 'turns': 46, 'winner': 1, 'status': 'passed'}
+5022 {'ok': True, 'decisions': 505, 'turns': 42, 'winner': 0, 'status': 'passed'}
+5023 {'ok': True, 'decisions': 624, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5024 {'ok': True, 'decisions': 511, 'turns': 50, 'winner': 1, 'status': 'passed'}
+5025 {'ok': True, 'decisions': 638, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5026 {'ok': True, 'decisions': 634, 'turns': 71, 'winner': 1, 'status': 'passed'}
+5027 {'ok': True, 'decisions': 649, 'turns': 71, 'winner': 1, 'status': 'passed'}
+5028 {'ok': True, 'decisions': 591, 'turns': 63, 'winner': 1, 'status': 'passed'}
+5029 {'ok': True, 'decisions': 668, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5030 {'ok': True, 'decisions': 643, 'turns': 62, 'winner': 1, 'status': 'passed'}
+5031 {'ok': True, 'decisions': 702, 'turns': 66, 'winner': 1, 'status': 'passed'}
+5032 {'ok': True, 'decisions': 578, 'turns': 61, 'winner': 0, 'status': 'passed'}
+5033 {'ok': True, 'decisions': 707, 'turns': 59, 'winner': 1, 'status': 'passed'}
+5034 {'ok': True, 'decisions': 347, 'turns': 46, 'winner': 1, 'status': 'passed'}
+5035 {'ok': True, 'decisions': 396, 'turns': 45, 'winner': 0, 'status': 'passed'}
+5036 {'ok': True, 'decisions': 368, 'turns': 43, 'winner': 1, 'status': 'passed'}
+5037 {'ok': True, 'decisions': 610, 'turns': 71, 'winner': 1, 'status': 'passed'}
+5038 {'ok': True, 'decisions': 613, 'turns': 67, 'winner': 1, 'status': 'passed'}
+5039 {'ok': True, 'decisions': 575, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5040 {'ok': True, 'decisions': 593, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5041 {'ok': True, 'decisions': 421, 'turns': 42, 'winner': 1, 'status': 'passed'}
+5042 {'ok': True, 'decisions': 659, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5043 {'ok': True, 'decisions': 601, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5044 {'ok': True, 'decisions': 613, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5045 {'ok': True, 'decisions': 714, 'turns': 70, 'winner': 1, 'status': 'passed'}
+5046 {'ok': True, 'decisions': 471, 'turns': 55, 'winner': 1, 'status': 'passed'}
+5047 {'ok': True, 'decisions': 640, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5048 {'ok': True, 'decisions': 660, 'turns': 63, 'winner': 1, 'status': 'passed'}
+5049 {'ok': True, 'decisions': 569, 'turns': 63, 'winner': 1, 'status': 'passed'}
+5050 {'ok': True, 'decisions': 427, 'turns': 38, 'winner': 1, 'status': 'passed'}
+5051 {'ok': True, 'decisions': 558, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5052 {'ok': True, 'decisions': 537, 'turns': 60, 'winner': 0, 'status': 'passed'}
+5053 {'ok': True, 'decisions': 580, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5054 {'ok': True, 'decisions': 430, 'turns': 36, 'winner': 1, 'status': 'passed'}
+5055 {'ok': True, 'decisions': 576, 'turns': 62, 'winner': 1, 'status': 'passed'}
+5056 {'ok': True, 'decisions': 512, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5057 {'ok': True, 'decisions': 471, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5058 {'ok': True, 'decisions': 680, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5059 {'ok': True, 'decisions': 405, 'turns': 48, 'winner': 0, 'status': 'passed'}
+5060 {'ok': True, 'decisions': 231, 'turns': 34, 'winner': 0, 'status': 'passed'}
+5061 {'ok': True, 'decisions': 583, 'turns': 64, 'winner': 0, 'status': 'passed'}
+5062 {'ok': True, 'decisions': 563, 'turns': 66, 'winner': 1, 'status': 'passed'}
+5063 {'ok': True, 'decisions': 521, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5064 {'ok': True, 'decisions': 309, 'turns': 28, 'winner': 0, 'status': 'passed'}
+5065 {'ok': True, 'decisions': 544, 'turns': 71, 'winner': 1, 'status': 'passed'}
+5066 {'ok': True, 'decisions': 594, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5067 {'ok': True, 'decisions': 535, 'turns': 58, 'winner': 1, 'status': 'passed'}
+5068 {'ok': True, 'decisions': 783, 'turns': 67, 'winner': 1, 'status': 'passed'}
+5069 {'ok': True, 'decisions': 612, 'turns': 67, 'winner': 1, 'status': 'passed'}
+5070 {'ok': True, 'decisions': 507, 'turns': 47, 'winner': 1, 'status': 'passed'}
+5071 {'ok': True, 'decisions': 439, 'turns': 47, 'winner': 1, 'status': 'passed'}
+5072 {'ok': True, 'decisions': 688, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5073 {'ok': True, 'decisions': 694, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5074 {'ok': True, 'decisions': 349, 'turns': 36, 'winner': 1, 'status': 'passed'}
+5075 {'ok': True, 'decisions': 275, 'turns': 29, 'winner': 0, 'status': 'passed'}
+5076 {'ok': True, 'decisions': 522, 'turns': 57, 'winner': 0, 'status': 'passed'}
+5077 {'ok': True, 'decisions': 618, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5078 {'ok': True, 'decisions': 352, 'turns': 34, 'winner': 0, 'status': 'passed'}
+5079 {'ok': True, 'decisions': 577, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5080 {'ok': True, 'decisions': 359, 'turns': 45, 'winner': 0, 'status': 'passed'}
+5081 {'ok': True, 'decisions': 643, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5082 {'ok': True, 'decisions': 557, 'turns': 65, 'winner': 1, 'status': 'passed'}
+5083 {'ok': True, 'decisions': 473, 'turns': 48, 'winner': 1, 'status': 'passed'}
+5084 {'ok': True, 'decisions': 621, 'turns': 72, 'winner': 0, 'status': 'passed'}
+5085 {'ok': True, 'decisions': 374, 'turns': 36, 'winner': 1, 'status': 'passed'}
+5086 {'ok': True, 'decisions': 598, 'turns': 71, 'winner': 1, 'status': 'passed'}
+5087 {'ok': True, 'decisions': 545, 'turns': 66, 'winner': 0, 'status': 'passed'}
+5088 {'ok': True, 'decisions': 494, 'turns': 70, 'winner': 0, 'status': 'passed'}
+5089 {'ok': True, 'decisions': 613, 'turns': 69, 'winner': 1, 'status': 'passed'}
+5090 {'ok': True, 'decisions': 590, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5091 {'ok': True, 'decisions': 665, 'turns': 65, 'winner': 1, 'status': 'passed'}
+5092 {'ok': True, 'decisions': 688, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5093 {'ok': True, 'decisions': 562, 'turns': 64, 'winner': 0, 'status': 'passed'}
+5094 {'ok': True, 'decisions': 322, 'turns': 36, 'winner': 1, 'status': 'passed'}
+5095 {'ok': True, 'decisions': 353, 'turns': 41, 'winner': 0, 'status': 'passed'}
+5096 {'ok': True, 'decisions': 566, 'turns': 62, 'winner': 0, 'status': 'passed'}
+5097 {'ok': True, 'decisions': 696, 'turns': 68, 'winner': 0, 'status': 'passed'}
+5098 {'ok': True, 'decisions': 379, 'turns': 39, 'winner': 1, 'status': 'passed'}
+5099 {'ok': True, 'decisions': 589, 'turns': 70, 'winner': 0, 'status': 'passed'}
+100/100 parties identiques
+  shuffle_hand 69
+  ('activate', "Harpie's Feather Duster", 'hand') 13
+  ('activate', "Harpie's Feather Duster", 'szone') 15
+  ('activate', 'Back-Up Rider', 'hand') 63
+  ('activate', 'Back-Up Rider', 'szone') 83
+  ('activate', 'Banner of Courage', 'hand') 79
+  ('activate', 'Banner of Courage', 'szone') 75
+  ('activate', 'Cannon Soldier', 'mzone') 23
+  ('activate', 'Castle Walls', 'szone') 19
+  ('activate', 'Dark Hole', 'hand') 17
+  ('activate', 'Dark Hole', 'szone') 8
+  ('activate', 'Dian Keto the Cure Master', 'hand') 13
+  ('activate', 'Dian Keto the Cure Master', 'szone') 12
+  ('activate', 'E - Emergency Call', 'hand') 1
+  ('activate', 'E - Emergency Call', 'szone') 6
+  ('activate', 'Exiled Force', 'mzone') 18
+  ('activate', 'Fissure', 'hand') 16
+  ('activate', 'Fissure', 'szone') 9
+  ('activate', 'Graceful Charity', 'hand') 11
+  ('activate', 'Graceful Charity', 'szone') 10
+  ('activate', 'Hinotama', 'hand') 16
+  ('activate', 'Hinotama', 'szone') 14
+  ('activate', 'Monster Reborn', 'hand') 4
+  ('activate', 'Monster Reborn', 'szone') 11
+  ('activate', 'Pot of Greed', 'hand') 9
+  ('activate', 'Pot of Greed', 'szone') 6
+  ('activate', 'Raigeki', 'hand') 10
+  ('activate', 'Raigeki', 'szone') 17
+  ('activate', 'Reverse Glasses', 'szone') 17
+  ('activate', 'Rush Recklessly', 'hand') 17
+  ('activate', 'Rush Recklessly', 'szone') 6
+  ('activate', 'Shrink', 'hand') 15
+  ('activate', 'Shrink', 'szone') 8
+  ('activate', 'The Little Swordsman of Aile', 'mzone') 155
+  ('activate', 'Upstart Goblin', 'hand') 12
+  ('activate', 'Upstart Goblin', 'szone') 20
+  ('chain', 'Castle Walls', 'szone') 364
+  ('chain', 'Jar of Greed', 'szone') 25
+  ('chain', 'Just Desserts', 'szone') 26
+  ('chain', 'Kazejin', 'mzone') 63
+  ('chain', 'Magic Jammer', 'szone') 28
+  ('chain', 'Mirror Force', 'szone') 20
+  ('chain', 'Mystic Tomato', 'grave') 2
+  ('chain', 'Mystical Space Typhoon', 'hand') 33
+  ('chain', 'Mystical Space Typhoon', 'szone') 5
+  ('chain', 'Reverse Glasses', 'szone') 332
+  ('chain', 'Rush Recklessly', 'hand') 174
+  ('chain', 'Rush Recklessly', 'szone') 208
+  ('chain', 'Sakuretsu Armor', 'szone') 19
+  ('chain', 'Seven Tools of the Bandit', 'szone') 25
+  ('chain', 'Shrink', 'hand') 165
+  ('chain', 'Shrink', 'szone') 189
+  ('chain', 'Torrential Tribute', 'szone') 19
+  ('chain', 'Trap Hole', 'szone') 22
+  ('sset', "Harpie's Feather Duster", 'hand') 16
+  ('sset', 'Back-Up Rider', 'hand') 87
+  ('sset', 'Banner of Courage', 'hand') 76
+  ('sset', 'Castle Walls', 'hand') 400
+  ('sset', 'Dark Hole', 'hand') 9
+  ('sset', 'Dian Keto the Cure Master', 'hand') 13
+  ('sset', 'E - Emergency Call', 'hand') 136
+  ('sset', 'Fissure', 'hand') 9
+  ('sset', 'Graceful Charity', 'hand') 12
+  ('sset', 'Hinotama', 'hand') 15
+  ('sset', 'Jar of Greed', 'hand') 25
+  ('sset', 'Just Desserts', 'hand') 27
+  ('sset', 'Magic Jammer', 'hand') 33
+  ('sset', 'Mirror Force', 'hand') 30
+  ('sset', 'Monster Reborn', 'hand') 13
+  ('sset', 'Mystical Space Typhoon', 'hand') 5
+  ('sset', 'Pot of Greed', 'hand') 10
+  ('sset', 'Raigeki', 'hand') 19
+  ('sset', 'Reverse Glasses', 'hand') 369
+  ('sset', 'Rush Recklessly', 'hand') 220
+  ('sset', 'Sakuretsu Armor', 'hand') 21
+  ('sset', 'Seven Tools of the Bandit', 'hand') 29
+  ('sset', 'Shrink', 'hand') 209
+  ('sset', 'Torrential Tribute', 'hand') 23
+  ('sset', 'Trap Hole', 'hand') 27
+  ('sset', 'Upstart Goblin', 'hand') 23
+  (10, 'attack') 1367
+  (10, 'to_ep') 1472
+  (10, 'to_m2') 1428
+  (11, 'mset') 1779
+  (11, 'repos') 5372
+  (11, 'summon') 1898
+  (11, 'to_bp') 2965
+  (11, 'to_ep') 3791
+  (15, 'cards') 2321
+  (16, 'pass') 21116
+  (18, 'place') 5560
+  (19, 'pos') 15
+  (20, 'cards') 447
+  (26, 'pick') 482
