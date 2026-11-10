@@ -1,0 +1,44 @@
+"""Une invocation spéciale groupée peut invoquer plusieurs monstres et rend leur nombre."""
+from pathlib import Path
+import sys,tempfile
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'oracle'))
+import driver
+S,M,N=600930091,600930092,600930093
+db=driver.CardDB();db.add({S:((0,0,2,0,0,0,0,0),'Target'),M:((0,0,33,1000,1000,4,1,1),'Protected'),N:((0,0,17,1000,1000,4,1,1),'Normal')})
+spell='''local s,id=GetID()
+function s.initial_effect(c)
+ local e=Effect.CreateEffect(c)
+ e:SetType(EFFECT_TYPE_ACTIVATE) e:SetCode(EVENT_FREE_CHAIN)
+ e:SetCost(function(e,tp,eg,ep,ev,re,r,rp,chk)
+  if chk==0 then return Duel.GetMatchingGroupCount(Card.IsMonster,tp,LOCATION_HAND,0,nil)>=2 end
+  local g=Duel.GetMatchingGroup(Card.IsMonster,tp,LOCATION_HAND,0,nil)
+  Duel.SendtoGrave(g,REASON_COST)
+ end)
+ e:SetOperation(function(e,tp)
+  local g=Duel.GetMatchingGroup(Card.IsMonster,tp,LOCATION_GRAVE,0,nil)
+  if Duel.SpecialSummon(g,0,tp,tp,false,false,POS_FACEUP)>1 then
+   Duel.Recover(tp,1234,REASON_EFFECT)
+  end
+ end)
+ c:RegisterEffect(e)
+end'''
+monster='''local s,id=GetID()
+function s.initial_effect(c) end'''
+with tempfile.TemporaryDirectory() as folder:
+ Path(folder,f'c{S}.lua').write_text(spell);Path(folder,f'c{M}.lua').write_text(monster);driver.SCRIPTS.insert(0,folder)
+ d=driver.Duel(db,[S,M]*20,[N]*40,seed=3400)
+ try:
+  for step in range(35):
+   dec=d.next_decision()
+   if any(c==S and stage=='resolved' and n for (c,stage,_),n in d.coverage.items()):break
+   choice=None
+   for typ in ('activate','summon','to_ep','pass'):
+    choice=next((i for i,o in enumerate(dec.options) if o[0]==typ and (typ not in ('activate','summon') or o[1] in (S,M))),None)
+    if choice is not None:break
+   d.respond(dec,0 if choice is None else choice)
+  assert not d.log, d.log
+  assert d.lp[0] == 9234, (d.lp, step)
+  assert sum(bool(card and card[0] == M) for card in d.snapshot()[(0, 'mzone')]) >= 2
+  assert any(c == S and stage == 'resolved' and n for (c,stage,_),n in d.coverage.items())
+  print('plusieurs invocations : compteur et soin conformes')
+ finally:d.close()
