@@ -134,7 +134,7 @@ du moteur et les traductions restent inchangés. La couverture de
 résolution ne prouve pas qu'une opération a modifié l'état, ni que tous les effets
 de chaque carte ont été exercés.
 
-La régression historique utilise la copie figée `/tmp/ygo-hand-final-v3`. Les
+La régression historique utilise la copie figée une archive locale non versionnée. Les
 fichiers du moteur sont identiques à ceux livrés ; les dernières modifications
 du traducteur ne changent pas ce moteur. Les premières campagnes ont été arrêtées
 pour corriger la divergence découverte ; seule la campagne finale est comptée ici.

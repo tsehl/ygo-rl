@@ -1,6 +1,6 @@
 # Historique d’invocation et invocation générique depuis l’Extra Deck
 
-Travail en cours, développé séparément du lot de capacités. Sources de travail : `/tmp/ygo-summon-history-v2/`. Le moteur du dépôt reste celui soumis à la régression historique du lot de capacités.
+Travail en cours, développé séparément du lot de capacités. Sources de travail : une archive locale non versionnée. Le moteur du dépôt reste celui soumis à la régression historique du lot de capacités.
 
 ## Règles distinguées
 
@@ -28,9 +28,9 @@ Ce lot n’est pas encore validé pour intégration. La mesure CPU complète et 
 
 ## Version finale en vérification
 
-La copie `/tmp/ygo-summon-history-v4/` contient aussi le contrôle d’invocabilité à la résolution, les zones des Pendules recto de l’Extra Deck, l’historique d’une tentative échouée et l’envoi au cimetière par règle après un manque de place. Six tests ciblés de résolution passent ; la série complète passe **90 tests**. Les scénarios générés du premier historique passent **10/10**, avec des conditions effectivement résolues pour Fusion, Rituel, Synchro, Xyz et Lien. Vampire Dragon passe deux parcours avec **7 effets résolus par partie**. Deux réponses invoquant une interdiction avant la résolution de Reborn passent également. Les scénarios sont relancés sur v4, dont les deux suites historiques complètes et la campagne large restent en cours.
+La copie une archive locale non versionnée contient aussi le contrôle d’invocabilité à la résolution, les zones des Pendules recto de l’Extra Deck, l’historique d’une tentative échouée et l’envoi au cimetière par règle après un manque de place. Six tests ciblés de résolution passent ; la série complète passe **90 tests**. Les scénarios générés du premier historique passent **10/10**, avec des conditions effectivement résolues pour Fusion, Rituel, Synchro, Xyz et Lien. Vampire Dragon passe deux parcours avec **7 effets résolus par partie**. Deux réponses invoquant une interdiction avant la résolution de Reborn passent également. Les scénarios sont relancés sur v4, dont les deux suites historiques complètes et la campagne large restent en cours.
 
-Un garde-fou de compilation est développé séparément dans `/tmp/ygo-summon-type-guard/` : les appels bruts à `SpecialSummon` / `IsCanBeSpecialSummoned` acceptent seulement un type générique, jusqu’à la représentation des autres types indépendamment de `CompleteProcedure`. Les helpers Fusion / Rituel gardent leur représentation explicite. Trois tests de ce garde-fou passent ; aucun type explicite n’apparaît parmi les 701 scripts du lot précédent. Le contrôle du catalogue complet de cette variante est en cours. Ce changement n’altère pas le moteur v4 figé.
+Un garde-fou de compilation est développé séparément dans une archive locale non versionnée : les appels bruts à `SpecialSummon` / `IsCanBeSpecialSummoned` acceptent seulement un type générique, jusqu’à la représentation des autres types indépendamment de `CompleteProcedure`. Les helpers Fusion / Rituel gardent leur représentation explicite. Trois tests de ce garde-fou passent ; aucun type explicite n’apparaît parmi les 701 scripts du lot précédent. Le contrôle du catalogue complet de cette variante est en cours. Ce changement n’altère pas le moteur v4 figé.
 
 
 ## Mesure intermédiaire de v5
@@ -45,7 +45,7 @@ Version v5 : les marqueurs génériques de type d'invocation (dont celui de Mons
 
 ## Correction du cache des effets continus
 
-Une tentative d'invocation peut changer l'historique de la carte sans la déplacer. Si un effet continu dépend du type d'invocation, la clé de rafraîchissement précédente ne voyait pas ce changement : un test reproductible conservait 600 ATK au lieu des 500 attendus. La copie `/tmp/ygo-summon-history-refresh` ajoute l'historique à cette clé ; elle passe ce scénario comparé à un rafraîchissement complet et ses **95 tests unitaires**. Ses sources figées et empreintes sont archivées dans `translate/cache/runs/verification-historique-20261107/refresh/`. Les scénarios ciblés sont relancés sur cette copie ; la régression historique complète reste nécessaire avant intégration. Les résultats de v5 ci-dessus précèdent cette correction et ne sont pas présentés comme validation de ses sources finales.
+Une tentative d'invocation peut changer l'historique de la carte sans la déplacer. Si un effet continu dépend du type d'invocation, la clé de rafraîchissement précédente ne voyait pas ce changement : un test reproductible conservait 600 ATK au lieu des 500 attendus. La copie une archive locale non versionnée ajoute l'historique à cette clé ; elle passe ce scénario comparé à un rafraîchissement complet et ses **95 tests unitaires**. Ses sources figées et empreintes sont archivées dans `translate/cache/runs/verification-historique-20261107/refresh/`. Les scénarios ciblés sont relancés sur cette copie ; la régression historique complète reste nécessaire avant intégration. Les résultats de v5 ci-dessus précèdent cette correction et ne sont pas présentés comme validation de ses sources finales.
 
 Sur la copie corrigée du cache des effets continus, **95 tests unitaires**, tous les scénarios ciblés et **10 / 10 parties générées** passent. La campagne des graines 256–285 est à nouveau **30 / 30**, avec 717 scripts traduits ; l'empreinte des sources n'a pas changé pendant cette campagne. Les sources ont été reportées dans la branche locale et leur régression historique complète est en cours avant commit. Un problème distinct de partage des compteurs OATH a été découvert dans une autre copie : il n'a pas encore été intégré à ce lot.
 

@@ -66,7 +66,7 @@ ils dépassent l'ancien blocage et totalisent respectivement 260, 404, 383, 333 
 395 décisions. Ils couvrent Photon Caesar, Sniffer Dragon, XX-Saber Ragigura et
 Hidden Soldiers. Les fixtures synthétiques servent aux tests de règles uniquement.
 
-La régression historique a tourné dans la copie figée `/tmp/ygo-sub-final`, avant
+La régression historique a tourné dans la copie figée une archive locale non versionnée, avant
 la dernière optimisation du noyau de substitution. Son chemin sans substitut est
 identique à la version finale. L'exécution combinée a été interrompue après les
 18 modes ; obs/vmap/sb ont ensuite été terminés séparément sur la version finale,
