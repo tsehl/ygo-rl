@@ -46,9 +46,13 @@ for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
       dec, dp, ff = np.asarray(S0.dec), np.asarray(S0.dec_player), np.asarray(f)
       cand = np.nonzero((dec == core.D_SELECT) & (dp == 0) & ~np.asarray(S0.done))[0]
       zn = np.asarray(s.zone)
-      for g, sl, e, x in pend:
-          r = st[int(zn[g, sl])]; r[0] += 1; r[1] += e; r[2] += x
-      pend = []
+      keep = []
+      for g, sl, e, x, age in pend:                     # suivie jusqu'à ce qu'elle quitte le cimetière (cible : résolution)
+          if zn[g, sl] != core.Z_GRAVE or age >= 40:
+              r = st[int(zn[g, sl])]; r[0] += 1; r[1] += e; r[2] += x
+          else:
+              keep.append((g, sl, e, x, age + 1))
+      pend = keep
       if len(cand) == 0:
           continue
       M = np.asarray(M0[cand])[:, :nva].reshape(len(cand), core.NV, N)[:, core.V_SELECT]
@@ -63,7 +67,7 @@ for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
           v = batk[j][c]
           if v.max() == v.min():
               continue
-          pend.append((cand[j], A[j] % N, int(batk[j][A[j] % N] < v.max()), 1 - (v == v.max()).mean()))
+          pend.append((cand[j], A[j] % N, int(batk[j][A[j] % N] < v.max()), 1 - (v == v.max()).mean(), 0))
       if np.asarray(s.done).all():
           break
 ZN = {v: k for k, v in vars(core).items() if k.startswith("Z_") and isinstance(v, int)}
