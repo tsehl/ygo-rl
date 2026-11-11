@@ -4,6 +4,16 @@ But : couvrir tout le jeu en traduisant les 13 541 scripts officiels (`data/Card
 moteur, et vérifier chaque carte traduite contre l'oracle. Les vraies cartes restent un benchmark : elles ne servent
 qu'à mesurer ce que le moteur sait jouer, jamais à l'entraînement.
 
+## État et reprise (10 novembre 2026)
+
+La branche `codex` intègre **784 scripts sur 13 541**. Le dernier lot intégré est validé par 1 640 parties historiques, les contrôles d'observation et de vectorisation, 30 parties officielles et 10 parties générées. Une partie identique peut résoudre un effet sans que toutes ses branches soient exercées : les campagnes enregistrent séparément présence, activation et résolution.
+
+Le moteur gère notamment les procédures de fusion, rituel, synchro, Xyz et Link prises en charge par le traducteur, les historiques d'invocation, les raisons de déplacement composables, les exclusions de type, les compteurs OATH et les déclencheurs à la déclaration d'attaque. Les règles détaillées et leurs limites sont dans les tests et dans les notes du dépôt.
+
+La branche `codex-relation-wip` sauvegarde la correction expérimentale de la relation entre une carte et un effet. Elle couvre la source déplacée en coût, une cible unique et la création de la relation pendant le ciblage. Les cibles multiples et les `GetFirst` sur groupes potentiellement multiples sont refusés par le traducteur ; les invocations groupées restent expérimentales. La validation de ce sous-ensemble est en cours : ne pas compter sa couverture comme intégrée avant son report sur `codex`.
+
+Pour reprendre : exécuter les tests ciblés dans `tests/`, `engine/regress.sh`, puis `translate/validate.py --games 30 --k 8`. Comparer les signatures de sources des campagnes avant de réutiliser leurs résultats. Après intégration de la relation, mesurer `main` contre `codex` au repos avec `bench/engine_bench.py --b 64 --calls 20 --extra 15`, trois alternances dans chaque ordre ; vérifier toute perte supérieure à 10 % avant un nouveau lot. Ensuite classer les refus avec `translate/translate.py --top` et limiter chaque lot à une fonctionnalité livrable rapidement.
+
 ## Fichiers
 
 - `extract.py`, `inventory.py` → `INVENTAIRE.md` (étape 1, 2026-11-05) : appels d'API et constantes de chaque script,
@@ -18,7 +28,7 @@ qu'à mesurer ce que le moteur sait jouer, jamais à l'entraînement.
   `translate.py`, `cards.py` ou `core.py` changent. Résultats cumulés dans `cache/validated.json`. Le dossier `cache/`
   n'est pas versionné.
 
-## Couverture (2026-11-05)
+## Couverture historique (2026-11-05)
 
 441 / 13 541 scripts traduits et jouables par `validate.py` (3,3 %) :
 - 420 du deck principal ;

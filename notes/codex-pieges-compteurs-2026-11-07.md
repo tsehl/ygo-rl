@@ -66,7 +66,7 @@ cœur natif, et respecte les compteurs par nom indexés.
   identiques**, 174 cartes invoquées ou effets résolus parmi 350 cartes
   présentes. Artefact : `20261107T150551-565a60b9d8e8.json`.
 
-Le snapshot est `/tmp/ygo-inline-final-v1`. La régression complète termine avec
+Le snapshot est une archive locale non versionnée. La régression complète termine avec
 code 0 : **1640/1640 dans les 18 modes**, obs/vmap/sb propres, retours en cours de
 résolution compris. Campagne, résultats ciblés, sources et empreintes sont
 archivés dans `translate/cache/runs/verification-pieges-compteurs-20261107/`.
