@@ -78,6 +78,7 @@ def main():
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--dump", action="store_true", help="décrit les cartes en jeu à chaque écart")
     ap.add_argument("--focus", action="store_true", help="la moitié des decks parmi les cartes à briques récentes")
+    ap.add_argument("--revive", type=int, default=0, help="cardgen.Gen(revive) : renfort des résurrections avec choix")
     a = ap.parse_args()
     if a.games <= 0:
         ap.error("--games doit être > 0")
@@ -85,7 +86,7 @@ def main():
     db = driver.CardDB()
     tot, nok, errs = 0, 0, collections.Counter()
     for b in rng_range(a.banks):
-        cset = cardgen.Gen(b).make_set(a.main, a.extra)
+        cset = cardgen.Gen(b, a.revive).make_set(a.main, a.extra)
         bank = cardgen.to_bank(cset)
         cmap = {c["code"]: i for i, c in enumerate(cset)}
         compare.EFFECT_KINDS.clear()

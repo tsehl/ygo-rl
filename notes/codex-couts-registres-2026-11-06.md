@@ -38,7 +38,7 @@ Travail des 6–7 novembre 2026. Le chantier du moteur et du traducteur continue
 la base. Aucune exception interne. 611 cartes du deck principal, 89 de l'Extra
 Deck (60 fusions, 8 synchros, 18 Xyz, 3 Link).
 
-Deux campagnes finales sur le snapshot immuable `/tmp/ygo-cost-final-v4` :
+Deux campagnes finales sur le snapshot immuable une archive locale non versionnée :
 
 | Périmètre | Graines | Parties identiques | Cartes exercées / présentes |
 | --- | --- | --- | --- |
@@ -90,11 +90,11 @@ Les diagnostics intermédiaires restent conservés :
   monstre protégé. Protection générée : **2/2**, **40 résolutions**,
   **6 attaques** vers un monstre protégé.
 
-Suite ciblée : `/tmp/ygo-cost-final-v4-targeted/results.json`,
+Suite ciblée : une archive locale non versionnée,
 `sources_changed=false`. Son passage unitaire initial a échoué parce que le
 snapshot ne contenait pas `train/ckpt/run3_it120_f16.pkl.gz`. Le fichier
 d'origine a été rendu accessible et les **59/59 tests** ont été rejoués sans
-modifier les sources (`/tmp/ygo-cost-unit-resumed.log`).
+modifier les sources (une archive locale non versionnée).
 Le résultat initial reste conservé.
 
 La régression historique a été interrompue après 11 modes terminés.

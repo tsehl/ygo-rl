@@ -533,6 +533,104 @@ Vérification (2026-11-05) :
   - **LP à 0 par un coût** (banque 0 partie 4) : un effet coûte 800 LP à un joueur qui en a 800. Le moteur finit la partie tout de suite ; l'oracle fait encore choisir la cible avant de constater la défaite. Même vainqueur, quelques décisions de différence.
 
 
+### Quatrième run : features numériques (L4, 2026-11-11)
+
+Diagnostic : l'encodeur ne voyait ATK, DEF et niveau qu'en `sign·log1p(|x|)/8` (plus 16 bits de poids faible). 1500 et 2000 ATK diffèrent de 0,036 : le réseau ne pouvait presque pas comparer deux monstres. C'est cohérent avec ce qu'il n'apprenait pas (cible de Reborn, attaques suicide, invocation du plus faible).
+
+Changement (`train/model.py`) : ATK et DEF en thermomètre (20 seuils, pas de 250 jusqu'à 5000) plus un terme linéaire x/5000, niveau en un-parmi-14 plus linéaire. 57 features (`NUM`) ajoutées à la fin de l'en-tête de carte (lu depuis la banque) et des features dynamiques (valeurs courantes `atk`, `df`, `level` de l'observation). Les anciens checkpoints se chargent (entrées tronquées). `YGO_NO_NUM=1` met ces features à zéro : témoin à architecture identique.
+
+Expérience : deux runs L4 identiques au run 3 (`--b 1024 --steps 64 --iters 120 --mb 8 --bf16 --mix-heur 0.2 --mix-old 0.2 --decks structured`), A = témoin (`YGO_NO_NUM=1`), B = features numériques. ~19 s par itération pour les deux : coût négligeable.
+
+| itération | A heur. (proc.) | B heur. (proc.) | A heur. (vraies) | B heur. (vraies) |
+|---|---|---|---|---|
+| 19 | 38,9 % | 38,5 % | 36,6 % | 39,7 % |
+| 39 | 46,5 % | 46,3 % | 40,9 % | 47,6 % |
+| 59 | 50,5 % | 54,3 % | 47,5 % | 52,8 % |
+| 79 | 55,4 % | 56,5 % | 50,1 % | 58,5 % |
+| 99 | 59,3 % | 61,8 % | 56,3 % | 66,7 % |
+| 119 | 60,2 % | 62,8 % | 56,0 % | **72,6 %** |
+
+Contre l'aléatoire à l'itération 119 : A 95,2 % / 93,6 % (proc. / vraies), B 96,8 % / 96,0 %. Par deck du réseau (vraies cartes, heuristique, it 119) : A contrôle 62 %, pendule 60 %, rituel / fusion 44 %, synchro 58 % ; B 70 %, 74 %, 62 %, 85 %.
+
+`behavior.py` (contre l'heuristique, vraies cartes, B=1024) : A tiré 53,9 %, déterministe 57,5 % ; **B tiré 70,3 %, déterministe 70,7 %** (run 3 : 58,0 / 62,2 %).
+
+| sonde (% des occasions, déterministe) | run 3 | A | B |
+|---|---|---|---|
+| attaque perdue d'avance | 16,1 | 13,6 | 10,1 |
+| invoque un monstre moins fort | 25,6 | 25,3 | 10,2 |
+| fin de tour sans invoquer | 8,7 | 0,2 | 2,4 |
+| Dark Hole en étant devant | 54,3 | 41,4 | 52,6 |
+| MST sans cible | 28,6 | 29,7 | 28,5 |
+| Monster Reborn : pas le plus fort | 75,3 | 80,2 | 84,8 |
+| pose en défense un monstre dominant | — | 16,2 | 19,4 |
+
+Lecture :
+- Le gain sur les vraies cartes (+16,6 points contre l'heuristique à itération égale) dépasse de loin la variance entre runs (le témoin A fait 56 % là où le run 3, même configuration, faisait 61,7 %). Il est plus fort sur les vraies cartes que sur les procédurales (+2,6) : les vraies cartes ont des ATK plus étalées, et les procédurales sont aussi le terrain d'entraînement, où les deux réseaux s'ajustent.
+- Les sondes qui dépendent d'une comparaison d'ATK s'améliorent nettement (invocation du plus fort 25 → 10 %, attaques perdues 14 → 10 %).
+- La cible de Monster Reborn ne s'améliore pas. Vérification de la sonde (`train/rbdump.py CKPT --b 128`, qui affiche candidats et choix) : elle compte bien ce qu'elle dit, mais elle compare l'ATK de base, sans les effets (Arsenal Bug tombe à 1000 sans autre Insecte : Mystic Tomato est alors le bon choix). Sur 26 occasions du réseau B en déterministe : 77 % d'« erreurs », contre 66 % attendus pour un choix au hasard parmi les mêmes candidats ; l'heuristique fait ~54 % sur ses propres occasions (bruit et styles). Le réseau n'a donc pas de préférence pour le monstre fort, sans biais net contre non plus. Hypothèse : dans les banques procédurales, la cible d'une résurrection pèse peu sur le résultat ; à vérifier par une sonde équivalente sur les cartes procédurales.
+- Paramètres : `train/ckpt/run4_it120_f16.pkl.gz` (format bf16 → f16, en-tête 219 entrées).
+
+### Cinquième et sixième runs : run long, banques riches en résurrections (L4, 2026-11-11)
+
+Deux runs L4 lancés en parallèle, même configuration que le run 4 B (features numériques) :
+- **run 5** : 360 itérations (`--iters 360 --eval-every 40 --old-lag 120`), pour voir où plafonne la configuration ;
+- **run 6** : 120 itérations avec `--gen-revive 4` : les banques d'entraînement tirent quatre fois plus souvent une invocation spéciale depuis le cimetière avec choix de la cible (`Gen(revive)` dans `gen/cardgen.py`, `ss_gy` → `ss` avec `sel=target|pick` sur Z_GRAVE ; 26 → 88 clauses d'invocation spéciale par banque). Banques d'évaluation inchangées. Vérifié avant le run : `compare_gen.py --banks 0-3 --games 10 --revive 4` 39 / 40 (le seul écart est un défaut moteur indépendant des résurrections, `notes/bug-verrou-attaque-atk-phase-2026-11-11.md`), `fuzz.py --revive 4` graines 0-1 sans violation.
+
+Contre l'heuristique (procédural / vraies cartes) :
+
+| itération | run 5 proc. | run 5 vraies | run 6 proc. | run 6 vraies | run 4 B vraies |
+|---|---|---|---|---|---|
+| 39 | 49,9 % | 53,2 % | 54,5 % | 53,8 % | 47,6 % |
+| 79 | 57,6 % | 64,4 % | 59,3 % | 61,8 % | 58,5 % |
+| 119 | 62,8 % | 77,2 % | 63,7 % | 75,5 % | 72,6 % |
+| 159 | 66,0 % | 79,9 % | | | |
+| 199 | 69,4 % | 80,2 % | | | |
+| 239 | 69,7 % | 77,4 % | | | |
+| 279 | 69,4 % | 78,2 % | | | |
+| 319 | 73,8 % | 83,2 % | | | |
+| 359 | **74,9 %** | **83,8 %** | | | |
+
+Run 5 à l'it 359 : contre l'aléatoire 98,8 % / 99,7 %, contre lui-même à l'it 240 55,7 %, par deck (vraies, heuristique) contrôle 89 %, pendule 88 %, rituel / fusion 71 %, synchro 87 %. Les deux runs à 120 itérations (run 4 B : 72,6 %, run 6 : 75,5 %, run 5 : 77,2 %) donnent une idée de la variance entre runs : ~5 points.
+
+`behavior.py` (vraies cartes, contre l'heuristique) : run 5 tiré 82,5 %, **déterministe 84,8 %** ; run 6 tiré 73,3 %, déterministe 75,2 %.
+
+| sonde (% des occasions, déterministe) | run 4 B | run 6 | run 5 |
+|---|---|---|---|
+| attaque perdue d'avance | 10,1 | 4,3 | 3,0 |
+| invoque un monstre moins fort | 10,2 | 8,0 | 14,6 |
+| fin de tour sans invoquer | 2,4 | 6,4 | 1,6 |
+| Dark Hole en étant devant | 52,6 | 44,0 | 6,1 |
+| MST sans cible | 28,5 | 31,2 | 14,3 (14 activations) |
+| Monster Reborn : pas le plus fort | 84,8 | **96,6** | **43,9** |
+| pose en défense un monstre dominant | 19,4 | 12,8 | 5,6 |
+| finit le tour avec une magie activable | 1,5 | 0,0 | 34,5 |
+| passe avec Mirror Force / Sakuretsu / Trap Hole activable | 0,0 | 0,0 | 38,7 |
+
+Lecture :
+- Le run long paie : +11 points sur les vraies cartes entre 120 et 360 itérations, avec un palier entre 160 et 280 puis une reprise. La courbe n'est pas plate à 360 : un run plus long (A100) se justifie.
+- Le run 5 a changé de style : il garde ses magies rapides et ses pièges (MST joué 14 fois en déterministe contre 286 en tiré, Rush Recklessly 10 contre 262, Mirror Force non activée dans 39 % des occasions). Les sondes « magie gardée » et « piège passé » le comptent comme une erreur, mais garder un MST sans cible ou un piège pour une meilleure attaque n'en est pas une ; le taux de victoire monte. Ces deux sondes sont à revoir (ne compter que les magies sans valeur de réserve, et les pièges contre une attaque létale).
+- **Les résurrections ajoutées au générateur n'aident pas la cible de Reborn** (run 6 : 96,6 % d'« erreurs », pire que le run 4). Le run long, lui, la fait passer à 44 % (hasard ~66 %).
+- Sonde équivalente sur les banques procédurales d'évaluation (`train/gysel.py CKPT --b 256`, `GYSEL_BANKS=6` : sélections dans le cimetière du joueur 0, suivi de la carte choisie jusqu'à sa zone d'arrivée, erreur = ne prend pas le plus fort en ATK) :
+
+  | paramètres | vers la main : occasions, erreur (hasard) | dont plus fort de niveau ≤ 4 | vers le terrain | bannie |
+  |---|---|---|---|---|
+  | run 3 | 753, 3,3 % (50 %) | — | 14, 64 % (63 %) | 47, 72 % (64 %) |
+  | run 4 B | 107, 94,4 % (53 %) | 91, 94,5 % | 12, 75 % (62 %) | 34, 68 % (64 %) |
+  | run 5 | 471, 2,1 % (50 %) | 20, 50 % | 18, 50 % (65 %) | 46, 54 % (59 %) |
+  | run 6 | 102, 18,6 % (52 %) | 11, 82 % | 11, 64 % (54 %) | 28, 86 % (58 %) |
+
+  Les sélections vers la main (récupérations) dominent ; le sens de la préférence change d'un run à l'autre (run 3 et 5 : le plus fort ; run 4 : le plus faible). Quand le plus fort est de niveau ≤ 4, run 5 et 6 ne le prennent plus : la préférence porte plutôt sur le niveau (monstre à sacrifice) que sur l'ATK. Les résurrections vers le terrain restent trop rares sur ces banques pour conclure (11-18 occasions).
+- Même sonde sur des banques d'évaluation riches en résurrections (`GYSEL_REVIVE=4 GYSEL_BANKS=6`, graines d'évaluation, jamais vues) :
+
+  | paramètres | vers le terrain : occasions, erreur (hasard) | vers la main : occasions, erreur (hasard) | main, plus fort de niveau ≤ 4 |
+  |---|---|---|---|
+  | run 4 B | 69, 66,7 % (59,7 %) | 286, 47,9 % (51,1 %) | 130, 95,4 % |
+  | run 6 | 73, **82,2 %** (61,7 %) | 70, 22,9 % (53,3 %) | 4, 100 % |
+  | run 5 | 88, **23,9 %** (62,9 %) | 1210, 37,9 % (57,5 %) | 465, 98,5 % |
+
+  Le run 6, entraîné sur ce type de banques, ressuscite le plus faible plus souvent que le hasard ; le run 5, qui n'en a presque pas vu, prend le plus fort trois fois sur quatre. Ce n'est donc pas un manque d'exemples : avec 120 itérations, le choix de la cible n'est pas encore appris (le signal de récompense d'une cible est faible et bruité), et plus d'occasions ne l'accélère pas ; avec 360, il l'est. Vers la main, tous les réseaux évitent le plus fort quand il est de niveau ≤ 4 : ils préfèrent récupérer un gros monstre (niveau ≥ 5), ce qui n'est pas forcément faux (le niveau 4 se pioche, le gros monstre sert de cible de sacrifice ou d'Xyz) ; la sonde « plus fort en ATK » est mal posée pour la main. Conclusion : `--gen-revive` n'apporte rien, garder `revive=0` par défaut ; allonger les runs.
+- Paramètres : `train/ckpt/run5_it360_f16.pkl.gz`, `train/ckpt/run6_it120_f16.pkl.gz`. ~1,94 CU/h par session L4 ; 157 CU restantes après les runs 4 à 6.
+
 ## Procédures inhérentes depuis la main (2026-11-06)
 
 Le générateur inclut `hand_proc` parmi les effets des monstres du deck principal :

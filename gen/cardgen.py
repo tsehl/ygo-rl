@@ -62,8 +62,11 @@ def _r100(x):
 class Gen:
     """Générateur (numpy, côté hôte) : une graine → une banque de cartes procédurales (`make_set`)."""
 
-    def __init__(self, seed):
+    def __init__(self, seed, revive=0):
+        """revive : renfort des résurrections avec choix (0 = distribution de référence, tirages inchangés). Chaque
+        unité ajoute un « ss » aux verbes d'une clause ; la source est alors le cimetière, sans auto-invocation."""
         self.rng = np.random.default_rng(seed)
+        self.revive = revive
 
     # ------------------------------------------------------------------ tirages de base
     def p(self, x):
@@ -106,7 +109,9 @@ class Gen:
         """Clause « verbe sur une sélection ». ctx : genre d'effet, événement, zone de la carte à l'activation."""
         kind, evs, zone = ctx["kind"], ctx.get("on", 0), ctx.get("zone")
         opts = ["destroy", "destroy", "banish", "bounce", "tohand", "tohand", "ss", "atk", "disable", "tograve", "indes_battle"]
-        verb = self.pick(opts)
+        verb = self.pick(opts + ["ss_gy"] * self.revive) if self.revive else self.pick(opts)
+        if verb == "ss_gy" and evs:
+            verb = "ss"
         if evs:  # piège / effet rapide sur un événement : le verbe s'applique aux cartes de l'événement
             if self.p(0.75):
                 verb = self.pick(["destroy", "destroy", "banish", "bounce", "atk", "disable"])
@@ -140,6 +145,12 @@ class Gen:
                 return dict(verb="tohand", sel="pick", f=f, k=1, v=0, lock=self.p(0.3))  # lock : Sangan
             f = self.mon(me=Z_GRAVE)  # récupération dans le cimetière
             return dict(verb="tohand", sel="target" if self.p(0.6) else "pick", f=f, k=1, v=0)
+        if verb == "ss_gy":  # résurrection avec choix (voir revive)
+            pos = self.pos()
+            sp = 1 if pos & P_FU_ATK else 2
+            base = self.pick([dict(me=Z_GRAVE), dict(me=Z_GRAVE, op=Z_GRAVE)], [3, 1])
+            f = self.mon(self.pick([1, 1, 2]), spsum=sp, **base)
+            return dict(verb="ss", sel="target" if self.p(0.7) else "pick", f=f, k=1, v=0, pos=pos)
         if verb == "ss":
             pos = self.pos()
             sp = 1 if pos & P_FU_ATK else 2  # en défense seulement : jamais un Link (IsCanBeSpecialSummoned)
