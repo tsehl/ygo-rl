@@ -620,7 +620,15 @@ Lecture :
   | run 6 | 102, 18,6 % (52 %) | 11, 82 % | 11, 64 % (54 %) | 28, 86 % (58 %) |
 
   Les sélections vers la main (récupérations) dominent ; le sens de la préférence change d'un run à l'autre (run 3 et 5 : le plus fort ; run 4 : le plus faible). Quand le plus fort est de niveau ≤ 4, run 5 et 6 ne le prennent plus : la préférence porte plutôt sur le niveau (monstre à sacrifice) que sur l'ATK. Les résurrections vers le terrain restent trop rares sur ces banques pour conclure (11-18 occasions).
-- Sonde sur des banques riches en résurrections (`GYSEL_REVIVE=4`) : en cours.
+- Même sonde sur des banques d'évaluation riches en résurrections (`GYSEL_REVIVE=4 GYSEL_BANKS=6`, graines d'évaluation, jamais vues) :
+
+  | paramètres | vers le terrain : occasions, erreur (hasard) | vers la main : occasions, erreur (hasard) | main, plus fort de niveau ≤ 4 |
+  |---|---|---|---|
+  | run 4 B | 69, 66,7 % (59,7 %) | 286, 47,9 % (51,1 %) | 130, 95,4 % |
+  | run 6 | 73, **82,2 %** (61,7 %) | 70, 22,9 % (53,3 %) | 4, 100 % |
+  | run 5 | 88, **23,9 %** (62,9 %) | 1210, 37,9 % (57,5 %) | 465, 98,5 % |
+
+  Le run 6, entraîné sur ce type de banques, ressuscite le plus faible plus souvent que le hasard ; le run 5, qui n'en a presque pas vu, prend le plus fort trois fois sur quatre. Ce n'est donc pas un manque d'exemples : avec 120 itérations, le choix de la cible n'est pas encore appris (le signal de récompense d'une cible est faible et bruité), et plus d'occasions ne l'accélère pas ; avec 360, il l'est. Vers la main, tous les réseaux évitent le plus fort quand il est de niveau ≤ 4 : ils préfèrent récupérer un gros monstre (niveau ≥ 5), ce qui n'est pas forcément faux (le niveau 4 se pioche, le gros monstre sert de cible de sacrifice ou d'Xyz) ; la sonde « plus fort en ATK » est mal posée pour la main. Conclusion : `--gen-revive` n'apporte rien, garder `revive=0` par défaut ; allonger les runs.
 - Paramètres : `train/ckpt/run5_it360_f16.pkl.gz`, `train/ckpt/run6_it120_f16.pkl.gz`. ~1,94 CU/h par session L4 ; 157 CU restantes après les runs 4 à 6.
 
 ## Procédures inhérentes depuis la main (2026-11-06)
