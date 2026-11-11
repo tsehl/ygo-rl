@@ -87,6 +87,8 @@ def build(path=PATH):
         x = np.asarray(getattr(bank, k))
         if k == "tprog":
             x = np.pad(x, ((0, 0), (0, 0), (0, 2 * cardgen.PT - x.shape[2]), (0, 0)))
+        if k in ("einline", "erefund") and x.shape[1] == 0:   # mêmes formes que cardgen.to_bank
+            x = np.zeros((x.shape[0], np.asarray(bank.ekind).shape[1]), x.dtype)
         assert x.shape[0] == len(codes), (k, x.shape)
         # complétée par des copies de la première carte (jamais dans un deck)
         out["bank_" + k] = np.concatenate([x, np.repeat(x[:1], C_PAD - len(codes), 0)])
