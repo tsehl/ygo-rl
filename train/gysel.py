@@ -29,7 +29,7 @@ def tick(bank, tok, msk, s, m, f, key):
 
 
 from collections import defaultdict
-st = defaultdict(lambda: [0, 0, 0.0])                  # zone d'arrivée -> occasions, erreurs, hasard attendu
+st = defaultdict(lambda: [0, 0, 0.0, 0, 0])          # + occasions / erreurs où le plus fort est de niveau <= 4                  # zone d'arrivée -> occasions, erreurs, hasard attendu
 for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
   cset, bank = ppo.bank_of(a.eval_bank + bi, a)
   tok, msk = model.card_tokens(bank)
@@ -47,11 +47,11 @@ for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
       cand = np.nonzero((dec == core.D_SELECT) & (dp == 0) & ~np.asarray(S0.done))[0]
       zn = np.asarray(s.zone)
       keep = []
-      for g, sl, e, x, age in pend:                     # suivie jusqu'à ce qu'elle quitte le cimetière (cible : résolution)
+      for g, sl, e, x, age, lo in pend:                     # suivie jusqu'à ce qu'elle quitte le cimetière (cible : résolution)
           if zn[g, sl] != core.Z_GRAVE or age >= 40:
-              r = st[int(zn[g, sl])]; r[0] += 1; r[1] += e; r[2] += x
+              r = st[int(zn[g, sl])]; r[0] += 1; r[1] += e; r[2] += x; r[3] += lo; r[4] += e * lo
           else:
-              keep.append((g, sl, e, x, age + 1))
+              keep.append((g, sl, e, x, age + 1, lo))
       pend = keep
       if len(cand) == 0:
           continue
@@ -59,6 +59,7 @@ for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
       zone, cid = np.asarray(S0.zone[cand]), np.asarray(S0.cid[cand])
       A = np.asarray(a_[cand])
       batk = np.asarray(bank.atk)[cid]
+      blv = np.asarray(bank.level)[cid]
       ismon = (np.asarray(bank.ctype)[cid] & core.TYPE_MONSTER) != 0
       for j in range(len(cand)):
           c = M[j]
@@ -67,9 +68,10 @@ for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
           v = batk[j][c]
           if v.max() == v.min():
               continue
-          pend.append((cand[j], A[j] % N, int(batk[j][A[j] % N] < v.max()), 1 - (v == v.max()).mean(), 0))
+          lo = int((blv[j][c][v == v.max()] <= 4).any())   # le plus fort s'invoque sans libération
+          pend.append((cand[j], A[j] % N, int(batk[j][A[j] % N] < v.max()), 1 - (v == v.max()).mean(), 0, lo))
       if np.asarray(s.done).all():
           break
 ZN = {v: k for k, v in vars(core).items() if k.startswith("Z_") and isinstance(v, int)}
-for z, (o, e, x) in sorted(st.items()):
-    print(f"{path} : arrivée {ZN.get(z, z)} : {o} occasions, erreur {e / o:.3f}, hasard attendu {x / o:.3f}")
+for z, (o, e, x, ol, el) in sorted(st.items()):
+    print(f"{path} : arrivée {ZN.get(z, z)} : {o} occasions, erreur {e / o:.3f}, hasard attendu {x / o:.3f} ; plus fort de niveau <= 4 : {ol} occasions, erreur {el / max(ol, 1):.3f}")
