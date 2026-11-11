@@ -16,12 +16,10 @@ model.set_compute(False)
 params = behavior.load_params(path)
 fns = ppo.make_fns(a, optax.adam(1e-4))
 env = ppo.Env(a.b, a.frac, "structured")
-cset, bank = ppo.bank_of(a.eval_bank, a)
-tok, msk = model.card_tokens(bank)
 
 
 @jax.jit
-def tick(s, m, f, key):
+def tick(bank, tok, msk, s, m, f, key):
     cemb = fns[5](params, tok, msk)
     k1, k2 = jax.random.split(key)
     mine = fns[0](params, cemb, bank, s, m, f, k1, jnp.asarray(True))[0]
@@ -30,36 +28,44 @@ def tick(s, m, f, key):
     return a_, s2, m2, f2
 
 
-key = jax.random.PRNGKey(7)
-s, m = env.games(bank, cset, np.random.default_rng(1), key)
-f = jnp.full(env.b, -1, jnp.int32)
-N = s.cid.shape[1]
-nva = core.NV * N
-occ = err = 0
-exp = 0.0
-for t in range(a.eval_steps):
-    key, k = jax.random.split(key)
-    S0, M0 = s, m
-    a_, s, m, f = tick(s, m, f, k)
-    dec, dp, ff = np.asarray(S0.dec), np.asarray(S0.dec_player), np.asarray(f)
-    cand = np.nonzero((dec == core.D_SELECT) & (dp == 0) & ~np.asarray(S0.done))[0]
-    if len(cand) == 0:
-        continue
-    M = np.asarray(M0[cand])[:, :nva].reshape(len(cand), core.NV, N)[:, core.V_SELECT]
-    zone, cid = np.asarray(S0.zone[cand]), np.asarray(S0.cid[cand])
-    A = np.asarray(a_[cand])
-    batk = np.asarray(bank.atk)[cid]
-    ismon = (np.asarray(bank.ctype)[cid] & core.TYPE_MONSTER) != 0
-    for j in range(len(cand)):
-        c = M[j]
-        if c.sum() < 2 or not (zone[j][c] == core.Z_GRAVE).all() or not ismon[j][c].all() or A[j] >= nva:
-            continue
-        v = batk[j][c]
-        if v.max() == v.min():
-            continue
-        occ += 1
-        err += int(batk[j][A[j] % N] < v.max())
-        exp += 1 - (v == v.max()).mean()
-    if np.asarray(s.done).all():
-        break
-print(f"{path} : {occ} occasions, erreur {err / max(occ, 1):.3f}, hasard attendu {exp / max(occ, 1):.3f}")
+from collections import defaultdict
+st = defaultdict(lambda: [0, 0, 0.0])                  # zone d'arrivée -> occasions, erreurs, hasard attendu
+for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
+  cset, bank = ppo.bank_of(a.eval_bank + bi, a)
+  tok, msk = model.card_tokens(bank)
+  key = jax.random.PRNGKey(7 + bi)
+  s, m = env.games(bank, cset, np.random.default_rng(1 + bi), key)
+  f = jnp.full(env.b, -1, jnp.int32)
+  N = s.cid.shape[1]
+  nva = core.NV * N
+  pend = []                                            # (partie, slot choisi, erreur, hasard) en attente de la zone d'arrivée
+  for t in range(a.eval_steps):
+      key, k = jax.random.split(key)
+      S0, M0 = s, m
+      a_, s, m, f = tick(bank, tok, msk, s, m, f, k)
+      dec, dp, ff = np.asarray(S0.dec), np.asarray(S0.dec_player), np.asarray(f)
+      cand = np.nonzero((dec == core.D_SELECT) & (dp == 0) & ~np.asarray(S0.done))[0]
+      zn = np.asarray(s.zone)
+      for g, sl, e, x in pend:
+          r = st[int(zn[g, sl])]; r[0] += 1; r[1] += e; r[2] += x
+      pend = []
+      if len(cand) == 0:
+          continue
+      M = np.asarray(M0[cand])[:, :nva].reshape(len(cand), core.NV, N)[:, core.V_SELECT]
+      zone, cid = np.asarray(S0.zone[cand]), np.asarray(S0.cid[cand])
+      A = np.asarray(a_[cand])
+      batk = np.asarray(bank.atk)[cid]
+      ismon = (np.asarray(bank.ctype)[cid] & core.TYPE_MONSTER) != 0
+      for j in range(len(cand)):
+          c = M[j]
+          if c.sum() < 2 or not (zone[j][c] == core.Z_GRAVE).all() or not ismon[j][c].all() or A[j] >= nva:
+              continue
+          v = batk[j][c]
+          if v.max() == v.min():
+              continue
+          pend.append((cand[j], A[j] % N, int(batk[j][A[j] % N] < v.max()), 1 - (v == v.max()).mean()))
+      if np.asarray(s.done).all():
+          break
+ZN = {v: k for k, v in vars(core).items() if k.startswith("Z_") and isinstance(v, int)}
+for z, (o, e, x) in sorted(st.items()):
+    print(f"{path} : arrivée {ZN.get(z, z)} : {o} occasions, erreur {e / o:.3f}, hasard attendu {x / o:.3f}")
