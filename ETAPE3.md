@@ -533,6 +533,43 @@ Vérification (2026-11-05) :
   - **LP à 0 par un coût** (banque 0 partie 4) : un effet coûte 800 LP à un joueur qui en a 800. Le moteur finit la partie tout de suite ; l'oracle fait encore choisir la cible avant de constater la défaite. Même vainqueur, quelques décisions de différence.
 
 
+### Quatrième run : features numériques (L4, 2026-11-11)
+
+Diagnostic : l'encodeur ne voyait ATK, DEF et niveau qu'en `sign·log1p(|x|)/8` (plus 16 bits de poids faible). 1500 et 2000 ATK diffèrent de 0,036 : le réseau ne pouvait presque pas comparer deux monstres. C'est cohérent avec ce qu'il n'apprenait pas (cible de Reborn, attaques suicide, invocation du plus faible).
+
+Changement (`train/model.py`) : ATK et DEF en thermomètre (20 seuils, pas de 250 jusqu'à 5000) plus un terme linéaire x/5000, niveau en un-parmi-14 plus linéaire. 57 features (`NUM`) ajoutées à la fin de l'en-tête de carte (lu depuis la banque) et des features dynamiques (valeurs courantes `atk`, `df`, `level` de l'observation). Les anciens checkpoints se chargent (entrées tronquées). `YGO_NO_NUM=1` met ces features à zéro : témoin à architecture identique.
+
+Expérience : deux runs L4 identiques au run 3 (`--b 1024 --steps 64 --iters 120 --mb 8 --bf16 --mix-heur 0.2 --mix-old 0.2 --decks structured`), A = témoin (`YGO_NO_NUM=1`), B = features numériques. ~19 s par itération pour les deux : coût négligeable.
+
+| itération | A heur. (proc.) | B heur. (proc.) | A heur. (vraies) | B heur. (vraies) |
+|---|---|---|---|---|
+| 19 | 38,9 % | 38,5 % | 36,6 % | 39,7 % |
+| 39 | 46,5 % | 46,3 % | 40,9 % | 47,6 % |
+| 59 | 50,5 % | 54,3 % | 47,5 % | 52,8 % |
+| 79 | 55,4 % | 56,5 % | 50,1 % | 58,5 % |
+| 99 | 59,3 % | 61,8 % | 56,3 % | 66,7 % |
+| 119 | 60,2 % | 62,8 % | 56,0 % | **72,6 %** |
+
+Contre l'aléatoire à l'itération 119 : A 95,2 % / 93,6 % (proc. / vraies), B 96,8 % / 96,0 %. Par deck du réseau (vraies cartes, heuristique, it 119) : A contrôle 62 %, pendule 60 %, rituel / fusion 44 %, synchro 58 % ; B 70 %, 74 %, 62 %, 85 %.
+
+`behavior.py` (contre l'heuristique, vraies cartes, B=1024) : A tiré 53,9 %, déterministe 57,5 % ; **B tiré 70,3 %, déterministe 70,7 %** (run 3 : 58,0 / 62,2 %).
+
+| sonde (% des occasions, déterministe) | run 3 | A | B |
+|---|---|---|---|
+| attaque perdue d'avance | 16,1 | 13,6 | 10,1 |
+| invoque un monstre moins fort | 25,6 | 25,3 | 10,2 |
+| fin de tour sans invoquer | 8,7 | 0,2 | 2,4 |
+| Dark Hole en étant devant | 54,3 | 41,4 | 52,6 |
+| MST sans cible | 28,6 | 29,7 | 28,5 |
+| Monster Reborn : pas le plus fort | 75,3 | 80,2 | 84,8 |
+| pose en défense un monstre dominant | — | 16,2 | 19,4 |
+
+Lecture :
+- Le gain sur les vraies cartes (+16,6 points contre l'heuristique à itération égale) dépasse de loin la variance entre runs (le témoin A fait 56 % là où le run 3, même configuration, faisait 61,7 %). Il est plus fort sur les vraies cartes que sur les procédurales (+2,6) : les vraies cartes ont des ATK plus étalées, et les procédurales sont aussi le terrain d'entraînement, où les deux réseaux s'ajustent.
+- Les sondes qui dépendent d'une comparaison d'ATK s'améliorent nettement (invocation du plus fort 25 → 10 %, attaques perdues 14 → 10 %).
+- La cible de Monster Reborn ne s'améliore pas. Vérification de la sonde (`train/rbdump.py CKPT --b 128`, qui affiche candidats et choix) : elle compte bien ce qu'elle dit, mais elle compare l'ATK de base, sans les effets (Arsenal Bug tombe à 1000 sans autre Insecte : Mystic Tomato est alors le bon choix). Sur 26 occasions du réseau B en déterministe : 77 % d'« erreurs », contre 66 % attendus pour un choix au hasard parmi les mêmes candidats ; l'heuristique fait ~54 % sur ses propres occasions (bruit et styles). Le réseau n'a donc pas de préférence pour le monstre fort, sans biais net contre non plus. Hypothèse : dans les banques procédurales, la cible d'une résurrection pèse peu sur le résultat ; à vérifier par une sonde équivalente sur les cartes procédurales.
+- Paramètres : `train/ckpt/run4_it120_f16.pkl.gz` (format bf16 → f16, en-tête 219 entrées).
+
 ## Procédures inhérentes depuis la main (2026-11-06)
 
 Le générateur inclut `hand_proc` parmi les effets des monstres du deck principal :
