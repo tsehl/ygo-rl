@@ -254,6 +254,8 @@ class Gen:
         """Un effet de genre kind pour la carte card (spécification, sans briques)."""
         mon = card["ctype"] & TYPE_MONSTER
         e = dict(kind=kind, on=0, opt=OPT_NONE, optional=False, rng=0, dmg=0, conds=[], cost=None, clauses=[])
+        if kind in ("act", "ignition", "quick") and self.p(0.12):
+            e["related"] = True  # l’effet dépend encore de sa source à la résolution
         if kind == "act":  # magie / piège
             ct = card["ctype"]
             if ct & TYPE_COUNTER:
@@ -772,7 +774,7 @@ def clause_bricks(c, on, first):
             return [], [FILTER(0, _F(f))] + verb_bricks(c, 0), 0
         return [], pre_r + [FILTER(0, _F(f)), CHOOSE(1, 0, k)] + verb_bricks(c, 1), 1
     if sel == "target":
-        return (pre_t + [FILTER(0, _F(f), tgt=True), CHOOSE(1, 0, k)],
+        return (pre_t + [FILTER(0, _F(f), tgt=True), CHOOSE(1, 0, k, tgt=True)],
                 pre_r + [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
     if sel == "all":
         return [FILTER(0, _F(f)), REQ(0, 1)], [FILTER(2, _F(f))] + verb_bricks(c, 2), 2
@@ -783,7 +785,7 @@ def clause_bricks(c, on, first):
         return ([FILTER(0, _F(f)), REQ(0, 1)],
                 [FILTER(0, _F(f)), REQ(0, 1), MINATK(1, 0), CHOOSE(2, 1, 1)] + verb_bricks(c, 2), 2)
     if sel == "event":
-        return ([EVENT(0, on), FILTER(1, _F(f), within=0, tgt=True), REQ(1, 1)],
+        return ([EVENT(0, on), FILTER(1, _F(f), within=0, tgt=True), REQ(1, 1), cards.LABEL(1, target=True)],
                 [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
     if sel == "self":
         return (pre_t + [SELF(0), FILTER(1, _F(f), within=0), REQ(1, 1)],
@@ -816,7 +818,7 @@ def bricks(e):
     if k == "ritual":
         return ritual_spell(e["code"], e["mode"])[0]
     cost = cond_bricks(e["conds"]) + cost_bricks(e["cost"])
-    target, resolve = [], []
+    target, resolve = [], [SELF(0, related=True), REQ(0, 1)] if e.get("related") else []
     first = True
     for c in e["clauses"]:
         t, r, out = clause_bricks(c, e["on"], first)

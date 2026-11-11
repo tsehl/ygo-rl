@@ -1,0 +1,4 @@
+états vivants : 9025
+1. ok : toutes les actions légales ont un token
+2. ok : 800 observations invariantes à l'information cachée et aux slots
+3. ok : 99 contrôles positifs détectés

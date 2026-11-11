@@ -10,6 +10,9 @@ sys.path[:0]=[str(ROOT/'engine'),str(ROOT/'train')]
 import core,cards,model
 
 
+FSUB=slice(-core.FK-model.NUM,-model.NUM)  # permissions de substitution, avant les NUM features
+
+
 class EncodingTests(unittest.TestCase):
     def bank(self):
         return core.make_bank(np.array([100,200,300]),[1000]*3,[1000]*3,[4]*3,ctype=[33,65,65],
@@ -21,8 +24,8 @@ class EncodingTests(unittest.TestCase):
     def test_permissions_and_passive_range_are_visible(self):
         bank=self.bank();tok,mask=model.card_tokens(bank)
         self.assertEqual(tok['head'].shape[-1],model.F_HEAD)
-        np.testing.assert_array_equal(np.asarray(tok['head'][1,-core.FK:]),[1,1,0,0])
-        np.testing.assert_array_equal(np.asarray(tok['head'][2,-core.FK:]),[0,0,0,0])
+        np.testing.assert_array_equal(np.asarray(tok['head'][1,FSUB]),[1,1,0,0])
+        np.testing.assert_array_equal(np.asarray(tok['head'][2,FSUB]),[0,0,0,0])
         self.assertEqual(int(bank.erng[0,0]),core.Z_HAND|core.Z_MZONE)
 
     def test_old_checkpoint_encoder_matches_zero_extension(self):

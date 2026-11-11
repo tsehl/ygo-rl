@@ -1,0 +1,53 @@
+1 {'ok': True, 'decisions': 374, 'turns': 67, 'winner': 0, 'status': 'passed'}
+2 {'ok': True, 'decisions': 239, 'turns': 46, 'winner': 0, 'status': 'passed'}
+3 {'ok': True, 'decisions': 352, 'turns': 72, 'winner': 0, 'status': 'passed'}
+4 {'ok': True, 'decisions': 157, 'turns': 32, 'winner': 1, 'status': 'passed'}
+5 {'ok': True, 'decisions': 276, 'turns': 57, 'winner': 0, 'status': 'passed'}
+6 {'ok': True, 'decisions': 287, 'turns': 52, 'winner': 0, 'status': 'passed'}
+7 {'ok': True, 'decisions': 282, 'turns': 55, 'winner': 1, 'status': 'passed'}
+8 {'ok': True, 'decisions': 344, 'turns': 72, 'winner': 0, 'status': 'passed'}
+9 {'ok': True, 'decisions': 372, 'turns': 72, 'winner': 0, 'status': 'passed'}
+10 {'ok': True, 'decisions': 237, 'turns': 55, 'winner': 0, 'status': 'passed'}
+11 {'ok': True, 'decisions': 406, 'turns': 72, 'winner': 0, 'status': 'passed'}
+12 {'ok': True, 'decisions': 318, 'turns': 62, 'winner': 0, 'status': 'passed'}
+13 {'ok': True, 'decisions': 361, 'turns': 72, 'winner': 0, 'status': 'passed'}
+14 {'ok': True, 'decisions': 242, 'turns': 47, 'winner': 0, 'status': 'passed'}
+15 {'ok': True, 'decisions': 329, 'turns': 72, 'winner': 0, 'status': 'passed'}
+16 {'ok': True, 'decisions': 191, 'turns': 36, 'winner': 0, 'status': 'passed'}
+17 {'ok': True, 'decisions': 272, 'turns': 54, 'winner': 1, 'status': 'passed'}
+18 {'ok': True, 'decisions': 356, 'turns': 71, 'winner': 0, 'status': 'passed'}
+19 {'ok': True, 'decisions': 338, 'turns': 72, 'winner': 0, 'status': 'passed'}
+20 {'ok': True, 'decisions': 208, 'turns': 40, 'winner': 1, 'status': 'passed'}
+21 {'ok': True, 'decisions': 280, 'turns': 52, 'winner': 0, 'status': 'passed'}
+22 {'ok': True, 'decisions': 187, 'turns': 37, 'winner': 1, 'status': 'passed'}
+23 {'ok': True, 'decisions': 241, 'turns': 44, 'winner': 1, 'status': 'passed'}
+24 {'ok': True, 'decisions': 368, 'turns': 72, 'winner': 0, 'status': 'passed'}
+25 {'ok': True, 'decisions': 395, 'turns': 72, 'winner': 0, 'status': 'passed'}
+26 {'ok': True, 'decisions': 367, 'turns': 72, 'winner': 0, 'status': 'passed'}
+27 {'ok': True, 'decisions': 347, 'turns': 72, 'winner': 0, 'status': 'passed'}
+28 {'ok': True, 'decisions': 395, 'turns': 72, 'winner': 0, 'status': 'passed'}
+29 {'ok': True, 'decisions': 165, 'turns': 36, 'winner': 0, 'status': 'passed'}
+30 {'ok': True, 'decisions': 331, 'turns': 62, 'winner': 1, 'status': 'passed'}
+31 {'ok': True, 'decisions': 325, 'turns': 64, 'winner': 0, 'status': 'passed'}
+32 {'ok': True, 'decisions': 341, 'turns': 72, 'winner': 0, 'status': 'passed'}
+33 {'ok': True, 'decisions': 192, 'turns': 36, 'winner': 1, 'status': 'passed'}
+34 {'ok': True, 'decisions': 251, 'turns': 48, 'winner': 0, 'status': 'passed'}
+35 {'ok': True, 'decisions': 225, 'turns': 46, 'winner': 0, 'status': 'passed'}
+36 {'ok': True, 'decisions': 320, 'turns': 57, 'winner': 1, 'status': 'passed'}
+37 {'ok': True, 'decisions': 318, 'turns': 61, 'winner': 0, 'status': 'passed'}
+38 {'ok': True, 'decisions': 354, 'turns': 66, 'winner': 0, 'status': 'passed'}
+39 {'ok': True, 'decisions': 330, 'turns': 71, 'winner': 0, 'status': 'passed'}
+40 {'ok': True, 'decisions': 369, 'turns': 72, 'winner': 0, 'status': 'passed'}
+40/40 parties identiques
+  (10, 'attack') 757
+  (10, 'to_ep') 595
+  (10, 'to_m2') 549
+  (11, 'mset') 769
+  (11, 'repos') 3061
+  (11, 'summon') 854
+  (11, 'to_bp') 1170
+  (11, 'to_ep') 1427
+  (15, 'cards') 1286
+  (18, 'place') 989
+  (20, 'cards') 202
+  (26, 'pick') 383

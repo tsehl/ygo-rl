@@ -1,0 +1,5 @@
+relation_target_indestructible_oracle_reference.py : 179 décisions identiques
+group_after_failed_destroy_oracle_reference.py : 185 décisions identiques
+group_after_failed_summon_oracle_reference.py : 185 décisions identiques
+condition_before_action_oracle_reference.py : 185 décisions identiques
+failed_summon_condition_oracle_reference.py : 179 décisions identiques

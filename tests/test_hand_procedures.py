@@ -141,7 +141,13 @@ class HandProceduresTests(unittest.TestCase):
         self.assertEqual(protection[0][3],0)
 
     def test_combined_continuous_trap_activation_carries_the_optional_effect(self):
-        effects, *_ = T.translate(1802450)
+        with self.assertRaisesRegex(T.Unsupported, 'cibles multiples'):
+            T.translate(1802450)
+        script = Path(T.OFFICIAL, 'c1802450.lua').read_text().replace(
+            'LOCATION_GRAVE,1,2,nil)', 'LOCATION_GRAVE,1,1,nil)')
+        with tempfile.TemporaryDirectory() as folder, patch.object(T, 'OFFICIAL', folder):
+            Path(folder, 'c1802450.lua').write_text(script)
+            effects, *_ = T.translate(1802450)
         self.assertEqual(effects[0][7]['inline'], 2)
 
     def test_unsupported_procedure_is_refused(self):

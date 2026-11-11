@@ -82,6 +82,7 @@ ZC_SUMMON, ZC_SSET, ZC_ACT, ZC_SPSUM, ZC_PROC, ZC_PEND, ZC_REPLAY = range(7)  # 
 ZC_INLINE = 7  # choix d'un effet lors de l'activation d'un piège continu (description native 94)
 CF_ACT, CF_CONT = 1, 2  # nature du maillon, indépendante du genre de l'effet choisi
 CF_ACT_NEG = 4  # activation niée ; distincte de DISABLE_CHAIN
+CF_SRC_UNRELATED = 8  # la source a bougé après le début de l’activation
 # Link) ; ZC_PEND : invocation pendule (une carte à la fois, dans l'ordre des uid) ; ZC_REPLAY : la question D_YESNO
 # est « relancer l'attaque ? » (SelectYesNo 30), pas un Duel.SelectYesNo d'effet
 PS_SYN, PS_XYZ, PS_LINK, PS_PEND = 1, 2, 3, 4  # psel
@@ -286,7 +287,7 @@ def test_prog(prog, c):
                 if opcode==OP_END:
                     continue
                 if opcode==OP_FILTER:
-                    cc &= 15  # les bits hauts sont privés au programme de test dérivé
+                    cc &= 15 | (1 << 20)  # conserve la copie ; les autres bits hauts servent au test dérivé
                 can_join = result and result[-1][0]==OP_FILTER and result[-1][1]==a
                 minimum = (opcode==OP_REQ and cc==0) or (opcode==OP_CHOOSE and a==b)
                 count = cc&15 if opcode==OP_CHOOSE else b
@@ -335,6 +336,8 @@ class State(NamedTuple):
     zctx: jnp.ndarray    # ZC_* : usage du choix de case en cours
     zsel: jnp.ndarray    # case choisie pour l'invocation spéciale en cours
     ch_src: jnp.ndarray  # effet en cours (activation ou résolution) : carte source (-1 si aucun)
+    ch_src_mv: jnp.ndarray  # horloge de la source au début de l’activation
+    ch_tgt_t: jnp.ndarray  # horloge de création des relations de cible
     ch_eff: jnp.ndarray  # index d'effet
     ch_p: jnp.ndarray    # joueur qui active
     ch_k: jnp.ndarray    # index de son maillon (= n_chain pendant l'activation)
@@ -354,6 +357,7 @@ class State(NamedTuple):
     lk_reg: jnp.ndarray  # [CH, R, N] registres au moment de l'activation (une carte qui bouge en sort)
     lk_neg: jnp.ndarray  # [CH] activation niée
     lk_t: jnp.ndarray    # [CH] horloge de déplacement à l'activation
+    lk_tgt_t: jnp.ndarray  # [CH] horloge de création des relations de cible
     lk_lab: jnp.ndarray  # [CH] label (OP_LABEL)
     lk_flags: jnp.ndarray # [CH] CF_* conservés après le choix d'un effet inline
     mv: jnp.ndarray      # [N] horloge du dernier déplacement de la carte
@@ -2036,19 +2040,27 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins, count_asserts=False):
         row = (filter_mask(bank, s, bank.filt[s.cid[h], e, jnp.clip(b, 0, NF - 1)], p, h, bdes=False)
                                       & within & (((c & 8) == 0) | ((s.st & ST_BDES) == 0))
                                       & ~(((c & 8) != 0) & untargetable(bank, s, h)))
+        row = jnp.where((c & (1 << 20)) != 0, within, row)  # copie intégrale du registre
         if count_asserts:
             count = row.sum()
             minimum, maximum = (c >> 4) & 255, (c >> 12) & 255
             return row, jnp.bool_(True), (count >= minimum) & ((maximum == 0) | (count < maximum))
         return put(row)
     branches[OP_FILTER] = filter_
-    branches[OP_SELF] = lambda: put(jnp.arange(n) == h)
-    branches[OP_REQ] = lambda: cond(jnp.where(c == 0, reg[ra].sum() >= b, reg[ra].sum() <= b))
+    branches[OP_SELF] = lambda: put((jnp.arange(n) == h) & ((b == 0) | (((s.lk_flags[k] & CF_SRC_UNRELATED) == 0) & (s.mv[h] <= s.lk_t[k]))))
+    def req():
+        related = (c & 2) != 0
+        count = (reg[ra] & (~related | (s.mv <= s.lk_tgt_t[jnp.clip(k, 0, CH - 1)]))).sum()
+        return cond(jnp.where((c & 1) == 0, count >= b, count <= b))
+    branches[OP_REQ] = req
     branches[OP_REQ_FREE] = lambda: cond(free_main(s, rel(p, a), jnp.where(b == Z_SZONE, Z_SZONE, Z_MZONE)) >= c)
 
     def minatk():
-        atk = jnp.where(reg[rb], s.atk_c, BIG)
-        return put(reg[rb] & (atk == atk.min()))
+        original = (c & 2) != 0
+        candidates = jnp.where(original, s.lk_reg[jnp.clip(k, 0, CH - 1), rb], reg[rb])
+        value = jnp.where((c & 1) != 0, s.uid, s.atk_c)
+        rank = jnp.where(candidates, value, BIG)
+        return put(candidates & (rank == rank.min()))
     branches[OP_MINATK] = minatk
     branches[OP_CHOOSE] = lambda: (reg[rb], jnp.bool_(True), reg[rb].sum() >= (c & 15))
     lkind = bank.ekind[lc, s.lk_eff[lk]]
@@ -2097,8 +2109,11 @@ def test_ok(bank, s, h, e, p, enabled=None):
 def sel_finish(bank, s):
     """Fin d'une sélection pendant un effet (D_SELECT) : les cartes choisies vont dans le registre de l'instruction."""
     sel = (s.st & ST_SEL) != 0
-    dst = jnp.clip(current_ins(bank, s)[1], 0, R - 1)
-    return s._replace(reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
+    ins = current_ins(bank, s)
+    dst = jnp.clip(ins[1], 0, R - 1)
+    target = (s.pg == PG_TARGET) & (ins[0] == OP_CHOOSE) & ((ins[3] & (1 << 10)) != 0)
+    return s._replace(ch_tgt_t=jnp.where(target, s.clk, s.ch_tgt_t),
+                      reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
                       dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
 
 
@@ -2143,7 +2158,7 @@ def begin_act(bank, s, c, e, enabled=True):
     continuous = (s.zone[c] == Z_SZONE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) != 0)
     flags = jnp.where(card_activation, CF_ACT, 0) | jnp.where(continuous, CF_CONT, 0)
     s = s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])), ch_dis=tdis, ch_lab=_i(0), ch_flags=flags,
-                      ch_src=_i(c), ch_eff=_i(e), ch_p=s.dec_player, ch_k=s.n_chain, pg=_i(PG_COST), pc=_i(0),
+                      ch_src=_i(c), ch_src_mv=s.mv[c], ch_tgt_t=s.clk, ch_eff=_i(e), ch_p=s.dec_player, ch_k=s.n_chain, pg=_i(PG_COST), pc=_i(0),
                       reg=jnp.zeros((R, n), bool), dec=_i(D_RUN), pend=_i(-1))
     if bank.einline.shape[1]:
         alternate = bank.einline[s.cid[c], e] - 1
@@ -2159,8 +2174,8 @@ def push_link(bank, s):
     k, src = s.n_chain, s.ch_src
     s = s._replace(lk_src=s.lk_src.at[k].set(s.ch_src), lk_eff=s.lk_eff.at[k].set(s.ch_eff),
                    lk_p=s.lk_p.at[k].set(s.ch_p), lk_reg=s.lk_reg.at[k].set(s.reg),
-                   lk_neg=s.lk_neg.at[k].set(s.ch_dis), lk_t=s.lk_t.at[k].set(s.clk), lk_lab=s.lk_lab.at[k].set(s.ch_lab),
-                   lk_flags=s.lk_flags.at[k].set(s.ch_flags),
+                   lk_neg=s.lk_neg.at[k].set(s.ch_dis), lk_t=s.lk_t.at[k].set(s.clk), lk_tgt_t=s.lk_tgt_t.at[k].set(s.ch_tgt_t), lk_lab=s.lk_lab.at[k].set(s.ch_lab),
+                   lk_flags=s.lk_flags.at[k].set(s.ch_flags | jnp.where(s.mv[src] != s.ch_src_mv, CF_SRC_UNRELATED, 0)),
                    n_chain=k + 1, ch_src=_i(-1))
     return _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tg=s.tg.at[src].set(False))),
                     lambda s: open_quick(s, 1 - s.ch_p), s)
@@ -2350,7 +2365,9 @@ def exec_one(bank, s):
                               st=s.st.at[lc].set(jnp.where(hit, s.st[lc] | ST_LEAVE | ST_ACTDIS, s.st[lc]))))
     branches[OP_NEGATE] = negate
     branches[OP_PAY_LP] = lambda s: adv(damage(s, p, a))
-    branches[OP_LABEL] = lambda s: adv(s._replace(ch_lab=s.reg[ra].any().astype(I32)))
+    branches[OP_LABEL] = lambda s: adv(s._replace(
+        ch_lab=jnp.where(b == 0, s.reg[ra].any().astype(I32), s.ch_lab),
+        ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t)))
     branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
     return _switch(op, branches, s)
 
@@ -2967,10 +2984,10 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
               seq=seq, ctrl=owner, owner=owner, pos=jnp.full(n, P_FD_DEF, I32),
               st=z, lp=jnp.full(2, 8000, I32), turn=_i(0), tp=_i(1), phase=_i(PH_DRAW), ns_used=f,
               dec=_i(D_NONE), dec_player=_i(0), pend=_i(-1), pend_set=f, need=_i(0), picks=_i(0), smin=_i(0),
-              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, ch_lab=_i(0), ch_flags=_i(0), pg=_i(0),
+              zctx=_i(ZC_SUMMON), zsel=_i(0), ch_src=_i(-1), ch_src_mv=_i(0), ch_tgt_t=_i(0), ch_eff=_i(0), ch_p=_i(0), ch_k=_i(0), ch_dis=f, ch_lab=_i(0), ch_flags=_i(0), pg=_i(0),
               pc=_i(0), reg=jnp.zeros((R, n), bool), done=f, odraw=f, winner=_i(-1),
               lk_src=jnp.full(CH, -1, I32), lk_eff=jnp.zeros(CH, I32), lk_p=jnp.zeros(CH, I32),
-              lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), lk_lab=jnp.zeros(CH, I32), lk_flags=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
+              lk_reg=jnp.zeros((CH, R, n), bool), lk_neg=jnp.zeros(CH, bool), lk_t=jnp.zeros(CH, I32), lk_tgt_t=jnp.zeros(CH, I32), lk_lab=jnp.zeros(CH, I32), lk_flags=jnp.zeros(CH, I32), mv=z, clk=_i(0), n_chain=_i(0),
               wk=_i(W_QUICK), cw_passed=f, ret=_i(R_IDLE), chained=f, ph_restart=_i(0), wph=_i(WP_DRAW),
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tew=jnp.zeros((NEV, n), bool), teg=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,

@@ -48,7 +48,7 @@ class SummonHistoryTests(unittest.TestCase):
         params=model.init(jax.random.PRNGKey(0),d=16,card_layers=1,layers=1)
         embeddings=jnp.ones((1,16))
         infer=jax.jit(model.policy)
-        for width in (model.F_DYN-32,model.F_DYN-64,model.F_DYN-65):
+        for width in (model.F_DYN-1,model.F_DYN-model.NUM-1,model.F_DYN-model.NUM-33,model.F_DYN-model.NUM-65,model.F_DYN-model.NUM-66):
             legacy=dict(params,dyn=dict(params['dyn'],w=params['dyn']['w'][:width]))
             migrated=dict(legacy,dyn=dict(legacy['dyn'],w=jnp.pad(legacy['dyn']['w'],((0,model.F_DYN-width),(0,0)))))
             for actual,expected in zip(infer(legacy,embeddings,view),infer(migrated,embeddings,view)):

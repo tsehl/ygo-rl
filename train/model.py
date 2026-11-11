@@ -219,7 +219,7 @@ def encode_cards(p, tok, msk, heads=4):
 
 # ---------------------------------------------------------------------------------------------------- politique
 
-F_DYN = 3 + 8 + 16 + 4 + 17 + 1 + (CH + 1) + 1 + 1 + 1 + 64 + NUM
+F_DYN = 3 + 8 + 16 + 4 + 17 + 1 + (CH + 1) + 1 + 1 + 1 + 64 + NUM + 1   # + source_related (après NUM : anciens checkpoints tronqués)
 F_GLOB = 2 + 2 + N_PHASE + 3 + N_DEC + 1 + 8 + 1 + 12  # LP, tour, phase, flags, décision, need, zctx, chaîne, compteurs
 
 
@@ -230,7 +230,7 @@ def dyn_feats(o):
                             o.mine[..., None].astype(jnp.float32), onehot(o.chain, CH + 1),
                             o.negated[..., None].astype(jnp.float32), o.pending[..., None].astype(jnp.float32),
                             o.card_activation[..., None].astype(jnp.float32), bits(o.suminfo, 32), bits(o.reason, 32),
-                            stat(o.atk), stat(o.df), lvl(o.level)], -1)
+                            stat(o.atk), stat(o.df), lvl(o.level), o.source_related[..., None].astype(jnp.float32)], -1)
 
 
 def glob_feats(o):
@@ -255,7 +255,7 @@ def policy(p, cemb, o, heads=4):
     """o : Obs (engine/obs.py) d'un lot [..]. Rend (logits [.., T*NV + N_SPECIAL] masqués, valeur [..])."""
     known = o.known[..., None]
     dyn = dyn_feats(o)
-    if p["dyn"]["w"].shape[0] in (F_DYN - NUM, F_DYN - NUM - 32, F_DYN - NUM - 64, F_DYN - NUM - 65):
+    if p["dyn"]["w"].shape[0] in (F_DYN - 1, F_DYN - NUM - 1, F_DYN - NUM - 33, F_DYN - NUM - 65, F_DYN - NUM - 66):
         dyn = dyn[..., :p["dyn"]["w"].shape[0]]
     elif p["dyn"]["w"].shape[0] != F_DYN:
         raise ValueError("dimension dynamique de checkpoint incompatible")

@@ -367,6 +367,7 @@ end
 function PG.operation(sp)
 	local cls=sp.clauses
 	return function(e,tp,eg,ep,ev,re,r,rp)
+		if sp.related and not e:GetHandler():IsRelateToEffect(e) then return end
 		local go,hit=resolve(cls[1],true,e,tp,eg,ep,ev,re)
 		if not go then return end
 		if cls[2] and hit then resolve(cls[2],false,e,tp,eg,ep,ev,re) end

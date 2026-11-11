@@ -1,0 +1,17 @@
+.......................................................banque 0 partie 0 (0 s) {'ok': True, 'err': 'controlled failure'}
+1/1 parties identiques
+banque 0 partie 0 (0 s) {'ok': False, 'err': 'controlled failure'}
+.........................................................0/1 parties identiques
+  1 × controlled failure
+0 {'ok': True}
+1 {'ok': True}
+2/2 parties identiques
+0 {'ok': False}
+1 {'ok': False}
+......0/2 parties identiques
+traduction : 1/1 en 0 s
+...........
+----------------------------------------------------------------------
+Ran 129 tests in 161.036s
+
+OK

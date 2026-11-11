@@ -137,8 +137,8 @@ class Fn:  # fonction Lua (nœud) ou référence connue (Card.IsFaceup, aux.TRUE
 
 
 class Reg:  # ensemble de cartes dans un registre du programme ; zones (me, op) d'origine
-    def __init__(self, r, me=ALLZ, op=ALLZ, one=False, handler=False):
-        self.r, self.me, self.op, self.one, self.handler = r, me, op, one, handler
+    def __init__(self, r, me=ALLZ, op=ALLZ, one=False, handler=False, target=False):
+        self.r, self.me, self.op, self.one, self.handler, self.target = r, me, op, one, handler, target
     def __repr__(self): return f"R{self.r}"
 
 
@@ -1141,6 +1141,14 @@ class Translator:
         return (core.OP_FILTER, r, f, (within, bool(tgt)))
 
     @staticmethod
+    def vcopy(r, source):
+        # Marqueur purement compilateur : copie exacte du groupe présent en jeu.
+        zones = ALLZ | core.Z_OVERLAY
+        bounds = (-(2**31) + 1, 2**31 - 1)
+        return (core.OP_FILTER, r, C.F(me=zones, op=zones, atk=bounds, df=bounds, lv=bounds),
+                (source, False, True))
+
+    @staticmethod
     def allocate(effect):
         """SSA puis allocation des groupes vivants aux quatre registres physiques.
 
@@ -1162,12 +1170,34 @@ class Translator:
                       core.OP_COND_PHASE, core.OP_COND_ATK, core.OP_LABEL}
         mutated = {a for program in effect[4:7] for op,a,b,c in program
                    if op == core.OP_SPSUMMON or op == core.OP_MOVE and c & 1}
+        # Dernière lecture d'un registre virtuel : une copie ne coûte rien si l'entrée
+        # n'est plus utilisée après elle, y compris à travers les phases d'un maillon.
+        last_read = {}
+        flat = [ins for program in effect[4:7] for ins in program]
+        for index, (op, a, b, c) in enumerate(flat):
+            reads = []
+            if op in read_a:
+                reads.append(a)
+            if op in read_b:
+                reads.append(b)
+            if op == core.OP_FILTER and c[0] is not None:
+                reads.append(c[0])
+            if op == core.OP_DAMAGE and c:
+                reads.append(c - 1)
+            for reg in reads:
+                last_read[reg] = index
         current, queries, entries = {}, {}, []
         next_value = 0
+        index = -1
         for phase, program in enumerate(effect[4:7]):
             if phase == core.PG_RESOLVE:
                 queries.clear()
             for op, a, b, c in program:
+                index += 1
+                if op == core.OP_FILTER and len(c) == 3 and c[2] and last_read.get(c[0]) == index:
+                    need(c[0] in current, "copie d'un registre non initialisé")
+                    current[a] = current[c[0]]
+                    continue
                 operands = [a, b, c]
                 reads = {}
                 if op in read_a:
@@ -1175,10 +1205,10 @@ class Translator:
                 if op in read_b:
                     reads[1] = current[b]
                 if op == core.OP_FILTER:
-                    within, target = c
+                    within, target = c[:2]
                     if within is not None:
                         reads[2] = current[within]
-                    operands[2] = target
+                    operands[2] = int(target) | (2 if len(c) == 3 and c[2] else 0)
                 elif op == core.OP_DAMAGE and c:
                     reads[2] = current[c-1]
                 writes = op in definitions or op == core.OP_SPSUMMON or (op == core.OP_MOVE and c & 1)
@@ -1228,7 +1258,8 @@ class Translator:
                 if last.get(value, -1) > i:
                     slots[value] = destination
             if op == core.OP_FILTER:
-                lowered[2] = ((lowered[2]+1) if 2 in reads else 0) | (8 if operands[2] else 0)
+                lowered[2] = (((lowered[2]+1) if 2 in reads else 0) | (8 if operands[2] & 1 else 0)
+                              | ((1 << 20) if operands[2] & 2 else 0))
             elif op == core.OP_DAMAGE and 2 in reads:
                 lowered[2] += 1
             programs[phase].append((op, *lowered))
@@ -1442,7 +1473,8 @@ class Translator:
         if isinstance(t, A.Name):
             return isinstance(env.get(t.id), (Reg, Handler))
         if isinstance(t, A.Invoke) and t.func.id == "IsRelateToEffect":
-            return True
+            target = isinstance(t.source, A.Name) and isinstance(env.get(t.source.id), Reg) and env[t.source.id].target
+            return self.handler_call(t, env) is None and not target
         if isinstance(t, A.AndLoOp):
             return self.always_true(t.left, env) and self.always_true(t.right, env)
         return False
@@ -1452,15 +1484,59 @@ class Translator:
         if self.always_true(t, env) and not negate:
             return
         terms = self.conj(t) if not negate else [t]
+        # Une action dans une conjonction observe les conditions déjà évaluées.
+        # Ne pas retarder les filtres de carte jusqu'après une destruction ou
+        # invocation qui peut modifier ces cartes.
+        def action(x):
+            return (isinstance(x, (A.GreaterThanOp, A.NotEqToOp, A.EqToOp, A.GreaterOrEqThanOp))
+                    and isinstance(x.left, A.Call) and dotted(x.left.func) in
+                    ("Duel.Destroy", "Duel.SendtoHand", "Duel.SendtoGrave", "Duel.Remove",
+                     "Duel.SpecialSummon", "Duel.Draw", "Duel.Release"))
+        if len(terms) > 1 and any(map(action, terms)):
+            pending = []
+            def flush():
+                if pending:
+                    combined = pending[0]
+                    for term in pending[1:]:
+                        combined = A.AndLoOp(combined, term)
+                    self.res_cond(combined, env, prog)
+                    pending.clear()
+            for term in terms:
+                if action(term):
+                    flush()
+                    self.res_cond(term, env, prog)
+                else:
+                    pending.append(term)
+            flush()
+            return
         refine = collections.defaultdict(list)
         hterms = []
         for x in terms:
+            relation = x.operand if negate and isinstance(x, A.ULNotOp) else x
+            call = self.handler_call(relation, env)
+            target = (isinstance(relation, A.Invoke) and relation.func.id == "IsRelateToEffect" and
+                      isinstance(relation.source, A.Name) and isinstance(env.get(relation.source.id), Reg) and
+                      env[relation.source.id].target)
+            if target:
+                need(not negate or isinstance(x, A.ULNotOp), "condition inverse de relation non représentée")
+                reg = env[relation.source.id]
+                need(reg.one, "relation à plusieurs cibles non représentée")
+                need(len(relation.args) == 1 and isinstance(self.expr(relation.args[0], env, prog), Eff),
+                     "relation à un autre effet")
+                prog.emit(C.REQ(reg.r, 1, related=True))
+                continue
+            if call is not None and call[0] == "IsRelateToEffect":
+                need(not negate or isinstance(x, A.ULNotOp), "condition inverse de relation non représentée")
+                need(len(call[1]) == 1 and isinstance(self.expr(call[1][0], env, prog), Eff), "relation à un autre effet")
+                r = prog.reg()
+                prog.emit(C.SELF(r, related=True), C.REQ(r, 1))
+                continue
             if self.always_true(x, env):
                 continue
             if self.handler_call(x, env) is not None and not negate:
                 hterms.append(x)
                 continue
-            act = self.action_test(x, env, prog)
+            act = self.action_test(x, env, prog, negate=negate)
             if act:
                 continue
             if isinstance(x, (A.EqToOp, A.NotEqToOp, A.GreaterThanOp, A.GreaterOrEqThanOp, A.LessThanOp, A.LessOrEqThanOp)) and isinstance(x.right, A.Number) and (
@@ -1495,7 +1571,10 @@ class Translator:
                 self.filter_term(fl, x, env, cvar=name)
             r = prog.reg()
             prog.emit(self.vfilter(r, fl.build(reg.me, reg.op), within=reg.r))
-            env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler)
+            # Le filtre conditionne toute la branche, y compris les opérations qui n'utilisent pas la carte.
+            if reg.one:
+                prog.emit(C.REQ(r, 1))
+            env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler, reg.target)
             if reg is self.egreg:
                 self.egreg = env[name]
         if hterms:
@@ -1514,7 +1593,7 @@ class Translator:
                 if isinstance(v, Handler):
                     env[k] = self.hreg
 
-    def action_test(self, x, env, prog):
+    def action_test(self, x, env, prog, negate=False):
         """Duel.Destroy(g)>0 / ~=0 etc. : l'action a lieu ; pour Destroy, la suite seulement si une carte est détruite
         (le registre ne garde que les cartes détruites). Pour les autres actions, la suite est supposée avoir lieu."""
         if isinstance(x, (A.GreaterThanOp, A.NotEqToOp, A.EqToOp, A.GreaterOrEqThanOp)) and isinstance(x.left, A.Call):
@@ -1523,9 +1602,12 @@ class Translator:
                      "Duel.Draw", "Duel.Release"):
                 need(isinstance(x.right, A.Number), "test d'action")
                 n = self.call(d, x.left.args, env, prog, 1)
-                if d == "Duel.Destroy" and isinstance(n, Count):
-                    prog.emit(C.REQ(self.as_reg(n.reg, prog).r, 1))
+                if d in ("Duel.Destroy", "Duel.SpecialSummon") and isinstance(n, Count):
+                    if d == "Duel.SpecialSummon":
+                        need(n.reg.one, "résultat d'invocations spéciales multiples non représenté")
+                    self.count_check(n, type(x), x.right.n, prog, negate=negate)
                 else:
+                    need(not negate, f"test inverse de {d} non représenté")
                     self.notes.add(f"{d}(...) supposé réussi")
                 return True
         if isinstance(x, A.Call) and dotted(x.func) in ("Duel.SpecialSummonStep",):
@@ -1587,7 +1669,7 @@ class Translator:
                 self.filter_term(fl, x, env, cvar=name)
             r = prog.reg()
             prog.emit(self.vfilter(r, fl.build(reg.me, reg.op), within=reg.r, tgt=fl.tgt), C.REQ(r, 1))
-            env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler)
+            env[name] = Reg(r, reg.me, reg.op, reg.one, reg.handler, reg.target)
             if reg is self.egreg:
                 self.egreg = env[name]
 
@@ -1597,7 +1679,8 @@ class Translator:
             src = x.source
             if isinstance(src, A.Invoke) and src.func.id == "GetHandler" and self.is_name(src.source, env, Eff):
                 return x.func.id, x.args
-            if self.is_name(src, env, Handler):
+            if self.is_name(src, env, Handler) or (isinstance(src, A.Name) and
+                    isinstance(env.get(src.id), Reg) and env[src.id].handler):
                 return x.func.id, x.args
         return None
 
@@ -2063,7 +2146,9 @@ class Translator:
             else:
                 need(self.on, "eg sans événement")
                 prog.emit(C.EVENT(r, self.on, trig=self.field_trig))
-            self.egreg = Reg(r)
+            single_events = (1 << core.EV_SUMMON) | (1 << core.EV_FLIP_SUMMON)
+            singleton = bool(self.on) and not (self.on & ~single_events) and not self.chaining
+            self.egreg = Reg(r, one=singleton)
             return self.egreg
         if isinstance(v, Attacker):
             r = prog.reg()
@@ -2089,7 +2174,7 @@ class Translator:
         # (le pilote de l'oracle ne propose l'ensemble vide qu'avec une annulation possible)
         lo = max(mn, 1)
         prog.emit(self.vfilter(r, F_, tgt=tgt), C.CHOOSE(r2, r, mx, who=sp.p, upto=upto or (mn == 0),
-                                                     mn=lo if lo < mx else None))
+                                                     mn=lo if lo < mx else None, tgt=tgt))
         return r2
 
     def same_filter(self, a, b):
@@ -2126,13 +2211,20 @@ class Translator:
             return None
         if d == "Duel.GetFirstTarget" or d == "Duel.GetTargetCards":
             need(self.treg is not None, "cibles inconnues")
+            need(d != "Duel.GetFirstTarget" or nret == 1, "plusieurs retours de GetFirstTarget")
+            need(self.treg.one, "groupe de cibles multiples non représenté")
             return self.treg
         if d == "Duel.GetAttacker":
             r = prog.reg()
             prog.emit(C.ATTACKER(r))
             return Reg(r, core.Z_MZONE, core.Z_MZONE, True)
         if d == "Duel.SetTargetCard":
+            need(prog is not None and prog.kind == "target", "SetTargetCard hors ciblage")
+            need(self.treg is None, "deux groupes de cibles")
             self.treg = self.as_reg(E_(0), prog)
+            need(self.treg.one, "groupe de cibles multiples non représenté")
+            self.treg.target = True
+            prog.emit(C.LABEL(self.treg.r, target=True))
             return None
         if d == "Duel.GetMatchingGroup" or d == "Duel.GetFieldGroup" or d == "Duel.GetFieldGroupCount" \
                 or d == "Duel.GetMatchingGroupCount":
@@ -2147,8 +2239,10 @@ class Translator:
             tgt = d == "Duel.SelectTarget"
             need(prog is not None and (prog.kind != "resolve" or not tgt), "SelectTarget à la résolution")
             F_, _ = self.mkfilter(args[1], args[8:], args[2], args[3], args[4], args[7] if len(args) > 7 else None, env, tgt=tgt)
-            r = self.select(prog, F_, sp, self.cnum(args[5], env), self.cnum(args[6], env), tgt)
-            reg = Reg(r, F_[0], F_[1])
+            mn, mx = self.cnum(args[5], env), self.cnum(args[6], env)
+            need(not tgt or mx == 1, "sélection de cibles multiples non représentée")
+            r = self.select(prog, F_, sp, mn, mx, tgt)
+            reg = Reg(r, F_[0], F_[1], one=(mx == 1), target=tgt)
             if tgt:
                 need(self.treg is None, "deux SelectTarget")
                 self.treg = reg
@@ -2173,11 +2267,14 @@ class Translator:
         if d in ("Duel.Destroy", "Duel.SendtoGrave", "Duel.SendtoHand", "Duel.Remove", "Duel.Release"):
             v = E_(0)
             reg = self.as_reg(v, prog)
+            original = reg
             if d == "Duel.Destroy":
                 need(len(args) == 2, "Destroy vers une autre zone")
                 reason = E_(1)
                 need(type(reason) is int and 0 <= reason <= 0x1fffffff, "Destroy : raison")
-                prog.emit(C.DESTROY(reg.r, reason=reason))
+                r = prog.reg()
+                prog.emit(self.vcopy(r, reg.r), C.DESTROY(r, reason=reason))
+                reg = Reg(r, reg.me, reg.op, reg.one)
             elif d == "Duel.SendtoGrave" or d == "Duel.Release":
                 need(len(args) == 2, f"{d} : joueur ou options")
                 reason = E_(1)
@@ -2193,6 +2290,12 @@ class Translator:
                 reason = E_(2)
                 need(type(reason) is int and 0 <= reason <= 0x1fffffff, "Remove : raison")
                 prog.emit(C.MOVE(reg.r, core.Z_REMOVED, reason=reason))
+            destination = {"Duel.Destroy": core.Z_GRAVE, "Duel.SendtoGrave": core.Z_GRAVE,
+                           "Duel.Release": core.Z_GRAVE, "Duel.SendtoHand": core.Z_HAND,
+                           "Duel.Remove": core.Z_REMOVED}[d]
+            for group in (original, *(v for v in env.values() if isinstance(v, Reg) and v.r == original.r)):
+                group.me |= destination
+                group.op |= destination
             return Count(reg)
         if d == "Duel.SpecialSummon":
             tag = generic_summon_tag(E_(1))
@@ -2204,8 +2307,12 @@ class Translator:
             pos = E_(6)
             need(pos in (core.P_FACEUP, core.P_FU_ATK, core.P_FU_DEF, core.P_FU_DEF | core.P_FD_DEF), "position")
             need(len(args) <= 7, "invocation spéciale dans des zones choisies")
-            prog.emit(C.SPSUMMON(reg.r, pos, tag=tag))
-            return Count(reg)
+            r = prog.reg()
+            prog.emit(self.vcopy(r, reg.r), C.SPSUMMON(r, pos, tag=tag))
+            for group in (reg, *(v for v in env.values() if isinstance(v, Reg) and v.r == reg.r)):
+                group.me |= core.Z_MZONE
+                group.op |= core.Z_MZONE
+            return Count(Reg(r, reg.me, reg.op, reg.one))
         if d in ("Duel.Draw", "Duel.Damage", "Duel.Recover"):
             p, n = E_(0), E_(1)
             need(isinstance(p, Player), f"{d} : joueur")
@@ -2323,7 +2430,12 @@ class Translator:
         if isinstance(obj, ChainEff) and m == "GetHandler":
             return ChainEff(card=True)
         if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "GetFirst":
-            return self.as_reg(obj, prog)
+            if isinstance(obj, Reg) and obj.one:
+                return obj
+            need(prog is not None, "GetFirst sans programme représentable")
+            source = self.as_reg(obj, prog)
+            need(source.one, "GetFirst sur un groupe potentiellement multiple non représenté")
+            return source
         if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "Clone":
             need(not args, "Group.Clone : arguments")
             source = self.as_reg(obj, prog)
