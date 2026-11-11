@@ -31,7 +31,7 @@ def tick(bank, tok, msk, s, m, f, key):
 from collections import defaultdict
 st = defaultdict(lambda: [0, 0, 0.0, 0, 0])          # + occasions / erreurs où le plus fort est de niveau <= 4                  # zone d'arrivée -> occasions, erreurs, hasard attendu
 for bi in range(int(__import__("os").environ.get("GYSEL_BANKS", "4"))):
-  cset, bank = ppo.bank_of(a.eval_bank + bi, a)
+  cset, bank = ppo.bank_of(a.eval_bank + bi, a, int(__import__("os").environ.get("GYSEL_REVIVE", "0")))
   tok, msk = model.card_tokens(bank)
   key = jax.random.PRNGKey(7 + bi)
   s, m = env.games(bank, cset, np.random.default_rng(1 + bi), key)

@@ -66,6 +66,7 @@ def parse():
     ap.add_argument("--eval-bank", type=int, default=1_000_000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
+    ap.add_argument("--gen-revive", type=int, default=0, help="banques d'entraînement : renfort des résurrections avec choix (cardgen.Gen)")
     ap.add_argument("--bf16", action="store_true", help="calcul du réseau en bfloat16 (paramètres et optimiseur en f32)")
     ap.add_argument("--decks", default="structured", choices=["structured", "random"],
                     help="decks d'entraînement (l'évaluation procédurale garde des decks aléatoires)")
@@ -102,8 +103,8 @@ class Env:
         return self.new(bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, self.b))
 
 
-def bank_of(seed, a):
-    cset = cardgen.Gen(seed).make_set(a.main, a.extra)
+def bank_of(seed, a, revive=0):
+    cset = cardgen.Gen(seed, revive).make_set(a.main, a.extra)
     bank = cardgen.to_bank(cset)
     nt = int(model.n_tokens(model.card_tokens(bank)[1]).max())
     assert nt <= model.LC, f"banque {seed} : une carte a {nt} tokens utiles > model.LC = {model.LC}"
@@ -420,7 +421,7 @@ def main():
             return r, time.time() - t1
 
         if it % a.bank_every == 0:
-            cset, bank = bank_of(bank_seed, a)
+            cset, bank = bank_of(bank_seed, a, a.gen_revive)
             bank_seed += 1
             tok, msk = model.card_tokens(bank)
             key, k = jax.random.split(key)
