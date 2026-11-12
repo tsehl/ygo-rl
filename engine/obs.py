@@ -7,6 +7,10 @@
 - L'ordre des tokens ne dépend que d'informations visibles (zone, contrôleur, seq), jamais du slot.
 - `slot` sert uniquement à convertir le choix du réseau (verbe × token) en action du moteur. Ce n'est
   pas une entrée du réseau : le slot est tiré au hasard à chaque partie et ne doit rien apprendre.
+- `deck` : identités de son propre deck restant, triées, -1 au-delà. Il connaît sa liste, pas l'ordre : c'est la liste
+  de départ moins ses cartes visibles ailleurs (reproductible par un client externe ; vérifié par obs_check).
+- Seules l'information et les événements publics (plus ses propres cartes) entrent : un client externe (serveur tiers)
+  doit pouvoir reconstruire l'observation à l'identique. Pas de suivi de l'identité d'une carte cachée adverse.
 - Au plus T tokens. Les cartes visées par une action légale passent en premier, puis main et terrain, puis
   cimetières et bannies (les plus récents d'abord). Les cartes en trop ne sont résumées que par les compteurs.
 """
@@ -19,6 +23,7 @@ import core
 from core import I32, NV
 
 T = 64
+DK = 40   # cartes de son deck restant données au réseau (decks de 40 ; au-delà, les plus petits cid)
 ST_PUBLIC = (core.ST_SUMMON_TURN | core.ST_ATTACKED | core.ST_FORM_CHANGED | core.ST_SET_TURN | core.ST_LEAVE | core.ST_SPSUM
              | core.ST_LINKSUM)
 ZONE_RANK = {core.Z_HAND: 0, core.Z_MZONE: 1, core.Z_SZONE: 2, core.Z_GRAVE: 3, core.Z_REMOVED: 4, core.Z_DECK: 5,
@@ -47,6 +52,7 @@ class Obs(NamedTuple):
     act: jnp.ndarray       # [T, NV] bool : actions légales verbe × token
     special: jnp.ndarray   # [N_SPECIAL] bool : actions spéciales légales
     glob: jnp.ndarray      # [G] int : LP, tour, phase, décision, compteurs
+    deck: jnp.ndarray      # [DK] cid des cartes de son deck restant, triés, -1 au-delà
     slot: jnp.ndarray      # [T] PAS une entrée du réseau : sert à reconstruire l'action
 
 
@@ -117,7 +123,15 @@ def observe(bank, s, p=None, m=None):
                chain=jnp.where(valid, link[idx], 0), negated=neg[idx] & valid,
                card_activation=card_activation[idx] & valid, source_related=source_related[idx] & valid,
                act=act_slot[idx] & valid[:, None], special=m[NV * n:] & (s.dec_player == p), glob=glob,
-               slot=jnp.where(valid, idx, -1).astype(I32))
+               deck=own_deck(s, mine & deck), slot=jnp.where(valid, idx, -1).astype(I32))
+
+
+def own_deck(s, m):
+    """[DK] cid des cartes m, triés (ordre du deck caché), -1 au-delà."""
+    big = jnp.iinfo(I32).max
+    v = -jax.lax.top_k(-jnp.where(m, s.cid, big), min(DK, m.shape[0]))[0]
+    v = jnp.where(v == big, -1, v).astype(I32)
+    return jnp.pad(v, (0, DK - v.shape[0]), constant_values=-1)
 
 
 def to_action(obs, n, verb, tok):

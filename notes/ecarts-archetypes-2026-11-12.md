@@ -29,13 +29,18 @@ Banque 1 g9 r0 : 600000324 (déclencheur « envoyé au cimetière ») était un 
 le propose dans la même chaîne que le déclencheur du Xyz. Dans le moteur, `drop_overlays` n'était appelé que par
 `refresh`, donc après la collecte des déclencheurs : l'événement restait dans `tev` et partait au point suivant.
 
-Correction : `trig_point` appelle `drop_overlays` avant de collecter (l'appel de `refresh` reste, sans effet si les
-matériaux sont déjà partis).
+Correction : `dmg_send` appelle `drop_overlays` avant la collecte (l'appel de `refresh` reste, sans effet si les
+matériaux sont déjà partis). Ailleurs, chaque instruction finit par un refresh avant le point d'événement suivant.
+Une première version l'appelait dans `trig_point` : une copie par site du graphe, −20 % de débit CPU.
 
 Banque 9 g4 r4 (JAX proposait en trop le déclencheur de cimetière de 600000370) passe aussi après ces corrections.
 C'était probablement le même événement tardif.
 
 ## Validation
 
-Voir le message de commit : regress complet, compare_gen classique 0-9 (revive 0 / 4) et à archétypes 0-9
-(revive 0 / 4).
+- `engine/regress.sh` complet : tous les modes de `compare.py` à 100 %, obs / vmap / sb / sbp propres.
+- `compare_gen.py --banks 0-9 --games 10` : 100/100 en revive 0 et en revive 4.
+- Les mêmes avec `--arch 0.5 --structured` : 100/100 en revive 0 et en revive 4.
+
+Diagnostic ajouté à `compare.py` : le message d'un écart d'état donne aussi la décision en attente de l'oracle (msg
+et options). C'est ce qui a montré que l'oracle était au milieu de l'invocation pendule (msg 18).

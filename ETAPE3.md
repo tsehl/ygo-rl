@@ -495,6 +495,85 @@ Résultat : filtres sans cible 6-8 % (archétype 6-9 %), Extra Deck invocable 58
 ~1 ms par deck. Effet sur les
 occasions en jeu (`bench/coverage.py`) à mesurer sur GPU.
 
+**Archétypes et decks à thème (2026-11-12).** Avant le run long, quatre changements :
+- **Archétypes** (`Gen(seed, arch=0.5)`, défaut de `ppo.py --arch`) : une part `arch` des cartes appartient à un des 8
+  archétypes procéduraux. Chaque archétype a un attribut et un type de prédilection. Ses monstres portent son
+  setcode, et les filtres de ses cartes visent surtout ses propres cartes, comme les cartes de soutien d'un vrai
+  deck : « un monstre X de votre deck », son attribut, son type. Ses cartes font aussi plus de recherches et
+  d'invocations de ses propres monstres. `arch=0` donne les mêmes banques qu'avant, tirage pour tirage.
+- **Decks à thème** (`structured_decks`) :
+  - cœur d'archétype : 8 à 14 cartes de l'archétype, plus ses monstres de l'Extra Deck ;
+  - 0 à 2 paquets de mécaniques concentrées (pendules, rituels, fusion, Xyz d'un rang, Syntoniseurs) ;
+  - un ou deux niveaux dominants (niveau 4 favorisé, ou le rang du paquet Xyz) ;
+  - le soutien ci-dessus ;
+  - au plus 3 exemplaires.
+- **Évaluation sur decks structurés** : `ppo.py` ajoute une évaluation « sheur » (contre l'heuristique, banque
+  d'évaluation à archétypes jamais vue, decks structurés) à « rnd » et « heur ». « rnd » et « heur » gardent la
+  banque de référence et des decks aléatoires, donc les chiffres restent comparables aux runs précédents.
+  `bench_eval.py` et `coverage.py` prennent aussi `--arch`.
+- `compare_gen.py` et `fuzz.py` prennent `--arch X --structured`.
+
+Mesure statique (`bench/deck_support.py`, graines 0-2, 200 decks) :
+
+| decks | filtres sans cible | Extra invocable (fusion / synchro / Xyz) | monstres dans les 2 niveaux principaux | archétype principal |
+|---|---|---|---|---|
+| aléatoires, banque de référence | 16-20 % | 30-39 / 41-48 / 33-44 % | 44-46 % | 6-7 % |
+| structurés, banque de référence | 8-10 % | 68-72 / 63-66 / 69-73 % | 72-77 % | 10-11 % |
+| structurés, `arch=0.5` | 9-14 % | 57-65 / 60-70 / 75-84 % | 64-68 % | **39-42 %** |
+
+Vérification contre l'oracle (`compare_gen.py --banks 0-9 --games 10 --arch 0.5 --structured`, revive 0 et 4) :
+avant correction, 195/200 parties identiques. Les decks à thème rendent fréquentes deux règles que le moteur
+gérait mal :
+- l'état « en cours d'invocation » des cartes déjà posées pendant une invocation pendule ;
+- l'envoi au cimetière des matériaux d'un Xyz au même point d'événement que le Xyz.
+
+Détail : `notes/ecarts-archetypes-2026-11-12.md`. Après correction : 200/200 sur les banques à archétypes et
+200/200 sur les banques classiques, `regress.sh` complet vert.
+
+**Observation : information publique seulement, deck restant (2026-11-12).** À terme, le réseau jouera sur des
+serveurs tiers à travers un traducteur d'état (Client View). Un tel client ne connaît ni l'identité des cartes cachées
+adverses ni l'ordre du deck. L'observation ne doit donc dépendre que de l'information et des événements publics, plus
+ses propres cartes : sinon l'entraînement et la production divergent, ou de l'information fuit.
+- **Retenu : son deck restant.** `Obs.deck` donne les identités de son deck restant, triées et sans ordre (DK = 40).
+  Le modèle les encode (MLP sur le vecteur de carte, somme / 20) et les ajoute au token global. `deck2` est
+  initialisé à zéro : un ancien checkpoint donne exactement les mêmes logits (écart mesuré 0,0 sur run 5).
+  `obs_check` (test 4) vérifie que `deck` est égal à la liste de départ moins ses cartes qu'il voit ailleurs, ce
+  qu'un client externe peut calculer.
+- **Abandonné : un bit « vue par l'adversaire » sur les cartes cachées.** Si l'adversaire révèle X puis pose une
+  carte ou renvoie deux cartes au deck, un client ne sait pas quel slot a bougé. Une identité attachée à la carte
+  dans le moteur le dit au réseau : c'est une fuite que l'invariance testée par `obs_check` (identités cachées
+  mélangées) ne voit pas. C'est au réseau de faire la déduction à partir de l'historique public.
+
+**Mémoire : à faire plus tard.** Ce n'est pas limitant au niveau de jeu actuel (cible de Reborn, attaques perdues,
+Link), mais ça le deviendra. Proposition : un ring buffer des K derniers événements notables dans l'observation
+(K = 12-16), sans GRU, pour garder PPO feed-forward et le débit sous vmap. Événements retenus :
+- une carte entre dans une zone cachée alors qu'elle est connue, ou y est révélée (recherche, révélation, carte
+  connue posée verso depuis le cimetière ou le deck) ;
+- une carte sort d'une zone cachée sans être révélée (main → verso, main → deck, bannie verso) ;
+- mélange des cartes posées (pas de la main : aucune identité n'est liée à un slot de main adverse) ;
+- annulation (NEGATE).
+
+Points de conception :
+- définir chaque événement comme un message du flux ygopro (`MSG_MOVE`, `MSG_CONFIRM_CARDS`,
+  `MSG_SHUFFLE_SET_CARD`, `MSG_CHAIN_NEGATED`…). C'est ce que reçoit un client tiers, et `compare.py` peut alors
+  vérifier le buffer contre l'oracle. Le moteur n'a aujourd'hui aucune notion de révélation : les recherches ne
+  montrent rien, il faudra un drapeau vérifié contre `MSG_CONFIRM_CARDS` ;
+- les activations (suivi des « une fois par tour ») ne vont pas dans le même FIFO : un tour de combo en fait 10 à
+  20 et chasserait les révélations, rares et durables. Plutôt un fait public sur la carte (« effet de ce nom activé
+  ce tour »), ou un second petit buffer remis à zéro à chaque tour ;
+- chaque token porte l'âge (tours, décisions), le joueur, la zone d'origine et d'arrivée, et l'identité seulement
+  si l'observateur peut la connaître (masque dans `observe`) ;
+- détection des transitions à un seul endroit (comparaison avant / après dans `refresh`, plus la chaîne) : un appel
+  par site du graphe coûte cher (voir les matériaux Xyz ci-dessous) ;
+- réseau : T = 64 → 80 tokens, ~25 % d'attention en plus ;
+- écrire d'abord une sonde qui mesure le gain (par exemple : le réseau joue-t-il autour d'une carte que l'adversaire
+  vient de chercher ?).
+
+**Coût des matériaux Xyz.** La première correction appelait `drop_overlays` dans `trig_point`, donc une copie par
+site du graphe (14 sites) : −20 % de débit CPU (B = 64, Extra Deck 15 : 351-359 décisions/s avant, 277-285
+après). Il n'est plus appelé que dans `dmg_send` : la destruction au combat est le seul cas où un Xyz quitte le
+terrain sans refresh avant la collecte des déclencheurs.
+
 ### Audit des briques (2026-11-05)
 
 `gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec leurs arguments significatifs, déclencheurs, MC_*, damage step, limites, filtres.

@@ -1,10 +1,14 @@
 """Tests de l'observation (parties mélangées, slots aléatoires) :
 1. toute action légale correspond à un token (rien n'est tronqué) ;
 2. l'observation ne dépend pas de l'information cachée : on mélange les identités des cartes que
-   l'observateur ne peut pas connaître et on renumérote les slots, l'observation doit rester identique
-   (sauf `slot`) ;
-3. contrôle positif : changer une carte visible change bien l'observation.
+   l'observateur ne peut pas connaître (son propre deck : seulement permuté, il en connaît la liste) et on
+   renumérote les slots, l'observation doit rester identique (sauf `slot`) ;
+3. contrôle positif : changer une carte visible change bien l'observation ;
+4. `deck` = liste de départ du joueur moins ses cartes qu'il voit ailleurs (calcul d'un client externe), et
+   contrôle positif : changer une carte de son deck change `deck`.
 """
+import collections
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -69,8 +73,12 @@ def perturb(s, p):
     hidden = (((s.zone == core.Z_DECK) & ~(search & (s.ctrl == p)))
               | (((s.zone == core.Z_HAND) | ((s.zone == core.Z_EXTRA) & ~faceup)) & (s.ctrl != p))  # pendules recto : publics
               | (((s.zone == core.Z_MZONE) | (s.zone == core.Z_SZONE)) & (s.ctrl != p) & ~faceup))
+    own_deck = hidden & (s.zone == core.Z_DECK) & (s.ctrl == p)  # liste connue, ordre caché : permutation seulement
+    hidden = hidden & ~own_deck
     h = np.where(hidden)[0]
     cid = s.cid.copy()
+    od = np.where(own_deck)[0]
+    cid[od] = cid[rng.permutation(od)]
     # identités cachées arbitraires (seule la zone d'une carte posée est publique : magie/piège ou monstre)
     spells = np.where(np.asarray(bank.ctype) & (core.TYPE_SPELL | core.TYPE_TRAP))[0]
     mons = np.where(np.asarray(bank.ctype) & core.TYPE_MONSTER)[0]
@@ -120,3 +128,32 @@ for i in rng.choice(len(samples), 100, replace=False):
     o1, o2 = observe(bank, s, p), observe(bank, s._replace(cid=jnp.asarray(cid)), p)
     changed += not np.array_equal(o1.cid, o2.cid)
 print(f"3. ok : {changed} contrôles positifs détectés" if changed else "3. ÉCHEC : rien détecté")
+
+# 4. son deck : soustraction publique (liste de départ - ses cartes visibles ailleurs) et contrôle positif
+main_origin = lambda uid: (uid < D) | ((uid >= D + 6) & (uid < 2 * D + 6))  # uid : deck 0, Extra 0, deck 1, Extra 1
+dk_changed = nsub = 0
+for i in rng.choice(len(samples), 200, replace=False):
+    b, t = samples[i]
+    s = state_at(b, t)
+    p = int(s.dec_player)
+    z, ctrl, own, pos = (np.asarray(x) for x in (s.zone, s.ctrl, s.owner, s.pos))
+    cid0, uid = np.array(s.cid), np.asarray(s.uid)
+    fu = (pos & core.P_FACEUP) != 0
+    fld = (z == core.Z_MZONE) | (z == core.Z_SZONE)
+    sees = (((ctrl == p) & ((z == core.Z_HAND) | fld | (z == core.Z_EXTRA))) | (fld & fu)
+            | np.isin(z, [core.Z_GRAVE, core.Z_REMOVED, core.Z_OVERLAY]))
+    mo = main_origin(uid) & (own == p)
+    start = collections.Counter(cid0[mo].tolist())
+    start.subtract(collections.Counter(cid0[mo & (z != core.Z_DECK) & sees].tolist()))
+    o1 = observe(bank, s, p)
+    got = collections.Counter(int(c) for c in np.asarray(o1.deck) if c >= 0)
+    assert +start == got, f"4. deck ≠ soustraction publique (b={b}, t={t}, p={p})"
+    nsub += 1
+    dk = np.where((z == core.Z_DECK) & (ctrl == p))[0]
+    if len(dk):
+        cid = cid0.copy()
+        cid[dk[0]] = (cid[dk[0]] + 1) % CT
+        o2 = observe(bank, s._replace(cid=jnp.asarray(cid)), p)
+        dk_changed += not np.array_equal(o1.deck, o2.deck)
+print(f"4. ok : deck = soustraction publique sur {nsub} états ; {dk_changed} contrôles positifs")
+assert dk_changed, "4. ÉCHEC"

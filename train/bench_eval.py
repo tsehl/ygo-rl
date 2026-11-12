@@ -3,9 +3,7 @@ l'aléatoire et contre l'heuristique ; plus les références heuristique contre 
 
 Usage : python train/bench_eval.py train/ckpt/run2_it200_f16.pkl.gz [--b 1024] [--d 128 ...] (mêmes options que ppo.py) ;
 BENCH_GREEDY=1 ajoute le réseau déterministe (argmax)."""
-import gzip
 import os
-import pickle
 import sys
 import time
 
@@ -20,13 +18,6 @@ import cardgen
 import core
 import model
 import realcards
-
-
-def load_params(path):
-    op = gzip.open if path.endswith(".gz") else open
-    with op(path, "rb") as fh:
-        p = pickle.load(fh)
-    return jax.tree.map(lambda x: jnp.asarray(x, jnp.float32), p)
 
 
 def heur_vs_random(a, env, bank, d, x, side, key):
@@ -57,7 +48,7 @@ def main():
     sys.argv = sys.argv[:1] + sys.argv[2:]
     a = ppo.parse()
     model.set_compute(a.bf16)
-    params = load_params(path)
+    params = ppo.load_params(path)
     env = ppo.Env(a.b, a.frac)
     fns = ppo.make_fns(a, optax.adam(1e-4))
     key = jax.random.PRNGKey(7)

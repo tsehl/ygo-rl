@@ -818,9 +818,7 @@ def in_range(s):
 
 def trig_point(bank, s):
     """Point d'événement, juste après l'ouverture d'une fenêtre W_QUICK (chaîne vide) : les effets déclenchés par
-    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite. Les matériaux d'un Xyz
-    qui vient de quitter le terrain partent d'abord au cimetière : leur EVENT_TO_GRAVE est du même point d'événement."""
-    s = drop_overlays(s)
+    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite."""
     bits = (s.tev * (1 << jnp.arange(NEV))[:, None]).sum(0)
     wbits = (s.tew * (1 << jnp.arange(NEV))[:, None]).sum(0)
     abits, awbits = (s.tev.any(1) * (1 << jnp.arange(NEV))).sum(), (s.tew.any(1) * (1 << jnp.arange(NEV))).sum()
@@ -985,7 +983,9 @@ def dmg_send(bank, s):
     d'événement (« détruit au combat », « envoyé au cimetière »)."""
     m = ((s.st & ST_BDES) != 0) & (s.zone == Z_MZONE)
     s = raise_ev(group_to_grave(bank, s, m, REASON_BATTLE | REASON_DESTROY), EV_BATTLE_DESTROYED, m, s.tp)
-    return trig_point(bank, open_quick(s, s.tp, R_DMG2, chained=False))
+    # matériaux d'un Xyz détruit : au cimetière avant la collecte, EVENT_TO_GRAVE du même point d'événement. Ailleurs,
+    # chaque instruction finit par un refresh (drop_overlays) avant le point d'événement suivant.
+    return trig_point(bank, drop_overlays(open_quick(s, s.tp, R_DMG2, chained=False)))
 
 
 def battle_over(s):
