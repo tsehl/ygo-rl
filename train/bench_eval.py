@@ -86,6 +86,8 @@ def main():
     # le réseau
     run("procédural, réseau contre aléatoire", lambda: ppo.evaluate(a, env, fns, params, ks[2], 0))
     run("procédural, réseau contre heuristique", lambda: ppo.evaluate(a, env, fns, params, ks[3], 2))
+    run("procédural structuré (archétypes), réseau contre heuristique",
+        lambda: ppo.evaluate(a, env, fns, params, ks[6], 2, struct=True))
     run("vraies cartes, réseau contre aléatoire", lambda: ppo.real_bench(a, env, fns, params, ks[4], 0))
     run("vraies cartes, réseau contre heuristique", lambda: ppo.real_bench(a, env, fns, params, ks[5], 2))
     if os.environ.get("BENCH_GREEDY"):   # politique déterministe (argmax)
