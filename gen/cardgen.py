@@ -62,11 +62,19 @@ def _r100(x):
 class Gen:
     """Générateur (numpy, côté hôte) : une graine → une banque de cartes procédurales (`make_set`)."""
 
-    def __init__(self, seed, revive=0):
+    def __init__(self, seed, revive=0, arch=0.0):
         """revive : renfort des résurrections avec choix (0 = distribution de référence, tirages inchangés). Chaque
-        unité ajoute un « ss » aux verbes d'une clause ; la source est alors le cimetière, sans auto-invocation."""
+        unité ajoute un « ss » aux verbes d'une clause ; la source est alors le cimetière, sans auto-invocation.
+        arch : part des cartes rattachées à un archétype (0 = distribution de référence, tirages inchangés). Un
+        archétype a un attribut et un type de prédilection ; ses monstres portent son setcode, et les filtres de ses
+        cartes visent surtout l'archétype, son attribut ou son type (cartes de soutien d'un même deck)."""
         self.rng = np.random.default_rng(seed)
         self.revive = revive
+        self.arch_p = arch
+        self.arch = None                               # archétype de la carte en cours de génération
+        if arch:
+            self.arch_attr = {a: self.pick(ATTRS) for a in SETS}
+            self.arch_race = {a: self.pick(RACES) for a in SETS}
 
     # ------------------------------------------------------------------ tirages de base
     def p(self, x):
@@ -79,19 +87,21 @@ class Gen:
     def qual(self, kw, n=1, stats=True, lv=True):
         """Ajoute n qualificatifs au filtre de monstres kw (ATK, attribut, type, niveau, archétype)."""
         for _ in range(n):
-            q = self.pick(["atk_lo", "atk_hi", "attr", "race", "lv", "setc"], [2, 3, 3, 2, 2 if lv else 0, 1.5])
+            # archétype : seulement pour les filtres sur ses propres cartes (ou les matériaux d'une recette)
+            A = self.arch if (kw.get("me", 0) and not kw.get("op", 0)) or not (kw.get("me", 0) | kw.get("op", 0)) else None
+            q = self.pick(["atk_lo", "atk_hi", "attr", "race", "lv", "setc"], [2, 3, 3, 2, 2 if lv else 0, 6 if A else 1.5])
             if q == "atk_lo" and stats:
                 kw["atk"] = (self.pick([1000, 1500, 1800, 2000, 2400]), BIG)
             elif q == "atk_hi" and stats:
                 kw["atk"] = (-BIG, self.pick([500, 1000, 1500, 1800]))
             elif q == "attr":
-                kw["attr"] = self.pick(ATTRS)
+                kw["attr"] = self.arch_attr[A] if A and self.p(0.7) else self.pick(ATTRS)
             elif q == "race":
-                kw["race"] = self.pick(RACES)
+                kw["race"] = self.arch_race[A] if A and self.p(0.7) else self.pick(RACES)
             elif q == "lv":
                 kw["lv"] = self.pick([(-BIG, 4), (5, BIG), (-BIG, 3), (7, BIG)])
             elif q == "setc":
-                kw["setc"] = self.pick(SETS)
+                kw["setc"] = A if A else self.pick(SETS)
         return kw
 
     def mon(self, nq=None, **kw):
@@ -102,13 +112,18 @@ class Gen:
         if (kw.get("me", 0) | kw.get("op", 0)) == Z_GRAVE and self.p(0.15):
             kw["reason"] = self.pick([core.REASON_EFFECT, core.REASON_DESTROY, core.REASON_BATTLE,
                                       core.REASON_COST, -(core.REASON_EFFECT | core.REASON_DESTROY)])
-        return self.qual(kw, nq)
+        kw = self.qual(kw, nq)
+        if self.arch and kw.get("me", 0) and not kw.get("op", 0) and "setc" not in kw and self.p(0.7):
+            kw["setc"] = self.arch                     # soutien d'archétype : « un monstre X de votre ... »
+        return kw
 
     # ------------------------------------------------------------------ clauses
     def card_clause(self, ctx):
         """Clause « verbe sur une sélection ». ctx : genre d'effet, événement, zone de la carte à l'activation."""
         kind, evs, zone = ctx["kind"], ctx.get("on", 0), ctx.get("zone")
         opts = ["destroy", "destroy", "banish", "bounce", "tohand", "tohand", "ss", "atk", "disable", "tograve", "indes_battle"]
+        if self.arch:  # carte d'archétype : plus de recherches et d'invocations de ses propres monstres
+            opts = opts + ["tohand", "tohand", "ss", "ss"]
         verb = self.pick(opts + ["ss_gy"] * self.revive) if self.revive else self.pick(opts)
         if verb == "ss_gy" and evs:
             verb = "ss"
@@ -432,7 +447,14 @@ class Gen:
         lv = int(self.rng.choice(12, p=LV_W / LV_W.sum())) + 1 if lv is None else lv
         c = self.base(TYPE_MONSTER, lv)
         c.update(attr=self.pick(ATTRS), race=self.pick(RACES), extra=extra)
-        if self.p(0.3):
+        A = self.arch
+        if A:
+            c["setc"] = [A]
+            if self.p(0.7):
+                c["attr"] = self.arch_attr[A]
+            if self.p(0.7):
+                c["race"] = self.arch_race[A]
+        elif self.p(0.1 if self.arch_p else 0.3):
             c["setc"] = [self.pick(SETS)]
         return c
 
@@ -572,7 +594,9 @@ class Gen:
     def fusion_spell(self):
         s = self.base(TYPE_SPELL)
         f = dict(me=Z_EXTRA, fus=1)
-        if self.p(0.3):
+        if self.arch:
+            f["setc"] = self.arch
+        elif self.p(0.3):
             f["setc"] = self.pick(SETS)
         s["effects"] = [dict(kind="fusion_spell", f=f)]
         return s
@@ -585,6 +609,9 @@ class Gen:
         w = [14, 4, 2, 32, 12, 5, 3, 2, 2, 12, 3, 2]
         while len(main) < n_main:
             k = self.pick(kinds, w)
+            if self.arch_p:
+                self.arch = self.pick(SETS) if self.p(self.arch_p) else None
+            n0 = len(main)
             if k == "normal":
                 main.append(self.normal_monster())
             elif k == "tuner":
@@ -603,13 +630,23 @@ class Gen:
                 main += [m, s]
             elif k in ("trap", "ctrap", "counter"):
                 main.append(self.trap({"trap": "normal", "ctrap": "cont", "counter": "counter"}[k]))
+            if self.arch:
+                for c in main[n0:]:
+                    c["arch"] = self.arch
         for i, c in enumerate(main):
             c["code"] = CODE0 + i
         for i, c in enumerate(main):  # sort rituel : code du monstre rituel qui le précède
             if c["effects"] and c["effects"][0]["kind"] == "ritual":
                 c["effects"][0]["code"] = main[i - 1]["code"]
         mon_codes = [c["code"] for c in main if c["ctype"] & TYPE_MONSTER and not c["ctype"] & TYPE_RITUAL]
-        extra = [self.extra_monster(self.pick(["fusion", "synchro", "xyz", "link"]), mon_codes) for _ in range(n_extra)]
+        extra = []
+        for _ in range(n_extra):
+            if self.arch_p:
+                self.arch = self.pick(SETS) if self.p(self.arch_p) else None
+            extra.append(self.extra_monster(self.pick(["fusion", "synchro", "xyz", "link"]), mon_codes))
+            if self.arch:
+                extra[-1]["arch"] = self.arch
+        self.arch = None
         for i, c in enumerate(extra):
             c["code"] = CODE0 + n_main + i
         return main + extra
@@ -916,15 +953,72 @@ def random_decks(cset, rng, b, d=40, x=15):
     """Decks aléatoires (sans structure) : [b, 2, d] et Extra Decks [b, 2, x], index dans la banque."""
     main = np.array([i for i, c in enumerate(cset) if not is_extra(c)])
     ext = np.array([i for i, c in enumerate(cset) if is_extra(c)])
-    return main[rng.integers(0, len(main), (b, 2, d))], ext[rng.integers(0, len(ext), (b, 2, x))]
+    return _draw3(main, rng, (b, 2), d), _draw3(ext, rng, (b, 2), x)
 
 
-def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
-    """Decks structurés [b, 2, d] / [b, 2, x] : cartes en 1 à 3 exemplaires (comme de vrais decks) et, avec une
-    certaine probabilité, des paquets de mécaniques qui demandent des cartes assorties (decks aléatoires : quasi jamais
-    d'invocation pendule, 3-5 fois moins de rituels / Xyz que les vrais decks, voir bench/coverage.py) : pendules,
-    paires rituelles, fusions avec leurs matériaux nommés, monstres d'un même niveau avec des Xyz de ce rang,
-    Syntoniseurs. Une part p_rand reste tirée au hasard."""
+def _draw3(pool, rng, shape, n):
+    """n cartes tirées au hasard dans pool, au plus 3 exemplaires de chacune (règle du jeu)."""
+    p3 = np.repeat(pool, 3)
+    return np.array([rng.choice(p3, n, replace=False) for _ in range(int(np.prod(shape)))]).reshape(*shape, n)
+
+
+def _own_filters(x, out):
+    """Filtres de monstres qualifiés (attribut / type / archétype / niveau) portant sur ses propres cartes."""
+    if isinstance(x, dict):
+        if x.get("me", 0) and not x.get("op", 0) and any(k in x for k in ("attr", "race", "setc", "lv")):
+            out.append(x)
+        for v in x.values():
+            _own_filters(v, out)
+    elif isinstance(x, (list, tuple)):
+        for v in x:
+            _own_filters(v, out)
+    return out
+
+
+def _fmatch(f, c):
+    return bool(c["ctype"] & TYPE_MONSTER and (not f.get("attr") or c["attr"] & f["attr"])
+                and (not f.get("race") or c["race"] & f["race"])
+                and ("setc" not in f or f["setc"] in c["setc"])
+                and ("lv" not in f or f["lv"][0] <= c["lv"] <= f["lv"][1]))
+
+
+def _cap3(cards):
+    """Au plus 3 exemplaires d'une carte (règle du jeu), ordre conservé."""
+    n, out = {}, []
+    for c in cards:
+        n[c] = n.get(c, 0) + 1
+        if n[c] <= 3:
+            out.append(c)
+    return out
+
+
+def _xsup(e, deck):
+    """Monstre de l'Extra Deck invocable avec les cartes du deck principal (deck : cartes, exemplaires compris)."""
+    kind, r = e["recipe"]
+    ok = lambda f, c: _fmatch(f, c) and ("code" not in f or c["code"] == f["code"])
+    if kind == "fusion":
+        return all(any(ok(f, c) for c in deck) for f in r)
+    if kind == "xyz":
+        return sum(c["lv"] == e["lv"] and ok(r[0], c) for c in deck) > r[1]
+    if kind == "synchro":
+        tl = {c["lv"] for c in deck if c["ctype"] & TYPE_TUNER and ok(r[0], c)}
+        nl = {c["lv"] for c in deck if not c["ctype"] & TYPE_TUNER and ok(r[1], c)}
+        return any(t + k * n == e["lv"] for t in tl for n in nl for k in (1, 2))
+    return True
+
+
+def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2, p_sup=0.6, p_arch=0.6, p_lv=0.5):
+    """Decks structurés [b, 2, d] / [b, 2, x], au plus 3 exemplaires par carte. Une part p_rand reste tirée au hasard.
+    Les autres sont construits autour d'un thème, comme de vrais decks :
+    - cœur d'archétype (probabilité p_arch, banques Gen(arch > 0)) : 8 à 14 cartes de l'archétype en 1 à 3
+      exemplaires, et des monstres de l'Extra Deck de l'archétype ;
+    - 0 à 2 paquets de mécaniques (1 à 2 sans archétype) parmi : pendules, paires rituelles, fusion avec ses
+      matériaux nommés et sa magie, monstres d'un même niveau avec des Xyz de ce rang, Syntoniseurs ;
+    - un ou deux niveaux dominants (niveau 4 favorisé, comme les vrais decks ; rang du paquet Xyz s'il y en a) : une
+      part p_lv du remplissage est un monstre de ces niveaux ;
+    - soutien : une part p_sup du remplissage répond à un filtre qualifié encore sans cible dans le deck (attribut /
+      type / archétype / niveau des recherches, cibles, coûts), et une part p_sup de l'Extra Deck est invocable avec
+      le deck principal (_xsup)."""
     idx = np.arange(len(cset))
     ext_m = np.array([is_extra(c) for c in cset])
     main, ext = idx[~ext_m], idx[ext_m]
@@ -941,40 +1035,91 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
     xyz = idx[ext_m & (ct & TYPE_XYZ != 0)]
     nmon = idx[~ext_m & (ct & TYPE_MONSTER != 0) & (ct & TYPE_RITUAL == 0)]
     xyz_lv = [L for L in sorted(set(lvl[xyz])) if (lvl[nmon] == L).sum() >= 3]
+    lv_w = {L: (lvl[nmon] == L).sum() * (6.0 if L == 4 else 1.0) for L in sorted(set(lvl[nmon]))}
+    arch_of = [c.get("arch") or (c["setc"][0] if c["setc"] else None) for c in cset]
+    arch_main = {A: np.array([i for i in main if arch_of[i] == A]) for A in SETS}
+    arch_ext = {A: np.array([i for i in ext if arch_of[i] == A]) for A in SETS}
+    archs = [A for A in SETS if len(arch_main[A]) >= 10 and any(cset[i].get("arch") for i in arch_main[A])]
+    packs = [k for k, ok in (("pend", len(pend) >= 2), ("rit", bool(rit)), ("fus", bool(fus) and len(fspell) > 0),
+                             ("xyz", bool(xyz_lv)), ("tuner", len(tuner) > 0)) if ok]
     cop = lambda: int(rng.choice([1, 2, 3], p=[0.3, 0.4, 0.3]))
+    filt = [_own_filters(c["effects"], []) for c in cset]       # filtres de chaque carte
+    sup = {}                                                    # id(filtre) -> cartes du deck principal qui y répondent
+    for fs in filt:
+        for f in fs:
+            sup[id(f)] = np.array([i for i in main if _fmatch(f, cset[i])], np.int64)
 
     def one():
         if rng.random() < p_rand:
-            return main[rng.integers(0, len(main), d)], ext[rng.integers(0, len(ext), x)]
-        cards, extra = [], []
-        if len(pend) >= 2 and rng.random() < 0.25:
-            for c in rng.choice(pend, min(len(pend), int(rng.integers(3, 6))), replace=False):
-                cards += [c] * int(rng.integers(2, 4))
-        if rit and rng.random() < 0.25:
-            for j in rng.choice(len(rit), min(len(rit), int(rng.integers(1, 3))), replace=False):
-                cards += [rit[j][0]] * 2 + [rit[j][1]] * int(rng.integers(1, 3))
-        if fus and len(fspell) and rng.random() < 0.3:
-            for j in rng.choice(len(fus), min(len(fus), int(rng.integers(1, 3))), replace=False):
-                extra += [fus[j][0]] * 2
-                for mt in fus[j][1]:
-                    cards += [mt] * 2
-            cards += [rng.choice(fspell)] * int(rng.integers(2, 4))
-        if xyz_lv and rng.random() < 0.3:          # paquet Xyz : monstres d'un même niveau + Xyz de ce rang
-            L = rng.choice(xyz_lv)
-            same = nmon[lvl[nmon] == L]
-            for c in rng.choice(same, min(len(same), int(rng.integers(3, 5))), replace=False):
-                cards += [c] * 2
-            xs = xyz[lvl[xyz] == L]
-            extra += list(rng.choice(xs, min(len(xs), 3), replace=False))
-        if len(tuner) and rng.random() < 0.3:
-            for c in rng.choice(tuner, min(len(tuner), int(rng.integers(2, 4))), replace=False):
-                cards += [c] * 2
-        cards = cards[:d - 10]                     # au moins 10 cartes de remplissage
+            return _draw3(main, rng, (), d), _draw3(ext, rng, (), x)
+        cards, extra, Ls = [], [], []
+        A = archs[rng.integers(len(archs))] if archs and rng.random() < p_arch else None
+        if A is not None:                          # cœur d'archétype
+            pool = arch_main[A]
+            for c in rng.choice(pool, min(len(pool), int(rng.integers(8, 15))), replace=False):
+                cards += [c] * cop()
+        npk = int(rng.choice([0, 1, 2], p=[0.25, 0.5, 0.25]) if A is not None else rng.choice([1, 2], p=[0.6, 0.4]))
+        for k in rng.choice(packs, min(npk, len(packs)), replace=False) if packs else []:
+            if k == "pend":
+                for c in rng.choice(pend, min(len(pend), int(rng.integers(3, 6))), replace=False):
+                    cards += [c] * int(rng.integers(2, 4))
+            elif k == "rit":
+                for j in rng.choice(len(rit), min(len(rit), int(rng.integers(1, 3))), replace=False):
+                    cards += [rit[j][0]] * 2 + [rit[j][1]] * int(rng.integers(1, 3))
+            elif k == "fus":
+                for j in rng.choice(len(fus), min(len(fus), int(rng.integers(1, 3))), replace=False):
+                    extra += [fus[j][0]] * 2
+                    for mt in fus[j][1]:
+                        cards += [mt] * 2
+                cards += [rng.choice(fspell)] * int(rng.integers(2, 4))
+            elif k == "xyz":                       # monstres d'un même niveau + Xyz de ce rang
+                L = int(rng.choice(xyz_lv))
+                Ls.append(L)
+                same = nmon[lvl[nmon] == L]
+                for c in rng.choice(same, min(len(same), int(rng.integers(3, 5))), replace=False):
+                    cards += [c] * 2
+                xs = xyz[lvl[xyz] == L]
+                extra += list(rng.choice(xs, min(len(xs), 3), replace=False))
+            elif k == "tuner":
+                for c in rng.choice(tuner, min(len(tuner), int(rng.integers(2, 4))), replace=False):
+                    cards += [c] * 2
+        if not Ls or rng.random() < 0.4:           # niveaux dominants
+            ks = list(lv_w)
+            w = np.array([lv_w[k] for k in ks], float)
+            Ls += [int(L) for L in rng.choice(ks, int(rng.choice([1, 2])), replace=False, p=w / w.sum())]
+        lv_pool = nmon[np.isin(lvl[nmon], Ls)]
+        if A is not None:
+            la = np.array([i for i in arch_main[A] if cset[i]["ctype"] & TYPE_MONSTER and lvl[i] in Ls])
+            lv_pool = la if len(la) >= 3 and rng.random() < 0.5 else lv_pool
+        cards = _cap3(cards)[:d - 10]              # au moins 10 cartes de remplissage
         while len(cards) < d:
-            cards += [rng.choice(main)] * cop()
-        extra = extra[:x]
+            open_ = [f for c in set(cards) for f in filt[c]
+                     if len(sup[id(f)]) and not any(_fmatch(f, cset[k]) for k in cards if k != c)]
+            r = rng.random()
+            if open_ and r < p_sup:
+                f = open_[rng.integers(len(open_))]
+                cards += [rng.choice(sup[id(f)])] * cop()
+            elif len(lv_pool) and r < p_sup + p_lv * (1 - p_sup):
+                cards += [rng.choice(lv_pool)] * cop()
+            elif A is not None and rng.random() < 0.3:
+                cards += [rng.choice(arch_main[A])] * cop()
+            else:
+                cards += [rng.choice(main)] * cop()
+            cards = _cap3(cards)
+        cards = cards[:d]
+        deck = [cset[k] for k in cards]
+        xs = [k for k in ext if cset[k]["recipe"][0] != "link" and _xsup(cset[k], deck)]
+        if A is not None and len(arch_ext[A]):
+            xa = [k for k in arch_ext[A] if cset[k]["recipe"][0] == "link" or _xsup(cset[k], deck)]
+            if xa:
+                extra += list(rng.choice(xa, min(len(xa), int(rng.integers(2, 6))), replace=False))
+        extra = _cap3(extra)[:x]
         while len(extra) < x:
-            extra += [rng.choice(ext)] * cop()
+            if xs and rng.random() < p_sup:           # soutien : Extra Deck invocable avec ce deck
+                extra += [rng.choice(xs)] * int(rng.choice([1, 2]))
+            else:
+                extra += [rng.choice(ext)] * cop()
+            extra = _cap3(extra)
         return np.array(cards[:d]), np.array(extra[:x])
 
     out = [[one() for _ in range(2)] for _ in range(b)]

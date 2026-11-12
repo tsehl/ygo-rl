@@ -475,6 +475,26 @@ Sur les vraies cartes, le style « tout » bat la référence plus nettement (72
 - `act_step` accepte un adversaire par partie (`kind [B]`) : le réseau adverse et l'heuristique sont calculés sur tout le lot (~+13 ms par appel sur L4 avec une ligue) ;
 - seules les décisions du réseau testé entrent dans le PPO (`tr["need"]`).
 
+**Soutien dans les decks structurés (2026-11-12).** Mesure statique (`bench/deck_support.py`, trois banques) : dans
+les decks structurés, 13-21 % des filtres qualifiés portant sur ses propres cartes (recherches, cibles, coûts) ne
+trouvaient aucune carte correspondante dans le deck, dont 35-38 % des filtres d'archétype et ~27 % des filtres de
+type. Seulement 34-47 % des synchros, Xyz et fusions de l'Extra Deck étaient invocables avec le deck principal. Et
+21 % des decks avaient une carte en plus de 3 exemplaires (paquets puis remplissage).
+`structured_decks(p_sup=0.5)` :
+- la moitié du remplissage va à une carte qui répond à un filtre encore sans cible, comme les cartes de soutien
+  d'un vrai deck ;
+- la moitié de l'Extra Deck va à un monstre invocable avec ce deck (`_xsup` : matériaux de fusion présents,
+  ≥ n+1 monstres du rang de l'Xyz, Syntoniseur + non-Syntoniseur de niveaux qui somment au niveau du synchro) ;
+- au plus 3 exemplaires.
+
+Les decks aléatoires (`random_decks`, la part p_rand des decks structurés) tirent aussi au plus 3 exemplaires
+(`_draw3`) ; avant, ~0,2 % d'entre eux dépassaient. Les decks d'évaluation (graine 12345) changent donc un peu : écart
+négligeable attendu, mais les chiffres d'avant le 2026-11-12 ne sont plus rejoués à l'identique.
+
+Résultat : filtres sans cible 6-8 % (archétype 6-9 %), Extra Deck invocable 58-70 % ; la génération coûte toujours
+~1 ms par deck. Effet sur les
+occasions en jeu (`bench/coverage.py`) à mesurer sur GPU.
+
 ### Audit des briques (2026-11-05)
 
 `gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec leurs arguments significatifs, déclencheurs, MC_*, damage step, limites, filtres.

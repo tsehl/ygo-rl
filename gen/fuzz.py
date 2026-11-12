@@ -122,6 +122,7 @@ def main():
     ap.add_argument("--extra", type=int, default=80)
     ap.add_argument("--dump", action="store_true")
     ap.add_argument("--revive", type=int, default=0, help="cardgen.Gen(revive)")
+    ap.add_argument("--arch", type=float, default=0.0, help="cardgen.Gen(arch) : part des cartes d'archétype")
     a = ap.parse_args()
     lo, _, hi = a.seeds.partition("-")
     seeds = range(int(lo), int(hi or lo) + 1)
@@ -129,7 +130,7 @@ def main():
     total_v = 0
     for seed in seeds:
         t0 = time.time()
-        cset = cardgen.Gen(seed, a.revive).make_set(a.main, a.extra)
+        cset = cardgen.Gen(seed, a.revive, a.arch).make_set(a.main, a.extra)
         bank = cardgen.to_bank(cset)
         rng = np.random.default_rng(1000 + seed)
         d, x = cardgen.random_decks(cset, rng, a.b)

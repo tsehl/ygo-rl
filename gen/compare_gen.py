@@ -48,6 +48,14 @@ def decks(cset, rng, d=40, x=15, foc=False):
             [[rng.choice(ext) for _ in range(x)] for _ in range(2)])
 
 
+def sdecks(cset, seed):
+    """Decks structurés (cardgen.structured_decks), en codes de carte."""
+    import numpy as np
+    d, x = cardgen.structured_decks(cset, np.random.default_rng(seed), 1)
+    code = lambda z: [[cset[int(i)]["code"] for i in r] for r in z[0]]
+    return code(d), code(x)
+
+
 def dump(cset, s):
     """Cartes en jeu (main, terrain, cimetière, bannies, Extra Deck) au dernier état comparé, décrites."""
     import numpy as np
@@ -79,6 +87,8 @@ def main():
     ap.add_argument("--dump", action="store_true", help="décrit les cartes en jeu à chaque écart")
     ap.add_argument("--focus", action="store_true", help="la moitié des decks parmi les cartes à briques récentes")
     ap.add_argument("--revive", type=int, default=0, help="cardgen.Gen(revive) : renfort des résurrections avec choix")
+    ap.add_argument("--arch", type=float, default=0.0, help="cardgen.Gen(arch) : part des cartes d'archétype")
+    ap.add_argument("--structured", action="store_true", help="decks structurés (cardgen.structured_decks)")
     a = ap.parse_args()
     if a.games <= 0:
         ap.error("--games doit être > 0")
@@ -86,7 +96,7 @@ def main():
     db = driver.CardDB()
     tot, nok, errs = 0, 0, collections.Counter()
     for b in rng_range(a.banks):
-        cset = cardgen.Gen(b, a.revive).make_set(a.main, a.extra)
+        cset = cardgen.Gen(b, a.revive, a.arch).make_set(a.main, a.extra)
         bank = cardgen.to_bank(cset)
         cmap = {c["code"]: i for i, c in enumerate(cset)}
         compare.EFFECT_KINDS.clear()
@@ -99,7 +109,8 @@ def main():
             rng = random.Random(1000 * b + g)
             t0 = time.time()
             try:
-                r = compare.play(db, bank, cmap, g, step, legal, verbose=a.verbose, mode="gen", given=decks(cset, rng, foc=a.focus))
+                given = sdecks(cset, 1000 * b + g) if a.structured else decks(cset, rng, foc=a.focus)
+                r = compare.play(db, bank, cmap, g, step, legal, verbose=a.verbose, mode="gen", given=given)
             except Exception as e:  # plantage du pilote ou de l'oracle (script Lua, message non géré…)
                 r = dict(ok=False, err=f"{type(e).__name__}: {e}")
             tot += 1

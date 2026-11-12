@@ -93,6 +93,7 @@ def main():
     ap.add_argument("--banks", default="0,1")
     ap.add_argument("--main", type=int, default=400)
     ap.add_argument("--extra", type=int, default=80)
+    ap.add_argument("--arch", type=float, default=0.5, help="colonne en plus : banque Gen(arch), decks structurés (0 : pas de colonne)")
     a = ap.parse_args()
     env = ppo.Env(a.b, 0.1)
     res = {}
@@ -102,6 +103,10 @@ def main():
         res[f"proc{sd}"] = run(env, bank, d, x, *kinds_proc(cset), a.calls, jax.random.PRNGKey(sd))
         d, x = cardgen.structured_decks(cset, np.random.default_rng(sd), a.b)
         res[f"proc{sd}_struct"] = run(env, bank, d, x, *kinds_proc(cset), a.calls, jax.random.PRNGKey(sd))
+        if a.arch:                                 # banque à archétypes, decks structurés (entraînement depuis le 2026-11-12)
+            cset, bank = ppo.bank_of(sd, a, arch=a.arch)
+            d, x = cardgen.structured_decks(cset, np.random.default_rng(sd), a.b)
+            res[f"proc{sd}_arch"] = run(env, bank, d, x, *kinds_proc(cset), a.calls, jax.random.PRNGKey(sd))
         print(f"banque {sd} faite", flush=True)
     bank, names, main_, extra = realcards.load()
     cn = np.array(realcards.card_names())

@@ -691,7 +691,11 @@ def rule_draw(s, p):
 
 
 def adjust(s):
-    return lose(s, s.tp, s.odraw)._replace(odraw=jnp.bool_(False))
+    """Point d'ajustement (Processors::Adjust d'ygopro, contrôle de victoire) : pioche dans un deck vide, LP à 0
+    après un coût payé pendant une activation (la défaite n'est constatée qu'ici, après le choix des cibles)."""
+    s = lose(s, s.tp, s.odraw)._replace(odraw=jnp.bool_(False))
+    s = lose(s, 0, (s.lp[0] <= 0) & (s.lp[1] > 0))
+    return lose(s, 1, (s.lp[1] <= 0) & (s.lp[0] > 0))
 
 
 def raise_ev(s, ev, mask, p):
@@ -814,7 +818,9 @@ def in_range(s):
 
 def trig_point(bank, s):
     """Point d'événement, juste après l'ouverture d'une fenêtre W_QUICK (chaîne vide) : les effets déclenchés par
-    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite."""
+    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite. Les matériaux d'un Xyz
+    qui vient de quitter le terrain partent d'abord au cimetière : leur EVENT_TO_GRAVE est du même point d'événement."""
+    s = drop_overlays(s)
     bits = (s.tev * (1 << jnp.arange(NEV))[:, None]).sum(0)
     wbits = (s.tew * (1 << jnp.arange(NEV))[:, None]).sum(0)
     abits, awbits = (s.tev.any(1) * (1 << jnp.arange(NEV))).sum(), (s.tew.any(1) * (1 << jnp.arange(NEV))).sum()
@@ -1104,6 +1110,8 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     loc = jnp.where(s.ctrl == p, f[F_LOC_ME], f[F_LOC_OP])
     m = (s.zone & loc) != 0
     m &= (s.zone != Z_OVERLAY) | (s.ov_par == h)  # matériaux Xyz : seulement ceux de la carte source
+    # monstre posé par l'invocation pendule en cours (STATUS_SUMMONING) : hors des groupes (field::filter_matching_card)
+    m &= ~((s.zone == Z_MZONE) & ((s.st & ST_PSTEP) != 0))
     if bdes:
         m &= (s.st & ST_BDES) == 0  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
     m &= (f[F_POS] == 0) | ((s.pos & f[F_POS]) != 0)
@@ -1174,7 +1182,10 @@ def stats(bank, s):
     # résolue ; un effet FIELD d'un monstre détruit au combat ne s'applique plus
     k = bank.ekind[s.cid]                                          # [N, E]
     md = bank.emod[s.cid]                                          # [N, E, MW]
-    srcok = faceup & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
+    # une carte posée par l'invocation pendule en cours a encore STATUS_SUMMONING : effets pas encore activés
+    # (STATUS_EFFECT_ENABLED à l'étape 27) et ATK / DEF de base (card::get_attack)
+    pst = (s.st & ST_PSTEP) != 0
+    srcok = faceup & ~pst & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
     bdok = (md[..., M_SELF] != 0) | ((s.st & ST_BDES) == 0)[:, None]
     act = (k == K_CONT) & ((bank.erng[s.cid] & s.zone[:, None]) != 0) & srcok[:, None] & bdok
     if bank.submat.shape[1]:
@@ -1278,7 +1289,8 @@ def stats(bank, s):
         upc = jnp.where(u & ~sg2 & (jj > r_upc), val, 0).sum(0)
         ll = last(fin_c)
         cur = jnp.maximum(jnp.where(x < 0, b, x) + up + upc, 0)
-        return jnp.where(onf, jnp.maximum(jnp.where(ll >= 0, at(ll), cur), 0), base), jnp.where(onf, b, base)
+        onx = onf & ~pst
+        return jnp.where(onx, jnp.maximum(jnp.where(ll >= 0, at(ll), cur), 0), base), jnp.where(onx, b, base)
     atk, batk = fold(bank.atk[s.cid], MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK)
     df, _ = fold(bank.df[s.cid], MC_DEF, MC_SET_DEF, MC_FINAL_DEF, MC_BASE_DEF)
     df = jnp.where((bank.ctype[s.cid] & TYPE_LINK) != 0, 0, df)  # card::get_defense : toujours 0 pour un Link
@@ -1301,9 +1313,65 @@ def changed(prev, s):
     return d
 
 
+def cont_reads_stats(bank):
+    """La banque a un effet continu dont un filtre (cible ou compte) borne l'ATK ou la DEF."""
+    f = bank.filt[:, :, :2]
+    bounded = ((f[..., F_ATK_LO] > -BIG) | (f[..., F_ATK_HI] < BIG) | (f[..., F_DEF_LO] > -BIG) | (f[..., F_DEF_HI] < BIG))
+    return ((bank.ekind == K_CONT)[..., None] & bounded).any()
+
+
+TB = 16  # seuils d'ATK / DEF distincts gardés par borne (au-delà : test conservateur, toute ATK / DEF changée)
+
+
+def cont_bounds(bank):
+    """Seuils des filtres d'effets continus de la banque : [4, TB] (ATK_LO, ATK_HI, DEF_LO, DEF_HI), bourrés avec
+    ±BIG (jamais franchis), et un drapeau de débordement."""
+    f = bank.filt[:, :, :2]
+    cont = (bank.ekind == K_CONT)[..., None]
+    out, over = [], jnp.bool_(False)
+    for i, lo in ((F_ATK_LO, True), (F_ATK_HI, False), (F_DEF_LO, True), (F_DEF_HI, False)):
+        v = f[..., i]
+        ok = cont & ((v > -BIG) if lo else (v < BIG))
+        u = jnp.where(ok, v, BIG if lo else -BIG).reshape(-1)
+        u = jnp.sort(u) if lo else -jnp.sort(-u)
+        first = jnp.concatenate([jnp.ones(1, bool), u[1:] != u[:-1]])      # valeurs distinctes en tête
+        idx = jnp.nonzero(first, size=TB + 1, fill_value=u.shape[0] - 1)[0]
+        w = u[idx]
+        over |= (w[TB] != (BIG if lo else -BIG))
+        out.append(w[:TB])
+    return jnp.stack(out), over
+
+
+def stats_moved(bank, a, b):
+    """[...] : une ATK / DEF en cache a franchi un seuil d'un filtre d'effet continu entre a et b (par partie si les
+    états sont en lot) ; seul cas où la deuxième passe peut changer un résultat."""
+    nb = a.done.shape
+    th, over = cont_bounds(bank)
+    flat = lambda x: x.reshape(nb + (-1, 1))
+    oa, na, od, nd = flat(a.atk_c), flat(b.atk_c), flat(a.df_c), flat(b.df_c)
+    x = (((oa >= th[0]) != (na >= th[0])).any((-1, -2)) | ((oa <= th[1]) != (na <= th[1])).any((-1, -2))
+         | ((od >= th[2]) != (nd >= th[2])).any((-1, -2)) | ((od <= th[3]) != (nd <= th[3])).any((-1, -2)))
+    moved = ((a.atk_c != b.atk_c) | (a.df_c != b.df_c)).reshape(nb + (-1,)).any(-1)
+    return jnp.where(over, moved, x)
+
+
+# Deuxième passe de refresh. Les filtres des effets continus lisent atk_c / df_c, le résultat du refresh précédent ;
+# ygopro les évalue avec l'ATK courante (get_attack) : un bonus qui vient de s'appliquer (changement de phase, carte
+# arrivée) compte déjà pour « ne peut pas attaquer s'il a 1500 ATK ou plus ». Si la banque a de tels filtres et que
+# le refresh a changé une ATK / DEF, on le refait une fois (sans fusion / rituel, comme refresh_b). Une seule passe
+# de plus : une dépendance circulaire (bonus d'ATK filtré sur l'ATK) n'est pas itérée jusqu'au point fixe.
+# Une seconde passe complète de stats() à chaque refresh coûtait 16 % du débit CPU (banque procédurale 1, B=64) :
+# dans step_batch, elle ne porte que sur le sous-lot des parties dont une ATK / DEF a bougé.
+def refresh2(bank, s):
+    """refresh, puis la deuxième passe si nécessaire (une partie ; sous vmap, le cond calcule les deux branches)."""
+    s1 = refresh(bank, s)
+    need = cont_reads_stats(bank) & stats_moved(bank, s, s1)
+    return lax.cond(need, lambda x: refresh(bank, x, fus=False), lambda x: x, s1)
+
+
 def refresh_if(bank, prev, s):
     """refresh seulement si l'état a changé depuis prev (une partie ; sous vmap, le cond calcule les deux branches)."""
-    return lax.cond(changed(prev, s), lambda s: refresh(bank, s), lambda s: s, s)
+    return lax.cond(changed(prev, s), lambda s: refresh2(bank, s), lambda s: s, s)
 
 
 def refresh_b(bank, prev, s, frac=8):
@@ -1324,7 +1392,21 @@ def refresh_b(bank, prev, s, frac=8):
         idx = jnp.nonzero(d, size=k, fill_value=nb)[0]
         part = ref(jax.tree.map(lambda x: x[jnp.minimum(idx, nb - 1)], s))
         return jax.tree.map(lambda x, y: x.at[idx].set(y, mode="drop"), s, part)
-    return lax.cond(d.sum() > k, ref, lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
+    s1 = lax.cond(d.sum() > k, ref, lambda s: lax.cond(d.any(), sub, lambda s: s, s), s)
+    return lax.cond(cont_reads_stats(bank), lambda s1: _second_b(bank, s, s1, k), lambda s1: s1, s1)
+
+
+def _second_b(bank, s, s1, k):
+    """Deuxième passe de refresh2 en lot : seulement les parties dont une ATK / DEF a bougé (sous-lot de k)."""
+    nb = s.done.shape[0]
+    d = stats_moved(bank, s, s1)
+    ref = lambda x: jax.vmap(lambda y: refresh(bank, y, fus=False))(x)
+
+    def sub(x):
+        idx = jnp.nonzero(d, size=k, fill_value=nb)[0]
+        part = ref(jax.tree.map(lambda y: y[jnp.minimum(idx, nb - 1)], x))
+        return jax.tree.map(lambda y, z: y.at[idx].set(z, mode="drop"), x, part)
+    return lax.cond(d.sum() > k, lambda x: _where(d, ref(x), x), lambda x: lax.cond(d.any(), sub, lambda x: x, x), s1)
 
 
 SUBS = [[(q >> j) & 1 for j in range(FK)] for q in range(1 << FK)]  # sous-ensembles des emplacements de matériaux
@@ -2106,13 +2188,22 @@ def test_ok(bank, s, h, e, p, enabled=None):
     return ok
 
 
+def src_retarget(s, target, sel):
+    """Duel.SetTargetCard recrée la relation de chaque cible avec l'effet : une source envoyée en coût puis prise pour
+    cible (Ignition « envoyez cette carte au cimetière ; ciblez 1 monstre de votre cimetière ») reste liée à l'effet
+    (IsRelateToEffect). On recale son horloge de début d'activation (CF_SRC_UNRELATED)."""
+    src = jnp.maximum(s.ch_src, 0)
+    hit = target & (s.ch_src >= 0) & sel[src]
+    return jnp.where(hit, s.mv[src], s.ch_src_mv)
+
+
 def sel_finish(bank, s):
     """Fin d'une sélection pendant un effet (D_SELECT) : les cartes choisies vont dans le registre de l'instruction."""
     sel = (s.st & ST_SEL) != 0
     ins = current_ins(bank, s)
     dst = jnp.clip(ins[1], 0, R - 1)
     target = (s.pg == PG_TARGET) & (ins[0] == OP_CHOOSE) & ((ins[3] & (1 << 10)) != 0)
-    return s._replace(ch_tgt_t=jnp.where(target, s.clk, s.ch_tgt_t),
+    return s._replace(ch_tgt_t=jnp.where(target, s.clk, s.ch_tgt_t), ch_src_mv=src_retarget(s, target, sel),
                       reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
                       dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
 
@@ -2364,10 +2455,13 @@ def exec_one(bank, s):
                               lk_flags=s.lk_flags.at[k1].set(s.lk_flags[k1] | CF_ACT_NEG),
                               st=s.st.at[lc].set(jnp.where(hit, s.st[lc] | ST_LEAVE | ST_ACTDIS, s.st[lc]))))
     branches[OP_NEGATE] = negate
-    branches[OP_PAY_LP] = lambda s: adv(damage(s, p, a))
+    # coût en LP d'une activation : défaite constatée par adjust à la mise en chaîne (push_link), après les cibles ;
+    # procédure (K_PROC, sans maillon) : tout de suite
+    branches[OP_PAY_LP] = lambda s: adv(_cond(bank.ekind[s.cid[h], e] == K_PROC, lambda s: damage(s, p, a),
+                                              lambda s: s._replace(lp=s.lp.at[p].set(jnp.maximum(0, s.lp[p] - a))), s))
     branches[OP_LABEL] = lambda s: adv(s._replace(
         ch_lab=jnp.where(b == 0, s.reg[ra].any().astype(I32), s.ch_lab),
-        ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t)))
+        ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t), ch_src_mv=src_retarget(s, b == 1, s.reg[ra])))
     branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
     return _switch(op, branches, s)
 
@@ -2701,7 +2795,7 @@ def apply(bank, s, a):
 
         def fin(s):
             g = (s.st & ST_PSTEP) != 0
-            s = raise_ev(brk(s), EV_SPSUMMON, g, s.tp)
+            s = raise_ev(brk(enable(s, g)), EV_SPSUMMON, g, s.tp)
             s = s._replace(st=s.st & ~ST_PSTEP, psel=_i(0), pend=_i(-1), ps_used=jnp.bool_(True))
             return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
         return _cond(sel.any(), go, fin, s)
@@ -2997,10 +3091,12 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
               xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), ps_used=f, uid=uid)
-    s = refresh(bank, s)
     for p in (0, 1):
         for _ in range(5):
             s = draw(s, p)
+    # refresh après la pioche : fz_c / rz_c dépendent de la main ; avant, ils restaient périmés jusqu'au premier
+    # changement d'état (step les gardait, step_batch les recalculait en rafraîchissant tout le lot)
+    s = refresh(bank, s)
     # pas de step ici : il recompilerait tout le moteur une seconde fois (≈ 2 Go de compilation en plus). La première
     # décision peut être à option unique (fenêtre de la Draw Phase) : l'appelant la joue avec son propre step
     # (forced, ou une action légale tirée au hasard, qui est alors la seule)

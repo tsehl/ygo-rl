@@ -566,7 +566,8 @@ def play(db, bank, cmap, seed, step, legal, verbose=False, mixed=False, mode=Non
             diff = [k for k in so if so[k] != sj[k]]
             if diff:
                 raise Mismatch("état différent : " + "; ".join(f"{k}: oracle {so[k]} / jax {sj[k]}" for k in diff)
-                               + f" | jax légales {decode(bank, s, np.where(np.asarray(legal(bank, s)))[0].tolist())}")
+                               + f" | jax légales {decode(bank, s, np.where(np.asarray(legal(bank, s)))[0].tolist())}"
+                               + f" | oracle : msg {dec.msg} {dec.options[:8]}")
             idx = filtered(dec, s)
             ready = mode == "xlk" and xlink_cover(bank, s)
             m = np.asarray(legal(bank, s))
