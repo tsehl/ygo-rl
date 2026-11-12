@@ -916,7 +916,13 @@ def random_decks(cset, rng, b, d=40, x=15):
     """Decks aléatoires (sans structure) : [b, 2, d] et Extra Decks [b, 2, x], index dans la banque."""
     main = np.array([i for i, c in enumerate(cset) if not is_extra(c)])
     ext = np.array([i for i, c in enumerate(cset) if is_extra(c)])
-    return main[rng.integers(0, len(main), (b, 2, d))], ext[rng.integers(0, len(ext), (b, 2, x))]
+    return _draw3(main, rng, (b, 2), d), _draw3(ext, rng, (b, 2), x)
+
+
+def _draw3(pool, rng, shape, n):
+    """n cartes tirées au hasard dans pool, au plus 3 exemplaires de chacune (règle du jeu)."""
+    p3 = np.repeat(pool, 3)
+    return np.array([rng.choice(p3, n, replace=False) for _ in range(int(np.prod(shape)))]).reshape(*shape, n)
 
 
 def _own_filters(x, out):
@@ -998,7 +1004,7 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2, p_sup=0.5):
 
     def one():
         if rng.random() < p_rand:
-            return main[rng.integers(0, len(main), d)], ext[rng.integers(0, len(ext), x)]
+            return _draw3(main, rng, (), d), _draw3(ext, rng, (), x)
         cards, extra = [], []
         if len(pend) >= 2 and rng.random() < 0.25:
             for c in rng.choice(pend, min(len(pend), int(rng.integers(3, 6))), replace=False):
