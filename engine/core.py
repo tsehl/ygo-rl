@@ -818,7 +818,9 @@ def in_range(s):
 
 def trig_point(bank, s):
     """Point d'événement, juste après l'ouverture d'une fenêtre W_QUICK (chaîne vide) : les effets déclenchés par
-    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite."""
+    les événements cumulés dans `tev` passent d'abord (SEGOC), la fenêtre ne s'ouvre qu'ensuite. Les matériaux d'un Xyz
+    qui vient de quitter le terrain partent d'abord au cimetière : leur EVENT_TO_GRAVE est du même point d'événement."""
+    s = drop_overlays(s)
     bits = (s.tev * (1 << jnp.arange(NEV))[:, None]).sum(0)
     wbits = (s.tew * (1 << jnp.arange(NEV))[:, None]).sum(0)
     abits, awbits = (s.tev.any(1) * (1 << jnp.arange(NEV))).sum(), (s.tew.any(1) * (1 << jnp.arange(NEV))).sum()
@@ -1108,6 +1110,8 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     loc = jnp.where(s.ctrl == p, f[F_LOC_ME], f[F_LOC_OP])
     m = (s.zone & loc) != 0
     m &= (s.zone != Z_OVERLAY) | (s.ov_par == h)  # matériaux Xyz : seulement ceux de la carte source
+    # monstre posé par l'invocation pendule en cours (STATUS_SUMMONING) : hors des groupes (field::filter_matching_card)
+    m &= ~((s.zone == Z_MZONE) & ((s.st & ST_PSTEP) != 0))
     if bdes:
         m &= (s.st & ST_BDES) == 0  # détruite au combat : plus ciblable (ygopro is_capable_be_effect_target)
     m &= (f[F_POS] == 0) | ((s.pos & f[F_POS]) != 0)
@@ -1178,7 +1182,10 @@ def stats(bank, s):
     # résolue ; un effet FIELD d'un monstre détruit au combat ne s'applique plus
     k = bank.ekind[s.cid]                                          # [N, E]
     md = bank.emod[s.cid]                                          # [N, E, MW]
-    srcok = faceup & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
+    # une carte posée par l'invocation pendule en cours a encore STATUS_SUMMONING : effets pas encore activés
+    # (STATUS_EFFECT_ENABLED à l'étape 27) et ATK / DEF de base (card::get_attack)
+    pst = (s.st & ST_PSTEP) != 0
+    srcok = faceup & ~pst & ((s.zone == Z_MZONE) | ((s.zone == Z_SZONE) & ((s.st & ST_ON) != 0)))
     bdok = (md[..., M_SELF] != 0) | ((s.st & ST_BDES) == 0)[:, None]
     act = (k == K_CONT) & ((bank.erng[s.cid] & s.zone[:, None]) != 0) & srcok[:, None] & bdok
     if bank.submat.shape[1]:
@@ -1282,7 +1289,8 @@ def stats(bank, s):
         upc = jnp.where(u & ~sg2 & (jj > r_upc), val, 0).sum(0)
         ll = last(fin_c)
         cur = jnp.maximum(jnp.where(x < 0, b, x) + up + upc, 0)
-        return jnp.where(onf, jnp.maximum(jnp.where(ll >= 0, at(ll), cur), 0), base), jnp.where(onf, b, base)
+        onx = onf & ~pst
+        return jnp.where(onx, jnp.maximum(jnp.where(ll >= 0, at(ll), cur), 0), base), jnp.where(onx, b, base)
     atk, batk = fold(bank.atk[s.cid], MC_ATK, MC_SET_ATK, MC_FINAL_ATK, MC_BASE_ATK)
     df, _ = fold(bank.df[s.cid], MC_DEF, MC_SET_DEF, MC_FINAL_DEF, MC_BASE_DEF)
     df = jnp.where((bank.ctype[s.cid] & TYPE_LINK) != 0, 0, df)  # card::get_defense : toujours 0 pour un Link
@@ -2787,7 +2795,7 @@ def apply(bank, s, a):
 
         def fin(s):
             g = (s.st & ST_PSTEP) != 0
-            s = raise_ev(brk(s), EV_SPSUMMON, g, s.tp)
+            s = raise_ev(brk(enable(s, g)), EV_SPSUMMON, g, s.tp)
             s = s._replace(st=s.st & ~ST_PSTEP, psel=_i(0), pend=_i(-1), ps_used=jnp.bool_(True))
             return trig_point(bank, open_quick(s, s.tp, R_IDLE, chained=False))
         return _cond(sel.any(), go, fin, s)
