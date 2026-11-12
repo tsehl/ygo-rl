@@ -19,7 +19,7 @@ import optax
 import core
 import model
 import realcards
-from bench_eval import load_params
+from ppo import load_params
 
 C = dict(raigeki=12580477, dark_hole=53129443, mst=5318639, hfd=18144506, reborn=83764718,
          mirror=44095762, sakuretsu=56120475, trap_hole=4206964)

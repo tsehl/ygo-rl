@@ -64,6 +64,8 @@ def parse():
     ap.add_argument("--eval-steps", type=int, default=400)
     ap.add_argument("--bench-every", type=int, default=50, help="benchmark sur les vraies cartes (multiple de --eval-every)")
     ap.add_argument("--eval-bank", type=int, default=1_000_000)
+    ap.add_argument("--ref-ckpt", default="", help="réseau de référence figé (pickle, .gz accepté) : évaluation contre lui "
+                    "à chaque --eval-every (banque à archétypes, decks structurés) et sur les vraies cartes à chaque --bench-every")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
     ap.add_argument("--gen-revive", type=int, default=0, help="banques d'entraînement : renfort des résurrections avec choix (cardgen.Gen)")
@@ -384,6 +386,15 @@ def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real", greedy=
     return out
 
 
+def load_params(path):
+    """Paramètres sauvegardés (pickle, éventuellement gzip, f16 ou f32) → f32."""
+    import gzip
+    import pickle
+    with (gzip.open if path.endswith(".gz") else open)(path, "rb") as fh:
+        p = pickle.load(fh)
+    return jax.tree.map(lambda x: jnp.asarray(x, jnp.float32), p)
+
+
 def fmt(ev):
     return " ".join(f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in ev.items())
 
@@ -399,6 +410,7 @@ def main():
     print("paramètres :", sum(x.size for x in jax.tree.leaves(params)), flush=True)
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt_state = opt.init(params)
+    ref = load_params(a.ref_ckpt) if a.ref_ckpt else None
     snaps = {0: params}                                # versions passées pour l'évaluation (itération → paramètres)
     env = Env(a.b, a.frac, a.decks)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
@@ -508,10 +520,16 @@ def main():
             old = max([i for i in snaps if i <= it + 1 - a.old_lag] or [min(snaps)])
             ev = evaluate(a, eval_env, fns, params, k3, 1, snaps[old])
             line += f" | contre it {old} : win {ev['eval_win']:.3f} loss {ev['eval_loss']:.3f}"
+            if ref is not None:
+                key, k5 = jax.random.split(key)
+                line += " | " + fmt(evaluate(a, eval_env, fns, params, k5, 1, ref, pre="ref", struct=True))
             if a.bench_every and (it + 1) % a.bench_every == 0:
                 key, k1, k2 = jax.random.split(key, 3)
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k1, 0, pre="vrai_rnd"))
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k2, 2, pre="vrai_heur"))
+                if ref is not None:
+                    key, k6 = jax.random.split(key)
+                    line += " | " + fmt(real_bench(a, eval_env, fns, params, k6, 1, ref, pre="vrai_ref"))
             snaps[it + 1] = params
             snaps = {i: q for i, q in snaps.items() if i >= it + 1 - 2 * a.old_lag}
         print(line, flush=True)
