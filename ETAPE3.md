@@ -495,6 +495,41 @@ Résultat : filtres sans cible 6-8 % (archétype 6-9 %), Extra Deck invocable 58
 ~1 ms par deck. Effet sur les
 occasions en jeu (`bench/coverage.py`) à mesurer sur GPU.
 
+**Archétypes et decks à thème (2026-11-12).** Avant le run long, quatre changements :
+- **Archétypes** (`Gen(seed, arch=0.5)`, défaut de `ppo.py --arch`) : une part `arch` des cartes appartient à un des 8
+  archétypes procéduraux. Chaque archétype a un attribut et un type de prédilection. Ses monstres portent son
+  setcode, et les filtres de ses cartes visent surtout ses propres cartes, comme les cartes de soutien d'un vrai
+  deck : « un monstre X de votre deck », son attribut, son type. Ses cartes font aussi plus de recherches et
+  d'invocations de ses propres monstres. `arch=0` donne les mêmes banques qu'avant, tirage pour tirage.
+- **Decks à thème** (`structured_decks`) :
+  - cœur d'archétype : 8 à 14 cartes de l'archétype, plus ses monstres de l'Extra Deck ;
+  - 0 à 2 paquets de mécaniques concentrées (pendules, rituels, fusion, Xyz d'un rang, Syntoniseurs) ;
+  - un ou deux niveaux dominants (niveau 4 favorisé, ou le rang du paquet Xyz) ;
+  - le soutien ci-dessus ;
+  - au plus 3 exemplaires.
+- **Évaluation sur decks structurés** : `ppo.py` ajoute une évaluation « sheur » (contre l'heuristique, banque
+  d'évaluation à archétypes jamais vue, decks structurés) à « rnd » et « heur ». « rnd » et « heur » gardent la
+  banque de référence et des decks aléatoires, donc les chiffres restent comparables aux runs précédents.
+  `bench_eval.py` et `coverage.py` prennent aussi `--arch`.
+- `compare_gen.py` et `fuzz.py` prennent `--arch X --structured`.
+
+Mesure statique (`bench/deck_support.py`, graines 0-2, 200 decks) :
+
+| decks | filtres sans cible | Extra invocable (fusion / synchro / Xyz) | monstres dans les 2 niveaux principaux | archétype principal |
+|---|---|---|---|---|
+| aléatoires, banque de référence | 16-20 % | 30-39 / 41-48 / 33-44 % | 44-46 % | 6-7 % |
+| structurés, banque de référence | 8-10 % | 68-72 / 63-66 / 69-73 % | 72-77 % | 10-11 % |
+| structurés, `arch=0.5` | 9-14 % | 57-65 / 60-70 / 75-84 % | 64-68 % | **39-42 %** |
+
+Vérification contre l'oracle (`compare_gen.py --banks 0-9 --games 10 --arch 0.5 --structured`, revive 0 et 4) :
+avant correction, 195/200 parties identiques. Les decks à thème rendent fréquentes deux règles que le moteur
+gérait mal :
+- l'état « en cours d'invocation » des cartes déjà posées pendant une invocation pendule ;
+- l'envoi au cimetière des matériaux d'un Xyz au même point d'événement que le Xyz.
+
+Détail : `notes/ecarts-archetypes-2026-11-12.md`. Après correction : 200/200 sur les banques à archétypes et
+200/200 sur les banques classiques, `regress.sh` complet vert.
+
 ### Audit des briques (2026-11-05)
 
 `gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec leurs arguments significatifs, déclencheurs, MC_*, damage step, limites, filtres.

@@ -37,5 +37,9 @@ C'était probablement le même événement tardif.
 
 ## Validation
 
-Voir le message de commit : regress complet, compare_gen classique 0-9 (revive 0 / 4) et à archétypes 0-9
-(revive 0 / 4).
+- `engine/regress.sh` complet : tous les modes de `compare.py` à 100 %, obs / vmap / sb / sbp propres.
+- `compare_gen.py --banks 0-9 --games 10` : 100/100 en revive 0 et en revive 4.
+- Les mêmes avec `--arch 0.5 --structured` : 100/100 en revive 0 et en revive 4.
+
+Diagnostic ajouté à `compare.py` : le message d'un écart d'état donne aussi la décision en attente de l'oracle (msg
+et options). C'est ce qui a montré que l'oracle était au milieu de l'invocation pendule (msg 18).
