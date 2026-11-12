@@ -8,6 +8,8 @@ Deux étages :
 2. `policy` : les T tokens de l'observation (engine/obs.py) = vecteur de la carte (ou « inconnue ») + son état visible
    (zone, position, ATK / DEF courantes, statuts, chaîne…), plus un token global. Transformer, puis
    logits verbe × token, logits des actions spéciales (sur le token global), valeur (token global).
+   Son deck restant (`o.deck`, liste triée) : vecteurs des cartes → MLP → somme, ajoutée au token global (paramètres
+   `deck1` / `deck2`, deck2 initialisé à zéro : un checkpoint sans eux se comporte exactement comme avant).
 
 Les entiers des briques (paramètres a, b, c, champs des filtres) sont donnés par symlog(x) et leurs 16 bits de poids
 faible : la plupart sont des champs de bits (zones, types, positions, événements) ou des codes (archétype, nom), que le
@@ -248,7 +250,19 @@ def init(k, d=128, card_layers=2, layers=3):
                 dyn=dense_init(ks[2], F_DYN, d), glob=dense_init(ks[3], F_GLOB, d),
                 blocks=[block_init(ks[8 + i], d, 4) for i in range(layers)], out=ln_init(d),
                 act=dense_init(ks[4], d, NV, 0.01), spec=dense_init(ks[5], d, N_SPECIAL, 0.01),
-                v1=dense_init(ks[6], d, d), v2=dense_init(ks[7], d, 1, 0.01))
+                v1=dense_init(ks[6], d, d), v2=dense_init(ks[7], d, 1, 0.01), **deck_init(ks[1], d))
+
+
+def deck_init(k, d):
+    """Encodeur du deck restant ; deck2 nul au départ (aucun effet tant qu'il n'a rien appris)."""
+    return dict(deck1=dense_init(jax.random.fold_in(k, 101), d, d), deck2=dense_init(k, d, d, 0.0))
+
+
+def deck_feats(p, cemb, o):
+    """[.., d] : somme sur son deck restant de MLP(vecteur de carte), / 20."""
+    e = cemb[jnp.clip(o.deck, 0, cemb.shape[0] - 1)]
+    h = jax.nn.gelu(dense(p["deck1"], e)) * (o.deck >= 0)[..., None]
+    return dense(p["deck2"], h.sum(-2) / 20)
 
 
 def policy(p, cemb, o, heads=4):
@@ -260,7 +274,10 @@ def policy(p, cemb, o, heads=4):
     elif p["dyn"]["w"].shape[0] != F_DYN:
         raise ValueError("dimension dynamique de checkpoint incompatible")
     x = jnp.where(known, cemb[jnp.clip(o.cid, 0, cemb.shape[0] - 1)], p["unk"]) + dense(p["dyn"], dyn)
-    g = dense(p["glob"], glob_feats(o))[..., None, :]
+    g = dense(p["glob"], glob_feats(o))
+    if "deck1" in p:  # checkpoints antérieurs au 2026-11-12 : sans
+        g = g + deck_feats(p, cemb, o)
+    g = g[..., None, :]
     x = jnp.concatenate([g, x], -2)
     m = jnp.concatenate([jnp.ones(o.valid.shape[:-1] + (1,), bool), o.valid], -1)
     for b in p["blocks"]:

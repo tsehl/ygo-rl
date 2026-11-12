@@ -530,6 +530,50 @@ gérait mal :
 Détail : `notes/ecarts-archetypes-2026-11-12.md`. Après correction : 200/200 sur les banques à archétypes et
 200/200 sur les banques classiques, `regress.sh` complet vert.
 
+**Observation : information publique seulement, deck restant (2026-11-12).** À terme, le réseau jouera sur des
+serveurs tiers à travers un traducteur d'état (Client View). Un tel client ne connaît ni l'identité des cartes cachées
+adverses ni l'ordre du deck. L'observation ne doit donc dépendre que de l'information et des événements publics, plus
+ses propres cartes : sinon l'entraînement et la production divergent, ou de l'information fuit.
+- **Retenu : son deck restant.** `Obs.deck` donne les identités de son deck restant, triées et sans ordre (DK = 40).
+  Le modèle les encode (MLP sur le vecteur de carte, somme / 20) et les ajoute au token global. `deck2` est
+  initialisé à zéro : un ancien checkpoint donne exactement les mêmes logits (écart mesuré 0,0 sur run 5).
+  `obs_check` (test 4) vérifie que `deck` est égal à la liste de départ moins ses cartes qu'il voit ailleurs, ce
+  qu'un client externe peut calculer.
+- **Abandonné : un bit « vue par l'adversaire » sur les cartes cachées.** Si l'adversaire révèle X puis pose une
+  carte ou renvoie deux cartes au deck, un client ne sait pas quel slot a bougé. Une identité attachée à la carte
+  dans le moteur le dit au réseau : c'est une fuite que l'invariance testée par `obs_check` (identités cachées
+  mélangées) ne voit pas. C'est au réseau de faire la déduction à partir de l'historique public.
+
+**Mémoire : à faire plus tard.** Ce n'est pas limitant au niveau de jeu actuel (cible de Reborn, attaques perdues,
+Link), mais ça le deviendra. Proposition : un ring buffer des K derniers événements notables dans l'observation
+(K = 12-16), sans GRU, pour garder PPO feed-forward et le débit sous vmap. Événements retenus :
+- une carte entre dans une zone cachée alors qu'elle est connue, ou y est révélée (recherche, révélation, carte
+  connue posée verso depuis le cimetière ou le deck) ;
+- une carte sort d'une zone cachée sans être révélée (main → verso, main → deck, bannie verso) ;
+- mélange des cartes posées (pas de la main : aucune identité n'est liée à un slot de main adverse) ;
+- annulation (NEGATE).
+
+Points de conception :
+- définir chaque événement comme un message du flux ygopro (`MSG_MOVE`, `MSG_CONFIRM_CARDS`,
+  `MSG_SHUFFLE_SET_CARD`, `MSG_CHAIN_NEGATED`…). C'est ce que reçoit un client tiers, et `compare.py` peut alors
+  vérifier le buffer contre l'oracle. Le moteur n'a aujourd'hui aucune notion de révélation : les recherches ne
+  montrent rien, il faudra un drapeau vérifié contre `MSG_CONFIRM_CARDS` ;
+- les activations (suivi des « une fois par tour ») ne vont pas dans le même FIFO : un tour de combo en fait 10 à
+  20 et chasserait les révélations, rares et durables. Plutôt un fait public sur la carte (« effet de ce nom activé
+  ce tour »), ou un second petit buffer remis à zéro à chaque tour ;
+- chaque token porte l'âge (tours, décisions), le joueur, la zone d'origine et d'arrivée, et l'identité seulement
+  si l'observateur peut la connaître (masque dans `observe`) ;
+- détection des transitions à un seul endroit (comparaison avant / après dans `refresh`, plus la chaîne) : un appel
+  par site du graphe coûte cher (voir les matériaux Xyz ci-dessous) ;
+- réseau : T = 64 → 80 tokens, ~25 % d'attention en plus ;
+- écrire d'abord une sonde qui mesure le gain (par exemple : le réseau joue-t-il autour d'une carte que l'adversaire
+  vient de chercher ?).
+
+**Coût des matériaux Xyz.** La première correction appelait `drop_overlays` dans `trig_point`, donc une copie par
+site du graphe (14 sites) : −20 % de débit CPU (B = 64, Extra Deck 15 : 351-359 décisions/s avant, 277-285
+après). Il n'est plus appelé que dans `dmg_send` : la destruction au combat est le seul cas où un Xyz quitte le
+terrain sans refresh avant la collecte des déclencheurs.
+
 ### Audit des briques (2026-11-05)
 
 `gen/brick_audit.py` liste les caractéristiques d'effet des 86 vraies cartes du benchmark que le générateur ne produit jamais (10 banques de 480 cartes) : genre, opcodes par partie (coût / cible / résolution) avec leurs arguments significatifs, déclencheurs, MC_*, damage step, limites, filtres.
