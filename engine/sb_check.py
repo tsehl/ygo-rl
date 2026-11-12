@@ -1,5 +1,8 @@
 """Vérifie que step_batch (frac = 0, chemin d'entraînement) donne exactement les mêmes états et masques que
 vmap(step) (chemin vérifié contre l'oracle par compare.py), sur des parties aléatoires jouées en lot."""
+import os
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -9,9 +12,17 @@ import core
 
 B, D, C, T = 32, 40, 670, 150
 key = jax.random.PRNGKey(1)
-bank = cards.test_bank(key, C)
+PROC = int(os.environ.get("SB_PROC", "-1"))  # SB_PROC=X : banque procédurale de graine X (gen/cardgen.py)
+if PROC >= 0:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gen"))
+    import cardgen
+    cset = cardgen.Gen(PROC).make_set(400, 80)
+    bank = cardgen.to_bank(cset)
+    decks, extras = map(jnp.asarray, cardgen.structured_decks(cset, np.random.default_rng(PROC), B, D, 15))
+else:
+    bank = cards.test_bank(key, C)
+    decks, extras = cards.test_decks(jax.random.fold_in(key, 3), bank, B, D, C, 0.4, 6)
 CT = bank.code.shape[0]
-decks, extras = cards.test_decks(jax.random.fold_in(key, 3), bank, B, D, C, 0.4, 6)
 s0 = jax.jit(jax.vmap(lambda d, x, k: core.new_game(bank, d[0], d[1], k, x[0], x[1])))(decks, extras,
                                                                                        jax.random.split(key, B))
 legal = jax.jit(jax.vmap(lambda s: core.legal(bank, s)))
