@@ -68,6 +68,8 @@ def parse():
                     "à chaque --eval-every (banque à archétypes, decks structurés) et sur les vraies cartes à chaque --bench-every")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
+    ap.add_argument("--stop-file", default="", help="arrêt propre à la fin d'une itération si ce fichier existe (budget)")
+    ap.add_argument("--snap-every", type=int, default=0, help="garde aussi les paramètres toutes les X itérations (SAVE.itN.gz, f16)")
     ap.add_argument("--gen-revive", type=int, default=0, help="banques d'entraînement : renfort des résurrections avec choix (cardgen.Gen)")
     ap.add_argument("--arch", type=float, default=0.5,
                     help="banques d'entraînement et évaluation structurée : part des cartes d'archétype (cardgen.Gen ; 0 = banques d'avant le 2026-11-12)")
@@ -537,6 +539,13 @@ def main():
             import pickle
             with open(a.save, "wb") as fh:
                 pickle.dump(jax.device_get(params), fh)
+            if a.snap_every and (it + 1) % a.snap_every == 0:
+                import gzip
+                with gzip.open(f"{a.save}.it{it + 1}.gz", "wb") as fh:
+                    pickle.dump(jax.tree.map(lambda x: np.asarray(x, np.float16), jax.device_get(params)), fh)
+        if a.stop_file and os.path.exists(a.stop_file):
+            print(f"arrêt demandé ({a.stop_file}) après l'itération {it}", flush=True)
+            break
     print(f"total : {tot_dec} décisions, {tot_games} parties", flush=True)
     if a.prof:
         profile(a, fns, params, bank, tok, msk, s, m, f, pool, pm, used, key)
