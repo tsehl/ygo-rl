@@ -487,8 +487,12 @@ type. Seulement 34-47 % des synchros, Xyz et fusions de l'Extra Deck étaient in
   ≥ n+1 monstres du rang de l'Xyz, Syntoniseur + non-Syntoniseur de niveaux qui somment au niveau du synchro) ;
 - au plus 3 exemplaires.
 
+Les decks aléatoires (`random_decks`, la part p_rand des decks structurés) tirent aussi au plus 3 exemplaires
+(`_draw3`) ; avant, ~0,2 % d'entre eux dépassaient. Les decks d'évaluation (graine 12345) changent donc un peu : écart
+négligeable attendu, mais les chiffres d'avant le 2026-11-12 ne sont plus rejoués à l'identique.
+
 Résultat : filtres sans cible 6-8 % (archétype 6-9 %), Extra Deck invocable 58-70 % ; la génération coûte toujours
-~1 ms par deck. Les 20 % de decks aléatoires et l'évaluation (`random_decks`) ne changent pas. Effet sur les
+~1 ms par deck. Effet sur les
 occasions en jeu (`bench/coverage.py`) à mesurer sur GPU.
 
 ### Audit des briques (2026-11-05)
