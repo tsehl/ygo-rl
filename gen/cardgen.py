@@ -919,12 +919,60 @@ def random_decks(cset, rng, b, d=40, x=15):
     return main[rng.integers(0, len(main), (b, 2, d))], ext[rng.integers(0, len(ext), (b, 2, x))]
 
 
-def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
+def _own_filters(x, out):
+    """Filtres de monstres qualifiés (attribut / type / archétype / niveau) portant sur ses propres cartes."""
+    if isinstance(x, dict):
+        if x.get("me", 0) and not x.get("op", 0) and any(k in x for k in ("attr", "race", "setc", "lv")):
+            out.append(x)
+        for v in x.values():
+            _own_filters(v, out)
+    elif isinstance(x, (list, tuple)):
+        for v in x:
+            _own_filters(v, out)
+    return out
+
+
+def _fmatch(f, c):
+    return bool(c["ctype"] & TYPE_MONSTER and (not f.get("attr") or c["attr"] & f["attr"])
+                and (not f.get("race") or c["race"] & f["race"])
+                and ("setc" not in f or f["setc"] in c["setc"])
+                and ("lv" not in f or f["lv"][0] <= c["lv"] <= f["lv"][1]))
+
+
+def _cap3(cards):
+    """Au plus 3 exemplaires d'une carte (règle du jeu), ordre conservé."""
+    n, out = {}, []
+    for c in cards:
+        n[c] = n.get(c, 0) + 1
+        if n[c] <= 3:
+            out.append(c)
+    return out
+
+
+def _xsup(e, deck):
+    """Monstre de l'Extra Deck invocable avec les cartes du deck principal (deck : cartes, exemplaires compris)."""
+    kind, r = e["recipe"]
+    ok = lambda f, c: _fmatch(f, c) and ("code" not in f or c["code"] == f["code"])
+    if kind == "fusion":
+        return all(any(ok(f, c) for c in deck) for f in r)
+    if kind == "xyz":
+        return sum(c["lv"] == e["lv"] and ok(r[0], c) for c in deck) > r[1]
+    if kind == "synchro":
+        tl = {c["lv"] for c in deck if c["ctype"] & TYPE_TUNER and ok(r[0], c)}
+        nl = {c["lv"] for c in deck if not c["ctype"] & TYPE_TUNER and ok(r[1], c)}
+        return any(t + k * n == e["lv"] for t in tl for n in nl for k in (1, 2))
+    return True
+
+
+def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2, p_sup=0.5):
     """Decks structurés [b, 2, d] / [b, 2, x] : cartes en 1 à 3 exemplaires (comme de vrais decks) et, avec une
     certaine probabilité, des paquets de mécaniques qui demandent des cartes assorties (decks aléatoires : quasi jamais
     d'invocation pendule, 3-5 fois moins de rituels / Xyz que les vrais decks, voir bench/coverage.py) : pendules,
     paires rituelles, fusions avec leurs matériaux nommés, monstres d'un même niveau avec des Xyz de ce rang,
-    Syntoniseurs. Une part p_rand reste tirée au hasard."""
+    Syntoniseurs. Une part p_rand reste tirée au hasard.
+    Remplissage : avec la probabilité p_sup, une carte qui répond à un filtre qualifié encore sans cible dans le deck
+    (attribut / type / archétype / niveau des recherches, cibles, coûts), comme les cartes de soutien d'un vrai deck ;
+    sans cela ~20 % de ces filtres (35 % des filtres d'archétype) ne trouvaient rien dans le deck."""
     idx = np.arange(len(cset))
     ext_m = np.array([is_extra(c) for c in cset])
     main, ext = idx[~ext_m], idx[ext_m]
@@ -942,6 +990,11 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
     nmon = idx[~ext_m & (ct & TYPE_MONSTER != 0) & (ct & TYPE_RITUAL == 0)]
     xyz_lv = [L for L in sorted(set(lvl[xyz])) if (lvl[nmon] == L).sum() >= 3]
     cop = lambda: int(rng.choice([1, 2, 3], p=[0.3, 0.4, 0.3]))
+    filt = [_own_filters(c["effects"], []) for c in cset]       # filtres de chaque carte
+    sup = {}                                                    # id(filtre) -> cartes du deck principal qui y répondent
+    for fs in filt:
+        for f in fs:
+            sup[id(f)] = np.array([i for i in main if _fmatch(f, cset[i])], np.int64)
 
     def one():
         if rng.random() < p_rand:
@@ -969,12 +1022,26 @@ def structured_decks(cset, rng, b, d=40, x=15, p_rand=0.2):
         if len(tuner) and rng.random() < 0.3:
             for c in rng.choice(tuner, min(len(tuner), int(rng.integers(2, 4))), replace=False):
                 cards += [c] * 2
-        cards = cards[:d - 10]                     # au moins 10 cartes de remplissage
+        cards = _cap3(cards)[:d - 10]              # au moins 10 cartes de remplissage
         while len(cards) < d:
-            cards += [rng.choice(main)] * cop()
-        extra = extra[:x]
+            open_ = [f for c in set(cards) for f in filt[c]
+                     if len(sup[id(f)]) and not any(_fmatch(f, cset[k]) for k in cards if k != c)]
+            if open_ and rng.random() < p_sup:
+                f = open_[rng.integers(len(open_))]
+                cards += [rng.choice(sup[id(f)])] * cop()
+            else:
+                cards += [rng.choice(main)] * cop()
+            cards = _cap3(cards)
+        cards = cards[:d]
+        extra = _cap3(extra)[:x]
+        deck = [cset[k] for k in cards]
+        xs = [k for k in ext if cset[k]["recipe"][0] != "link" and _xsup(cset[k], deck)]
         while len(extra) < x:
-            extra += [rng.choice(ext)] * cop()
+            if xs and rng.random() < p_sup:           # soutien : Extra Deck invocable avec ce deck
+                extra += [rng.choice(xs)] * int(rng.choice([1, 2]))
+            else:
+                extra += [rng.choice(ext)] * cop()
+            extra = _cap3(extra)
         return np.array(cards[:d]), np.array(extra[:x])
 
     out = [[one() for _ in range(2)] for _ in range(b)]
