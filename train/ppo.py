@@ -67,9 +67,11 @@ def parse():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save", default="")
     ap.add_argument("--gen-revive", type=int, default=0, help="banques d'entraînement : renfort des résurrections avec choix (cardgen.Gen)")
+    ap.add_argument("--arch", type=float, default=0.5,
+                    help="banques d'entraînement et évaluation structurée : part des cartes d'archétype (cardgen.Gen ; 0 = banques d'avant le 2026-11-12)")
     ap.add_argument("--bf16", action="store_true", help="calcul du réseau en bfloat16 (paramètres et optimiseur en f32)")
     ap.add_argument("--decks", default="structured", choices=["structured", "random"],
-                    help="decks d'entraînement (l'évaluation procédurale garde des decks aléatoires)")
+                    help="decks d'entraînement (l'évaluation procédurale « rnd / heur » garde la banque de référence et des decks aléatoires ; « sheur » : banque à archétypes, decks structurés)")
     ap.add_argument("--mix-heur", type=float, default=0.0, help="part des parties contre l'heuristique à style")
     ap.add_argument("--mix-old", type=float, default=0.0, help="part des parties contre une ancienne version (ligue)")
     ap.add_argument("--league-every", type=int, default=10, help="une version ajoutée à la ligue toutes les X itérations")
@@ -103,8 +105,8 @@ class Env:
         return self.new(bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, self.b))
 
 
-def bank_of(seed, a, revive=0):
-    cset = cardgen.Gen(seed, revive).make_set(a.main, a.extra)
+def bank_of(seed, a, revive=0, arch=0.0):
+    cset = cardgen.Gen(seed, revive, arch).make_set(a.main, a.extra)
     bank = cardgen.to_bank(cset)
     nt = int(model.n_tokens(model.card_tokens(bank)[1]).max())
     assert nt <= model.LC, f"banque {seed} : une carte a {nt} tokens utiles > model.LC = {model.LC}"
@@ -343,10 +345,16 @@ def summary(fin, res, pre="eval"):
             f"{pre}_loss": float((res[fin] == -1).sum() / n)}
 
 
-def evaluate(a, env, fns, params, key, kind, oparams=None, pre="eval", greedy=False):
-    """Banque procédurale d'évaluation (jamais vue), decks aléatoires joués par paires (voir paired), graine fixe."""
-    cset, bank = bank_of(a.eval_bank, a)
-    d, x = cardgen.random_decks(cset, np.random.default_rng(12345), env.b // 4)
+def evaluate(a, env, fns, params, key, kind, oparams=None, pre="eval", greedy=False, struct=False):
+    """Banque procédurale d'évaluation (jamais vue), decks joués par paires (voir paired), graine fixe. Par défaut
+    banque de référence (Gen sans archétypes) et decks aléatoires, comparables d'un run à l'autre ; struct : banque à
+    archétypes (a.arch) et decks structurés, plus proches des decks d'entraînement et des vrais decks."""
+    if struct:
+        cset, bank = bank_of(a.eval_bank, a, arch=a.arch or 0.5)
+        d, x = cardgen.structured_decks(cset, np.random.default_rng(12345), env.b // 4)
+    else:
+        cset, bank = bank_of(a.eval_bank, a)
+        d, x = cardgen.random_decks(cset, np.random.default_rng(12345), env.b // 4)
     D, X, side = paired(d, x)
     return summary(*play_eval(a, env, fns, params, bank, D, X, side, key, kind, oparams, greedy), pre)
 
@@ -421,7 +429,7 @@ def main():
             return r, time.time() - t1
 
         if it % a.bank_every == 0:
-            cset, bank = bank_of(bank_seed, a, a.gen_revive)
+            cset, bank = bank_of(bank_seed, a, a.gen_revive, a.arch)
             bank_seed += 1
             tok, msk = model.card_tokens(bank)
             key, k = jax.random.split(key)
@@ -494,6 +502,8 @@ def main():
             key, k1, k2, k3 = jax.random.split(key, 4)
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k1, 0, pre="rnd"))
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k2, 2, pre="heur"))
+            key, k4 = jax.random.split(key)
+            line += " | " + fmt(evaluate(a, eval_env, fns, params, k4, 2, pre="sheur", struct=True))
             # contre la version d'il y a --old-lag itérations (ou la plus ancienne gardée, au début : l'initialisation)
             old = max([i for i in snaps if i <= it + 1 - a.old_lag] or [min(snaps)])
             ev = evaluate(a, eval_env, fns, params, k3, 1, snaps[old])
