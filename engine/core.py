@@ -691,7 +691,11 @@ def rule_draw(s, p):
 
 
 def adjust(s):
-    return lose(s, s.tp, s.odraw)._replace(odraw=jnp.bool_(False))
+    """Point d'ajustement (Processors::Adjust d'ygopro, contrôle de victoire) : pioche dans un deck vide, LP à 0
+    après un coût payé pendant une activation (la défaite n'est constatée qu'ici, après le choix des cibles)."""
+    s = lose(s, s.tp, s.odraw)._replace(odraw=jnp.bool_(False))
+    s = lose(s, 0, (s.lp[0] <= 0) & (s.lp[1] > 0))
+    return lose(s, 1, (s.lp[1] <= 0) & (s.lp[0] > 0))
 
 
 def raise_ev(s, ev, mask, p):
@@ -2176,13 +2180,22 @@ def test_ok(bank, s, h, e, p, enabled=None):
     return ok
 
 
+def src_retarget(s, target, sel):
+    """Duel.SetTargetCard recrée la relation de chaque cible avec l'effet : une source envoyée en coût puis prise pour
+    cible (Ignition « envoyez cette carte au cimetière ; ciblez 1 monstre de votre cimetière ») reste liée à l'effet
+    (IsRelateToEffect). On recale son horloge de début d'activation (CF_SRC_UNRELATED)."""
+    src = jnp.maximum(s.ch_src, 0)
+    hit = target & (s.ch_src >= 0) & sel[src]
+    return jnp.where(hit, s.mv[src], s.ch_src_mv)
+
+
 def sel_finish(bank, s):
     """Fin d'une sélection pendant un effet (D_SELECT) : les cartes choisies vont dans le registre de l'instruction."""
     sel = (s.st & ST_SEL) != 0
     ins = current_ins(bank, s)
     dst = jnp.clip(ins[1], 0, R - 1)
     target = (s.pg == PG_TARGET) & (ins[0] == OP_CHOOSE) & ((ins[3] & (1 << 10)) != 0)
-    return s._replace(ch_tgt_t=jnp.where(target, s.clk, s.ch_tgt_t),
+    return s._replace(ch_tgt_t=jnp.where(target, s.clk, s.ch_tgt_t), ch_src_mv=src_retarget(s, target, sel),
                       reg=s.reg.at[dst].set(sel), st=s.st & ~ST_SEL, picks=_i(0), pc=s.pc + 1,
                       dec=_i(D_RUN), fsel=jnp.bool_(False), rsel=_i(0))
 
@@ -2434,10 +2447,13 @@ def exec_one(bank, s):
                               lk_flags=s.lk_flags.at[k1].set(s.lk_flags[k1] | CF_ACT_NEG),
                               st=s.st.at[lc].set(jnp.where(hit, s.st[lc] | ST_LEAVE | ST_ACTDIS, s.st[lc]))))
     branches[OP_NEGATE] = negate
-    branches[OP_PAY_LP] = lambda s: adv(damage(s, p, a))
+    # coût en LP d'une activation : défaite constatée par adjust à la mise en chaîne (push_link), après les cibles ;
+    # procédure (K_PROC, sans maillon) : tout de suite
+    branches[OP_PAY_LP] = lambda s: adv(_cond(bank.ekind[s.cid[h], e] == K_PROC, lambda s: damage(s, p, a),
+                                              lambda s: s._replace(lp=s.lp.at[p].set(jnp.maximum(0, s.lp[p] - a))), s))
     branches[OP_LABEL] = lambda s: adv(s._replace(
         ch_lab=jnp.where(b == 0, s.reg[ra].any().astype(I32), s.ch_lab),
-        ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t)))
+        ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t), ch_src_mv=src_retarget(s, b == 1, s.reg[ra])))
     branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
     return _switch(op, branches, s)
 
