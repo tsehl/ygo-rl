@@ -451,6 +451,9 @@ manquaient au moteur :
   de l'opérande). Il est posé par le générateur, Effect Veiler et Forbidden
   Chalice.
 
-Le traducteur refuse encore `Duel.NegateRelatedChain` (101 scripts officiels
-l'appellent) : c'est une cible facile, il suffit de poser `nrc` sur le MODIFY
-MC_DISABLE qui suit.
+Le traducteur accepte `Duel.NegateRelatedChain(tc, RESET_TURN_SET)` quand un
+EFFECT_DISABLE sur la même carte suit dans la même fonction : le MODIFY
+MC_DISABLE de cette carte reçoit `nrc`. Sinon la carte est refusée. Aucune des
+101 cartes concernées n'est débloquée pour autant : chacune bute d'abord sur un
+autre refus (en tête : « DISABLE avec valeur », 6 cartes ; puis DAMAGE_STEP sans
+StatChange et activation combinée, 4 chacune). Catalogue inchangé : 815.

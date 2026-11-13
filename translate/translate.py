@@ -1319,6 +1319,7 @@ class Translator:
         self.tinfo = {}  # SetTargetPlayer / SetTargetParam
         self.treg = None  # registre des cibles (SelectTarget)
         self.pending = []  # tests d'activation pas encore émis (fusionnés avec une sélection qui suit)
+        self.nrc = None  # registre d'un Duel.NegateRelatedChain en attente de son EFFECT_DISABLE
         self.hreg = self.egreg = None
         self.chain_field = self.chain_nact = False
         cost = Prog(self, "cost")
@@ -1399,7 +1400,9 @@ class Translator:
             self.cur_fn = fn
             return self.run_known(fn.name, prog)
         env = self.fn_env(fn.node)
+        self.nrc = None
         self.block(fn.node.body.body, env, prog)
+        need(self.nrc is None, "NegateRelatedChain sans EFFECT_DISABLE sur la même carte")
 
     def flush(self, prog):
         for chk in self.pending:
@@ -2368,6 +2371,13 @@ class Translator:
                 need(isinstance(n, int), f"{d} : valeur variable")
                 prog.emit(C.DAMAGE(p.p, n) if d == "Duel.Damage" else C.RECOVER(p.p, n))
             return n
+        if d == "Duel.NegateRelatedChain":
+            # maillons en cours de la carte annulés : bit nrc du MODIFY MC_DISABLE qui suit sur la même carte
+            need(len(args) == 2 and dotted(args[1]) == "RESET_TURN_SET", "NegateRelatedChain : reset")
+            obj = E_(0)
+            need(isinstance(obj, Reg) and not obj.handler and self.nrc is None, "NegateRelatedChain : carte")
+            self.nrc = obj.r
+            return None
         if d == "Duel.PayLPCost":
             p, n = E_(0), E_(1)
             need(isinstance(p, Player) and p.p == ME and isinstance(n, int), "PayLPCost")
@@ -2569,7 +2579,10 @@ class Translator:
             if prog.ins and prog.ins[-1][0] == core.OP_MODIFY and prog.ins[-1][1] == reg.r and \
                     (prog.ins[-1][2] & 31) == core.MC_DISABLE:
                 return
-        prog.emit(C.MODIFY(reg.r, mc, val, mode=mode, dur=dur, rd=rd))
+        nrc = mc == core.MC_DISABLE and self.nrc is not None and self.nrc == reg.r
+        if nrc:
+            self.nrc = None
+        prog.emit(C.MODIFY(reg.r, mc, val, mode=mode, dur=dur, rd=rd, nrc=nrc))
 
 
 # EFFECT_DISABLE_EFFECT : compagnon d'EFFECT_DISABLE (même MODIFY)
