@@ -253,6 +253,16 @@ def init(k, d=128, card_layers=2, layers=3):
                 v1=dense_init(ks[6], d, d), v2=dense_init(ks[7], d, 1, 0.01), **deck_init(ks[1], d))
 
 
+def complete(p):
+    """Paramètres d'avant le deck restant (2026-11-12) : deck1 / deck2 nuls. La sortie est identique (deck2 nul), et la
+    structure est celle des paramètres actuels : un adversaire ancien partage les compilations du réseau entraîné."""
+    if "deck1" in p:
+        return p
+    d = p["glob"]["w"].shape[1]
+    z = lambda: dict(w=jnp.zeros((d, d), p["glob"]["w"].dtype), b=jnp.zeros(d, p["glob"]["w"].dtype))
+    return dict(p, deck1=z(), deck2=z())
+
+
 def deck_init(k, d):
     """Encodeur du deck restant ; deck2 nul au départ (aucun effet tant qu'il n'a rien appris)."""
     return dict(deck1=dense_init(jax.random.fold_in(k, 101), d, d), deck2=dense_init(k, d, d, 0.0))
