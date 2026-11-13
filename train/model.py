@@ -253,6 +253,27 @@ def init(k, d=128, card_layers=2, layers=3):
                 v1=dense_init(ks[6], d, d), v2=dense_init(ks[7], d, 1, 0.01), **deck_init(ks[1], d))
 
 
+def complete(p):
+    """Met d'anciens paramètres à la structure et aux formes actuelles, sans changer la sortie :
+    - avant le deck restant (2026-11-12) : deck1 / deck2 nuls (deck2 nul, contribution nulle) ;
+    - entrées plus courtes (features ajoutées en fin : dyn, head, eff, ins, filt, matf) : lignes nulles en fin de poids,
+      même produit que la troncature des features faite dans policy / encode.
+    Un adversaire ancien partage alors les compilations du réseau entraîné."""
+    def pad(q, n):
+        w = q["w"]
+        return q if w.shape[0] >= n else dict(q, w=jnp.concatenate([w, jnp.zeros((n - w.shape[0],) + w.shape[1:], w.dtype)]))
+    p = dict(p, dyn=pad(p["dyn"], F_DYN))
+    c = dict(p["cards"])
+    for k, n in dict(head=F_HEAD, eff=F_EFF, ins=F_INS, filt=F_FILT, matf=F_FILT).items():
+        c[k] = pad(c[k], n)
+    p["cards"] = c
+    if "deck1" in p:
+        return p
+    d = p["glob"]["w"].shape[1]
+    z = lambda: dict(w=jnp.zeros((d, d), p["glob"]["w"].dtype), b=jnp.zeros(d, p["glob"]["w"].dtype))
+    return dict(p, deck1=z(), deck2=z())
+
+
 def deck_init(k, d):
     """Encodeur du deck restant ; deck2 nul au départ (aucun effet tant qu'il n'a rien appris)."""
     return dict(deck1=dense_init(jax.random.fold_in(k, 101), d, d), deck2=dense_init(k, d, d, 0.0))

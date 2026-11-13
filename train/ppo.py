@@ -80,6 +80,13 @@ def parse():
     ap.add_argument("--mix-old", type=float, default=0.0, help="part des parties contre une ancienne version (ligue)")
     ap.add_argument("--league-every", type=int, default=10, help="une version ajoutée à la ligue toutes les X itérations")
     ap.add_argument("--league-size", type=int, default=5)
+    ap.add_argument("--init", default="", help="paramètres de départ (pickle) au lieu d'une initialisation aléatoire ; "
+                    "l'optimiseur repart de zéro")
+    ap.add_argument("--it0", type=int, default=0, help="première itération (reprise : banques, instantanés et ligne de log suivent)")
+    ap.add_argument("--eval-first", action="store_true", help="évaluation complète aussi après la première itération (vérifie "
+                    "tous les chemins dès le début)")
+    ap.add_argument("--precompile", type=int, default=0,
+                    help="compile d'avance les fonctions lourdes avec X fils en parallèle (0 : à la volée ; mémoire : ~X fois le pic)")
     ap.add_argument("--prof", type=int, default=0, help="à la fin : chronométrer act, step_batch, act_step... X fois sur l'état du rollout")
     return ap.parse_args()
 
@@ -388,13 +395,76 @@ def real_bench(a, env, fns, params, key, kind, oparams=None, pre="real", greedy=
     return out
 
 
+def precompile(a, env, eval_env, fns, params, opt_state, side_tr, opp_tr, n):
+    """Compile d'avance, n à la fois, les fonctions lourdes aux formes exactes du run : act_step d'entraînement et
+    d'évaluation (moteur complet), parties neuves, valeurs, GAE, mise à jour. Le traçage reste séquentiel (Python) ; la
+    compilation XLA libère le GIL, d'où le parallélisme. Les exécutables vont dans le cache persistant (core.py) où les
+    vrais appels les retrouvent ; temps total ≈ la plus longue compilation au lieu de la somme.
+    opp_tr : adversaire de l'entraînement, sous la forme passée à act_step."""
+    from concurrent.futures import ThreadPoolExecutor
+    act, values, act_step, gae, update, enc, obs_b = fns
+    t0 = time.time()
+    cset, bank = bank_of(a.eval_bank, a)
+    tok, msk = model.card_tokens(bank)
+    sds = lambda t: jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, weak_type=getattr(x, "weak_type", False)), t)
+    cemb = sds(jax.eval_shape(enc, params, tok, msk))
+    key = jax.random.PRNGKey(0)
+    jobs = []
+    banks = [bank]
+    if a.bench_every:
+        import realcards
+        if not _REAL:
+            _REAL["v"] = realcards.load()
+        rb = _REAL["v"][0]
+        if jax.tree.map(lambda x: (x.shape, x.dtype), rb) != jax.tree.map(lambda x: (x.shape, x.dtype), bank):
+            banks.append(rb)
+    for e in ([env] if eval_env is env else [env, eval_env]):
+        d, x = cardgen.random_decks(cset, np.random.default_rng(0), e.b)
+        ga = (bank, jnp.asarray(d), jnp.asarray(x), jax.random.split(key, e.b))
+        jobs.append((f"parties neuves B={e.b}", e.new, ga))
+        s, m = sds(jax.eval_shape(e.new, *ga))
+        f = jax.ShapeDtypeStruct((e.b,), jnp.int32)
+        side = jax.ShapeDtypeStruct((e.b,), jnp.int32)
+        for i, bk in enumerate(banks if e is eval_env else []):
+            jobs.append((f"act_step éval B={e.b} banque {i}", act_step,
+                         (params, cemb, bk, s, m, f, key, side, s, m, jax.ShapeDtypeStruct((e.b,), bool),
+                          (params, cemb, jnp.asarray(1)), jnp.asarray(False))))
+        if e is env:
+            tr_args = (params, cemb, bank, s, m, f, key, side_tr, s, m, jax.ShapeDtypeStruct((e.b,), bool),
+                       opp_tr, jnp.asarray(False))
+            jobs.append((f"act_step entraînement B={e.b}", act_step, tr_args))
+            out = jax.eval_shape(act_step, *tr_args)
+            tr, done, win = out[4], out[5], out[6]
+            jobs.append(("valeurs", values, (params, cemb, bank, s, m)))
+            last = jax.eval_shape(values, params, cemb, bank, s, m)
+            st = lambda x: jax.ShapeDtypeStruct((a.steps,) + x.shape, x.dtype)
+            jobs.append(("gae", gae, (st(tr["v"]), st(tr["need"]), st(tr["pl"]), st(done), st(win), last)))
+            mb = jax.tree.map(lambda x: jax.ShapeDtypeStruct((a.steps, e.b // a.mb) + x.shape[1:], x.dtype), tr)
+            mb["adv"] = mb["ret"] = jax.ShapeDtypeStruct((a.steps, e.b // a.mb), jnp.float32)
+            jobs.append(("mise à jour", update, (params, opt_state, tok, msk, mb)))
+    low = []
+    for name, fn, args in jobs:
+        t1 = time.time()
+        low.append((name, fn.lower(*args)))
+        print(f"précompilation : {name} tracé ({time.time() - t1:.0f} s)", flush=True)
+
+    def comp(x):
+        t1 = time.time()
+        x[1].compile()
+        return x[0], time.time() - t1
+    with ThreadPoolExecutor(n) as ex:
+        for name, dt in ex.map(comp, low):
+            print(f"précompilation : {name} compilé ({dt:.0f} s)", flush=True)
+    print(f"précompilation : {len(jobs)} fonctions en {time.time() - t0:.0f} s ({n} fils)", flush=True)
+
+
 def load_params(path):
-    """Paramètres sauvegardés (pickle, éventuellement gzip, f16 ou f32) → f32."""
+    """Paramètres sauvegardés (pickle, éventuellement gzip, f16 ou f32) → f32, complétés (model.complete)."""
     import gzip
     import pickle
     with (gzip.open if path.endswith(".gz") else open)(path, "rb") as fh:
         p = pickle.load(fh)
-    return jax.tree.map(lambda x: jnp.asarray(x, jnp.float32), p)
+    return model.complete(jax.tree.map(lambda x: jnp.asarray(x, jnp.float32), p))
 
 
 def fmt(ev):
@@ -409,15 +479,18 @@ def main():
     rng = np.random.default_rng(a.seed)
     print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; B={a.b} steps={a.steps} d={a.d}", flush=True)
     params = model.init(jax.random.fold_in(key, 0), a.d, a.card_layers, a.layers)
+    if a.init:
+        params = load_params(a.init)
+        print("départ :", a.init, flush=True)
     print("paramètres :", sum(x.size for x in jax.tree.leaves(params)), flush=True)
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt_state = opt.init(params)
     ref = load_params(a.ref_ckpt) if a.ref_ckpt else None
-    snaps = {0: params}                                # versions passées pour l'évaluation (itération → paramètres)
+    snaps = {a.it0: params}                                # versions passées pour l'évaluation (itération → paramètres)
     env = Env(a.b, a.frac, a.decks)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
     fns = act, values, act_step, gae, update, enc, obs_b = make_fns(a, opt)
-    bank_seed = a.seed * 100_000
+    bank_seed = a.seed * 100_000 + a.it0 // a.bank_every
     tot_dec, tot_games = 0, 0
     # adversaires par emplacement du lot, fixes pour tout le run : self-play (side -1), heuristique à style (kind 3)
     # ou ancienne version de la ligue (kind 1) ; le réseau joue le côté b % 2 de ces parties
@@ -430,7 +503,11 @@ def main():
     league = [params]
     key, k = jax.random.split(key)
     sty = sample_style(k, a.b)
-    for it in range(a.iters):
+    if a.precompile:
+        ce = jax.eval_shape(enc, params, *model.card_tokens(bank_of(a.eval_bank, a)[1]))
+        opp_tr = (params, ce, kind_tr, sty) if a.mix_heur + a.mix_old > 0 else (params, ce, jnp.asarray(0))
+        precompile(a, env, eval_env, fns, params, opt_state, side_tr, opp_tr, a.precompile)
+    for it in range(a.it0, a.iters):
         t0 = time.time()
         t_games = 0.0                         # parties neuves : decks NumPy + new_game + legal (hors boucle comprise)
 
@@ -442,7 +519,7 @@ def main():
             jax.block_until_ready(r)
             return r, time.time() - t1
 
-        if it % a.bank_every == 0:
+        if it % a.bank_every == 0 or it == a.it0:
             cset, bank = bank_of(bank_seed, a, a.gen_revive, a.arch)
             bank_seed += 1
             tok, msk = model.card_tokens(bank)
@@ -512,7 +589,8 @@ def main():
         line = (f"it {it} : {nd} décisions ({nd / (time.time() - t0):.0f}/s), {ng} parties finies ({time.time() - t0:.1f} s ; "
                 f"rollout {t_roll:.1f} s, dont parties neuves {t_games:.1f} s, act_step {t_loop:.1f} s = "
                 f"{1000 * t_loop / a.steps:.0f} ms/appel) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
-        if a.eval_every and (it + 1) % a.eval_every == 0:
+        first = a.eval_first and it == a.it0
+        if a.eval_every and ((it + 1) % a.eval_every == 0 or first):
             key, k1, k2, k3 = jax.random.split(key, 4)
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k1, 0, pre="rnd"))
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k2, 2, pre="heur"))
@@ -525,7 +603,7 @@ def main():
             if ref is not None:
                 key, k5 = jax.random.split(key)
                 line += " | " + fmt(evaluate(a, eval_env, fns, params, k5, 1, ref, pre="ref", struct=True))
-            if a.bench_every and (it + 1) % a.bench_every == 0:
+            if a.bench_every and ((it + 1) % a.bench_every == 0 or first):
                 key, k1, k2 = jax.random.split(key, 3)
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k1, 0, pre="vrai_rnd"))
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k2, 2, pre="vrai_heur"))
