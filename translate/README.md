@@ -393,3 +393,36 @@ Lua, à formes de banques fixes.
 
 Catalogue : **701 / 13 541**, avec Sealing Ceremony of Mokuton et aucune perte.
 [Scénarios, coût et validation](../notes/codex-pieges-compteurs-2026-11-07.md).
+
+## Équipement (2026-11-13)
+
+Moteur : relation d'équipement `eq_t` (cible, -1 sinon) et `eq_mv` (horloge de
+l'équipement, pour reconnaître une cible qui a bougé puis est revenue). Brique
+`OP_EQUIP` (Duel.Equip : cible recto en zone monstre, équipement encore en zone
+magie/piège et non déplacé depuis le chargement du maillon). Les effets
+`EFFECT_TYPE_EQUIP` sont des effets continus en zone magie/piège dont la cible
+est le monstre équipé (`cont(..., tgt=EQUIPPED)`, `M_SELF = M_EQUIP`).
+`drop_equips` (appelé par `refresh` et `dmg_send`, comme `drop_overlays`)
+envoie au cimetière, raison RULE + LOST_TARGET + DESTROY, un équipement dont la
+cible a quitté le terrain, est passée face verso ou a bougé. Une magie
+d'équipement activée restée sans cible (cible partie avant la résolution) part
+au cimetière en fin de chaîne (ST_LEAVE). Banque sans équipement : largeur 0,
+chemin éliminé au traçage. `compare.py` compare la cible d'équipement
+(QUERY_EQUIP_CARD côté oracle).
+
+Traducteur : `aux.AddEquipProcedure(c[, p[, f]])` (aussi sous la forme
+`local e=aux.AddEquipProcedure(...)`, l'effet rendu restant inutilisable), filtre
+sur des propriétés fixes seulement, et effets `EFFECT_TYPE_EQUIP` continus.
+`aux.FilterBoolFunction` / `FaceupFilter` / `TargetBoolFunction` n'appliquent
+plus les arguments d'appel au filtre interne (le Lua les ignore).
+
+Limites connues : la limite d'équipement n'est pas revérifiée à l'ajustement
+(sans objet tant que le filtre est fixe), `EVENT_EQUIP` n'est pas levé, la
+relation n'est pas visible par le réseau (seulement ses effets sur l'ATK).
+
+Validation : 12/12 (graines 5000-5011, les 6 cartes d'équipement traduites) et
+20/20 (graines 5100-5119, avec Typhon, Trou Noir, Renaissance, Force Miroir,
+Raigeki, Prison Dimensionnelle, Trappe). Catalogue **773 / 13 541** ; seulement
+6 / 250 magies d'équipement : refus suivants « plus de 2 effets » (31),
+arguments supplémentaires de la procédure (26), `GetEquipTarget` (13),
+`SetUniqueOnField` (12).

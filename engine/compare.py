@@ -64,7 +64,8 @@ def jax_snapshot(bank, s):
     def card(i):  # (code, pos, atk, def) + matériaux Xyz attachés s'il y en a (comme l'instantané de l'oracle)
         ov = np.where((s.zone == core.Z_OVERLAY) & (s.ov_par == i))[0]
         ov = tuple(int(code[j]) for j in ov[np.argsort(s.seq[ov])])
-        return (int(code[i]), int(s.pos[i]), int(atk[i]), int(df[i])) + ((ov,) if ov else ())
+        eq = (("eq", int(s.ctrl[s.eq_t[i]]), int(s.seq[s.eq_t[i]])),) if s.eq_t[i] >= 0 else ()
+        return (int(code[i]), int(s.pos[i]), int(atk[i]), int(df[i])) + ((ov,) if ov else ()) + eq
     for p in (0, 1):
         for name, z in ZNAME.items():
             idx = np.where((s.zone == z) & (s.ctrl == p))[0]

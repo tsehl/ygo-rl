@@ -351,7 +351,7 @@ class Duel:
     # -------------------------------------------------- état
 
     QFLAGS = (K["QUERY_CODE"] | K["QUERY_POSITION"] | K["QUERY_ATTACK"] | K["QUERY_DEFENSE"]
-              | K["QUERY_LEVEL"] | K["QUERY_OWNER"] | K["QUERY_OVERLAY_CARD"])
+              | K["QUERY_LEVEL"] | K["QUERY_OWNER"] | K["QUERY_OVERLAY_CARD"] | K["QUERY_EQUIP_CARD"])
 
     def query(self, con, loc):
         q = QueryInfo(self.QFLAGS, con, loc, 0, 0)
@@ -380,6 +380,9 @@ class Duel:
                 elif flag == K["QUERY_OVERLAY_CARD"]:  # matériaux Xyz attachés : nombre puis codes
                     k = int.from_bytes(raw[:4], "little")
                     card["ov"] = tuple(int.from_bytes(raw[4 + 4 * i:8 + 4 * i], "little") for i in range(k))
+                elif flag == K["QUERY_EQUIP_CARD"]:  # monstre équipé : contrôleur, zone, case (zone 0 : aucun)
+                    if raw[1]:
+                        card["eq"] = ("eq", raw[0], int.from_bytes(raw[2:6], "little"))
                 size = r.take("H")
             out.append(card)
         return out
@@ -391,6 +394,7 @@ class Duel:
             for loc, name in LOCS.items():
                 cards = self.query(pl, loc)
                 s[(pl, name)] = [None if c is None else (c["code"], c["pos"], c["atk"], c["def"]) + ((c["ov"],) if c.get("ov") else ())
+                                 + ((c["eq"],) if c.get("eq") else ())
                                  for c in cards]
         return s
 

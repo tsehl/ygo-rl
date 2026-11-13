@@ -104,6 +104,7 @@ def FUSMAT(dst, src): return (OP_FUSMAT, dst, src, 0)     # matériaux du monstr
 def RITMAT(dst, src, mode): return (OP_RITMAT, dst, src, mode)  # libérations du monstre rituel de src (RIT_*), une par une
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
 def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
+def EQUIP(r): return (core.OP_EQUIP, r, 0, 0)  # Duel.Equip : la carte équipe la cible du registre r (recto, zone monstres)
 
 
 def ritual_spell(code, mode):
@@ -145,16 +146,21 @@ def quick(rng, cost=(), target=(), resolve=(), opt=False, on=0, dmg=0):
     return (K_QUICK, on, int(opt), rng, cost, target, resolve, dict(dmg=dmg))
 
 
+EQUIPPED = "equipped"  # cible d'un effet continu : le monstre équipé (EFFECT_TYPE_EQUIP)
+
+
 def cont(rng, code, val, tgt=None, per=None, tp=0, ph=0, cnt=None):
     """Effet continu appliqué tant que la carte est recto dans les zones rng : code MC_*, valeur val (× nombre de
     cartes du filtre per), sur les monstres recto du filtre tgt (EFFECT_TYPE_FIELD, zones relatives au contrôleur de
     la carte) ou sur la carte elle-même (tgt=None : SINGLE_RANGE). Conditions : tour de tp (ME + 1 / OPP + 1),
     phases ph, cnt = (filtre, min, max) sur le nombre de cartes du filtre."""
     assert per is None or cnt is None  # un seul filtre de compte (filtre 1)
-    mod = {M_CODE: code, M_SELF: int(tgt is None), M_VAL: val, M_PER: int(per is not None), M_TP: tp, M_PH: ph}
+    equipped = isinstance(tgt, str) and tgt == EQUIPPED
+    mod = {M_CODE: code, M_SELF: core.M_EQUIP if equipped else int(tgt is None), M_VAL: val, M_PER: int(per is not None),
+           M_TP: tp, M_PH: ph}
     if cnt is not None:
         mod.update({M_CNT: 1, M_CMIN: cnt[1], M_CMAX: cnt[2]})
-    filters = [tgt or F(), per or (cnt[0] if cnt else F())]
+    filters = [F() if equipped or tgt is None else tgt, per or (cnt[0] if cnt else F())]
     return (K_CONT, 0, 0, rng, (), (), (), dict(mod=mod, filters=filters))
 
 
@@ -353,6 +359,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
     edmg = np.zeros((c, E), np.int32)
     einline = np.zeros((c, E), np.int32)
     erefund = np.zeros((c, E), np.int32)
+    equip = np.zeros(c, np.int32)  # Duel.Equip ou effet EFFECT_TYPE_EQUIP
     for i, code in enumerate(codes):
         for e, (kind, on, opt, rng, *progs) in enumerate(cards.get(code, ())):
             ekind[i, e] = kind
@@ -368,6 +375,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
             fl = list(extra.get("filters", ()))  # effets continus : filtres 0 (cibles), 1 (compte ou condition)
             for k, v in extra.get("mod", {}).items():
                 emod[i, e, k] = v
+            equip[i] |= extra.get("mod", {}).get(M_SELF) == core.M_EQUIP
             if extra.get("mod", {}).get(M_CODE) == core.MC_FUS_SUB:
                 subzone[i] |= rng
             for g, pr in enumerate(progs):
@@ -379,6 +387,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                             fl.append(b)
                         b = fl.index(b)
                     prog[i, e, g, j] = (op, a, b, cc)
+                    equip[i] |= op == core.OP_EQUIP
             assert len(fl) <= NF, code
             for j, f in enumerate(fl):
                 filt[i, e, j] = f
@@ -423,7 +432,7 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                 einline=einline if einline.any() else np.zeros((c, 0), np.int32),
                 erefund=erefund if erefund.any() else np.zeros((c, 0), np.int32),
                 fmat=fmat, fmn=fmn, fsub=fsub, submat=(subzone[:, None] if subzone.any() else np.zeros((c, 0), np.int32)), erl=erl, smat=smat, syn=syn, xmat=xmat, xct=xct, lmat=lmat, lmin=lmin, lmax=lmax,
-                lneed=lneed, ldiff=ldiff)
+                lneed=lneed, ldiff=ldiff, equip=equip[:, None] if equip.any() else np.zeros((c, 0), np.int32))
 
 
 def setcodes(sc):
