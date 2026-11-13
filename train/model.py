@@ -24,7 +24,7 @@ import jax.numpy as jnp
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine"))
 import core  # noqa: E402
-from core import E, P, NF, FW, MW, NSET, FK, NV, N_SPECIAL, CH  # noqa: E402
+from core import P, NF, FW, MW, NSET, FK, NV, N_SPECIAL, CH, V_ACT0  # noqa: E402
 
 NBITS = 16
 N_OPS = 32
@@ -160,13 +160,25 @@ def card_enc_init(k, d, layers):
     return dict(head=dense_init(ks[0], F_HEAD, d), eff=dense_init(ks[1], F_EFF, d), kind=jax.random.normal(ks[2], (N_KIND, d)) * 0.1,
                 ins=dense_init(ks[3], F_INS, d), op=jax.random.normal(ks[4], (N_OPS, d)) * 0.1,
                 filt=dense_init(ks[5], F_FILT, d), matf=dense_init(ks[6], F_FILT, d),
-                pos_e=jax.random.normal(ks[7], (E, d)) * 0.1, pos_g=jax.random.normal(ks[8], (3, d)) * 0.1,
+                pos_e=jax.random.normal(ks[7], (E_MAX, d)) * 0.1, pos_g=jax.random.normal(ks[8], (3, d)) * 0.1,
                 pos_i=jax.random.normal(ks[9], (P, d)) * 0.1, pos_f=jax.random.normal(ks[10], (NF, d)) * 0.1,
                 pos_m=jax.random.normal(ks[11], (N_MATF, d)) * 0.1,
                 blocks=[block_init(ks[12 + i], d, 4) for i in range(layers)], out=ln_init(d))
 
 
-LC = 48   # tokens utiles gardés par carte (en-tête compris) ; ~8 en moyenne, 33 au plus sur 30 banques, 26 vraies cartes
+E_MAX = 16  # positions d'effet apprises (pos_e) : borne de core.E, le reste du réseau ne dépend pas de E
+
+
+def pos_e_rows(pe, n):
+    """n premières positions d'effet ; anciens checkpoints (pos_e [2, d]) : lignes suivantes tirées d'une clé fixe,
+    utilisées seulement par des effets qui n'existaient pas pour eux."""
+    if pe.shape[0] >= n:
+        return pe[:n]
+    extra = jax.random.normal(jax.random.PRNGKey(7), (n - pe.shape[0], pe.shape[1])) * 0.1
+    return jnp.concatenate([pe, extra.astype(pe.dtype)])
+
+
+LC = 64   # tokens utiles gardés par carte (en-tête compris) ; E = 4 : ~9 en moyenne, 46 au plus sur 10 banques (48 avant)
 
 
 def n_tokens(msk):
@@ -176,12 +188,13 @@ def n_tokens(msk):
 
 
 def encode_cards(p, tok, msk, heads=4):
-    """[C, d] : un vecteur par carte (sortie du token d'en-tête).
+    """[C, 1 + E, d] : par carte, la sortie du token d'en-tête puis celle de chaque token d'effet (zéro pour un effet
+    vide ou coupé). La politique score l'activation d'un effet depuis son token : aucun poids ne dépend de E.
     Sur les 91 tokens possibles, ~8 sont utiles : ils sont regroupés en tête (tri stable, l'en-tête reste premier) et la
     séquence est coupée à LC avant le transformer. Les positions sont ajoutées avant ; le résultat est le même que sur
     les 91 tokens tant qu'aucune carte n'a plus de LC tokens utiles."""
-    C = tok["head"].shape[0]
-    pe = p["pos_e"]
+    C, NE = tok["ekind"].shape
+    pe = pos_e_rows(p["pos_e"], NE)
     # Les anciens checkpoints précèdent les FK permissions de substitution.
     # Les checkpoints antérieurs au 2026-11-11 n'ont pas les NUM features numériques de fin d'en-tête.
     head = tok["head"]
@@ -216,7 +229,12 @@ def encode_cards(p, tok, msk, heads=4):
     m = jnp.take_along_axis(m, order, 1)
     for b in p["blocks"]:
         x = block(b, x, m, heads)
-    return ln(p["out"], x[:, 0]).astype(jnp.float32)
+    x = ln(p["out"], x).astype(jnp.float32) * m[..., None]
+    # retour aux positions d'origine : en-tête (0) puis effets (1..E) ; les tokens coupés restent nuls
+    full = jnp.zeros((C, 1 + NE, x.shape[-1]), x.dtype)
+    keep = order <= NE
+    full = full.at[jnp.arange(C)[:, None], jnp.where(keep, order, 1 + NE)].set(x, mode="drop")
+    return full
 
 
 # ---------------------------------------------------------------------------------------------------- politique
@@ -249,7 +267,7 @@ def init(k, d=128, card_layers=2, layers=3):
     return dict(cards=card_enc_init(ks[0], d, card_layers), unk=jax.random.normal(ks[1], (d,)) * 0.1,
                 dyn=dense_init(ks[2], F_DYN, d), glob=dense_init(ks[3], F_GLOB, d),
                 blocks=[block_init(ks[8 + i], d, 4) for i in range(layers)], out=ln_init(d),
-                act=dense_init(ks[4], d, NV, 0.01), spec=dense_init(ks[5], d, N_SPECIAL, 0.01),
+                act=dense_init(ks[4], d, V_ACT0 + 1, 0.01), **eff_head_init(ks[4], d), spec=dense_init(ks[5], d, N_SPECIAL, 0.01),
                 v1=dense_init(ks[6], d, d), v2=dense_init(ks[7], d, 1, 0.01), **deck_init(ks[1], d))
 
 
@@ -267,11 +285,29 @@ def complete(p):
     for k, n in dict(head=F_HEAD, eff=F_EFF, ins=F_INS, filt=F_FILT, matf=F_FILT).items():
         c[k] = pad(c[k], n)
     p["cards"] = c
+    w = p["act"]["w"]
+    if w.shape[1] != V_ACT0 + 1:
+        # avant la tête par token d'effet (2026-11-13) : une colonne par numéro d'effet. Les verbes hors effet sont
+        # gardés ; l'activation part de la moyenne des anciennes colonnes d'effet (même score pour tous les effets
+        # d'une carte), le terme qui lit le token d'effet (eo) est nul : rien d'autre n'est inventé.
+        b = p["act"]["b"]
+        p = dict(p, act=dict(w=jnp.concatenate([w[:, :V_ACT0], w[:, V_ACT0:].mean(1, keepdims=True)], 1),
+                             b=jnp.concatenate([b[:V_ACT0], b[V_ACT0:].mean(keepdims=True)])))
+    if "eq" not in p:
+        d = w.shape[0]
+        p = dict(p, **jax.tree.map(lambda x: x.astype(w.dtype), eff_head_init(jax.random.PRNGKey(11), d)))
     if "deck1" in p:
         return p
     d = p["glob"]["w"].shape[1]
     z = lambda: dict(w=jnp.zeros((d, d), p["glob"]["w"].dtype), b=jnp.zeros(d, p["glob"]["w"].dtype))
     return dict(p, deck1=z(), deck2=z())
+
+
+def eff_head_init(k, d):
+    """Activation de l'effet e de la carte du token t : act[:, V_ACT0](x_t) (commun à tous les effets) +
+    eo(gelu(eq(x_t) + ek(effet_e))). eo nul au départ."""
+    k1, k2 = jax.random.split(jax.random.fold_in(k, 202))
+    return dict(eq=dense_init(k1, d, d), ek=dense_init(k2, d, d), eo=dense_init(k, d, 1, 0.0))
 
 
 def deck_init(k, d):
@@ -281,7 +317,7 @@ def deck_init(k, d):
 
 def deck_feats(p, cemb, o):
     """[.., d] : somme sur son deck restant de MLP(vecteur de carte), / 20."""
-    e = cemb[jnp.clip(o.deck, 0, cemb.shape[0] - 1)]
+    e = cemb[jnp.clip(o.deck, 0, cemb.shape[0] - 1), 0]
     h = jax.nn.gelu(dense(p["deck1"], e)) * (o.deck >= 0)[..., None]
     return dense(p["deck2"], h.sum(-2) / 20)
 
@@ -294,7 +330,8 @@ def policy(p, cemb, o, heads=4):
         dyn = dyn[..., :p["dyn"]["w"].shape[0]]
     elif p["dyn"]["w"].shape[0] != F_DYN:
         raise ValueError("dimension dynamique de checkpoint incompatible")
-    x = jnp.where(known, cemb[jnp.clip(o.cid, 0, cemb.shape[0] - 1)], p["unk"]) + dense(p["dyn"], dyn)
+    cid = jnp.clip(o.cid, 0, cemb.shape[0] - 1)
+    x = jnp.where(known, cemb[cid, 0], p["unk"]) + dense(p["dyn"], dyn)
     g = dense(p["glob"], glob_feats(o))
     if "deck1" in p:  # checkpoints antérieurs au 2026-11-12 : sans
         g = g + deck_feats(p, cemb, o)
@@ -304,7 +341,12 @@ def policy(p, cemb, o, heads=4):
     for b in p["blocks"]:
         x = block(b, x, m, heads)
     x = ln(p["out"], x)
-    la = dense(p["act"], x[..., 1:, :])                               # [.., T, NV]
+    xt = x[..., 1:, :]
+    base = dense(p["act"], xt)                                        # [.., T, V_ACT0 + 1]
+    ee = jnp.where(known[..., None], cemb[cid, 1:], 0.0)              # [.., T, E, d]
+    h = jax.nn.gelu(dense(p["eq"], xt)[..., None, :] + dense(p["ek"], ee.astype(xt.dtype)))
+    le = base[..., V_ACT0:] + dense(p["eo"], h)[..., 0]               # [.., T, E]
+    la = jnp.concatenate([base[..., :V_ACT0], le], -1)                # [.., T, NV]
     ls = dense(p["spec"], x[..., 0, :])                               # [.., N_SPECIAL]
     logits = jnp.concatenate([la.reshape(la.shape[:-2] + (-1,)), ls], -1)
     legal = jnp.concatenate([o.act.reshape(o.act.shape[:-2] + (-1,)), o.special], -1)

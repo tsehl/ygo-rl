@@ -16,6 +16,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(HERE, "..", d) for d in ("engine", "gen", "oracle")]
 PATH = os.path.join(HERE, "realbank.npz")
 C_PAD = 480  # cartes d'une banque procédurale (ppo.py : --main 400 --extra 80)
+# champs de core.Bank dont l'axe 1 est l'effet (K_NONE = 0 : un effet nul est vide)
+E_FIELDS = ("ekind", "prog", "tprog", "filt", "etrig", "eopt", "erng", "emod", "edmg", "einline", "erefund")
 
 LINKS = [("Knightmare Phoenix", 1), ("Knightmare Cerberus", 1), ("LANphorhynchus", 1),
          ("Gaia Saber, the Lightning Shadow", 1), ("Traffic Ghost", 1), ("Berserker of the Tenyi", 1)]
@@ -109,7 +111,12 @@ def load(path=PATH):
     c = z["bank_code"].shape[0]
     # champs optionnels ajoutés après la création du fichier : largeur 0 (chemin éliminé au traçage)
     get = lambda k: z["bank_" + k] if "bank_" + k in z else np.zeros((c, 0), np.int32)
-    bank = core.Bank(**{k: jnp.asarray(get(k)) for k in core.Bank._fields})
+
+    def fit(k, x):  # fichier créé avec moins d'effets par carte (core.E) : effets vides ajoutés
+        if k in E_FIELDS and 0 < x.shape[1] < core.E:
+            x = np.pad(x, [(0, 0), (0, core.E - x.shape[1])] + [(0, 0)] * (x.ndim - 2))
+        return x
+    bank = core.Bank(**{k: jnp.asarray(fit(k, get(k))) for k in core.Bank._fields})
     return bank, list(z["deck_names"]), z["main"], z["extra"]
 
 

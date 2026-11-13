@@ -52,8 +52,7 @@ ST_SUMMON_TURN, ST_ATTACKED, ST_FORM_CHANGED, ST_SEL = 1, 2, 4, 8  # ST_SEL : ch
 ST_SET_TURN, ST_LEAVE = 16, 32  # posée ce tour (magie/piège) ; activée, ira au cimetière en fin de chaîne
 ST_BDES = 64  # détruite au combat, part au cimetière à la fin du damage step (si elle est encore sur le terrain)
 ST_ON = 128  # magie/piège continue résolue : ses effets continus s'appliquent (STATUS_EFFECT_ENABLED)
-ST_CNT = 256  # ST_CNT << e : effet e déjà utilisé ce tour (SetCountLimit(1) sans code : par carte, effacé si elle bouge)
-ST_CNTN = 1024  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFFECT_FLAG_NO_TURN_RESET)
+# 256, 512, 1024, 2048 : libres (anciens ST_CNT / ST_CNTN à E = 2)
 ST_FLIP_TURN = 4096  # invoquée par flip ce tour (STATUS_FLIP_SUMMON_TURN)
 ST_SPSUM, ST_LINKSUM = 8192, 16384  # invoquée spécialement / par lien (IsSpecialSummoned, IsLinkSummoned) : tant
 # qu'elle reste sur le terrain
@@ -71,7 +70,6 @@ MOVE_REASON_EXPLICIT = 1 << 30
 
 ST_ACTDIS = 32768  # activation niée (STATUS_ACTIVATE_DISABLED) : un pendule va alors au cimetière, pas dans l'Extra Deck
 ST_PSTEP = 65536  # placée par l'invocation pendule en cours (EVENT_SPSUMMON du groupe à la fin)
-ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | ST_CNT | (ST_CNT << 1) | ST_FLIP_TURN
 # phases (= PHASE_* d'ygopro-core, telles que vues aux décisions)
 PH_DRAW, PH_STANDBY, PH_MAIN1, PH_BATTLE, PH_MAIN2, PH_END = 0x1, 0x2, 0x4, 0x8, 0x100, 0x200
 # décisions en attente (D_RUN : effet en cours d'exécution, interne au moteur)
@@ -125,7 +123,12 @@ HAND_LIMIT = 6
 N_MAIN_ZONES = 5
 
 # effets
-E = 2           # effets par carte
+E = 4           # effets par carte (forme des banques ; le réseau n'en dépend pas)
+# compteurs par effet dans les bits hauts de st (non publics, voir obs.ST_PUBLIC)
+ST_CNT = 1 << 17  # ST_CNT << e : effet e déjà utilisé ce tour (SetCountLimit(1) sans code : par carte, effacé si elle bouge)
+ST_CNTN = ST_CNT << E  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFFECT_FLAG_NO_TURN_RESET)
+assert 17 + 2 * E <= 31, "bits de st insuffisants pour E"
+ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | (ST_CNT * ((1 << E) - 1)) | ST_FLIP_TURN
 P = 12          # instructions par programme
 PT = 6          # instructions testées par programme de coût / cible (test_ok)
 R = 4           # registres ensembles
@@ -675,7 +678,9 @@ def attach(s, sel, par):
 
 
 def group_to_hand(bank, s, mask, reason=0):
-    """Renvoi en main ; un monstre de l'Extra Deck retourne dans l'Extra Deck (verso)."""
+    """Renvoi en main ; un monstre de l'Extra Deck retourne dans l'Extra Deck (verso). Une carte qui ira au cimetière
+    en fin de chaîne (ST_LEAVE = STATUS_LEAVE_CONFIRMED) reste : card::is_capable_send_to_hand."""
+    mask = mask & ((s.st & ST_LEAVE) == 0)
     ex = mask & ((bank.ctype[s.cid] & TYPE_EXTRA) != 0)
     return group_send(s, mask, Z_HAND, P_HAND, Z_EXTRA, P_FD_DEF, alt=ex, reason=reason)
 
@@ -2447,7 +2452,7 @@ def exec_one(bank, s):
         nb = jnp.where(op == OP_DRAW, jnp.clip(b, 0, s.cid.shape[0]), 0)
         return adv(lax.fori_loop(0, nb, lambda i, s: draw(s, q), s))
 
-    def modify(s):  # modificateur temporaire sur les cartes du registre a : b = MC_* | MV_* << 5 | TD_* << 9 | RD << 13
+    def modify(s):  # modificateur temporaire sur les cartes du registre a : b = MC_* | MV_* << 5 | TD_* << 9 | RD << 13 | NRC << 14
         j = jnp.minimum(s.tm_n, TM - 1)
         m = target(s) & (s.zone == Z_MZONE)
         kill = ((jnp.asarray(MC_KILL, I32)[b & 31] >> s.tm_code) & 1) != 0
@@ -2455,6 +2460,11 @@ def exec_one(bank, s):
         mode = (b >> 5) & 15
         # Lua x/2 est un flottant, arrondi par std::round dans effect::get_value : moitié supérieure
         v = jnp.where(mode == MV_HALF_BASE_ATK, (s.batk_c + 1) // 2, jnp.where(mode == MV_HALF_ATK, (s.atk_c + 1) // 2, c))
+        # NRC : Duel.NegateRelatedChain(tc) avant l'annulation : les maillons en cours de tc, encore liés à leur
+        # carte, sont annulés (EFFECT_DISABLE_CHAIN, gardé même si tc quitte ensuite le terrain)
+        src = jnp.maximum(s.lk_src, 0)
+        rel = (((b >> 14) & 1) != 0) & (jnp.arange(CH) < s.ch_k) & (s.lk_src >= 0) & m[src] & (s.mv[src] <= s.lk_t)
+        s = s._replace(lk_neg=s.lk_neg | rel)
         return adv(s._replace(tm_code=s.tm_code.at[j].set(b & 31), tm_m=s.tm_m.at[j].set(m),
                               tm_rd=s.tm_rd.at[j].set(((b >> 13) & 1) != 0),
                               tm_v=s.tm_v.at[j].set(jnp.where(m, v, 0)), tm_t=s.tm_t.at[j].set(s.clk + 1), clk=s.clk + 1,
@@ -2775,7 +2785,9 @@ def apply(bank, s, a):
     def sset(s):
         return s._replace(pend=c, zctx=_i(ZC_SSET), dec=_i(D_ZONE))
 
-    def activate(s, e):
+    def activate(s):
+        # une seule branche pour les E effets (e dynamique) : sous vmap, _switch calcule toutes ses branches
+        e = jnp.clip(verb - V_ACT0, 0, E - 1)
         p = s.dec_player
         # où reprendre une fois la chaîne résolue
         s = _switch(jnp.where(s.dec == D_IDLE, 0, jnp.where(s.dec == D_BATTLE, 1, jnp.where(s.wk == W_PHASE, 2, 3))), [
@@ -2785,7 +2797,7 @@ def apply(bank, s, a):
             s_id], s)
         s = s._replace(ch_eff=_i(e))
         from_hand = lambda s: s._replace(pend=c, zctx=_i(ZC_ACT), dec=_i(D_ZONE))
-        active = verb == V_ACT0 + e
+        active = (verb >= V_ACT0) & (verb < NV)
         flip = lambda s: begin_act(bank, s._replace(pos=s.pos.at[c].set(P_SFU)), c, e, enabled=active)
         card = bank.ekind[s.cid[c], e] == K_ACTIVATE  # activation de carte (pas un effet de monstre)
         return _switch(jnp.where(card & (s.zone[c] == Z_HAND), 0, jnp.where(card & (s.zone[c] == Z_SZONE), 1, 2)),
@@ -2906,9 +2918,9 @@ def apply(bank, s, a):
         ], s)
 
     s = _cond((s.dec == D_IDLE) | (s.dec == D_BATTLE), clear_ev, lambda s: s, s)
-    return _switch(jnp.minimum(verb, NV), [
+    return _switch(jnp.where(verb < V_ACT0, verb, jnp.where(verb < NV, V_ACT0, V_ACT0 + 1)), [
         lambda s: summon(s, False), lambda s: summon(s, True), repos, attack, select, sset,
-        *[lambda s, e=e: activate(s, e) for e in range(E)], spec], s)
+        activate, spec], s)
 
 
 MAX_ITER = 256
