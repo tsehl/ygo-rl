@@ -658,4 +658,4 @@ Voir `notes/codex-pieges-compteurs-2026-11-07.md`.
 | daaf5dc (E=2, équipement) | 9,8k / 9,9k | 12,8k / 12,8k |
 | 66d8ea4 (E=4, branche d'activation unique) | 9,0k / 9,0k | 12,2k / 12,2k |
 
-E=4 coûte −9 % à B=1024 et −5 % à B=4096. Regrouper les branches d'activation en une seule branche à effet dynamique n'a pas rendu le coût indépendant de E : les tableaux par effet (compteurs, tests d'activation) grandissent quand même.
+E=4 coûte −9 % à B=1024 et −5 % à B=4096. Regrouper les branches d'activation en une seule branche à effet dynamique n'a pas rendu le coût indépendant de E. Hypothèse non vérifiée : les tableaux par effet (compteurs, tests d'activation) grandissent quand même ; à confirmer par profilage avant d'optimiser.
