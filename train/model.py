@@ -254,8 +254,19 @@ def init(k, d=128, card_layers=2, layers=3):
 
 
 def complete(p):
-    """Paramètres d'avant le deck restant (2026-11-12) : deck1 / deck2 nuls. La sortie est identique (deck2 nul), et la
-    structure est celle des paramètres actuels : un adversaire ancien partage les compilations du réseau entraîné."""
+    """Met d'anciens paramètres à la structure et aux formes actuelles, sans changer la sortie :
+    - avant le deck restant (2026-11-12) : deck1 / deck2 nuls (deck2 nul, contribution nulle) ;
+    - entrées plus courtes (features ajoutées en fin : dyn, head, eff, ins, filt, matf) : lignes nulles en fin de poids,
+      même produit que la troncature des features faite dans policy / encode.
+    Un adversaire ancien partage alors les compilations du réseau entraîné."""
+    def pad(q, n):
+        w = q["w"]
+        return q if w.shape[0] >= n else dict(q, w=jnp.concatenate([w, jnp.zeros((n - w.shape[0],) + w.shape[1:], w.dtype)]))
+    p = dict(p, dyn=pad(p["dyn"], F_DYN))
+    c = dict(p["cards"])
+    for k, n in dict(head=F_HEAD, eff=F_EFF, ins=F_INS, filt=F_FILT, matf=F_FILT).items():
+        c[k] = pad(c[k], n)
+    p["cards"] = c
     if "deck1" in p:
         return p
     d = p["glob"]["w"].shape[1]
