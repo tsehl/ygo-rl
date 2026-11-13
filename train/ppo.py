@@ -80,6 +80,11 @@ def parse():
     ap.add_argument("--mix-old", type=float, default=0.0, help="part des parties contre une ancienne version (ligue)")
     ap.add_argument("--league-every", type=int, default=10, help="une version ajoutée à la ligue toutes les X itérations")
     ap.add_argument("--league-size", type=int, default=5)
+    ap.add_argument("--init", default="", help="paramètres de départ (pickle) au lieu d'une initialisation aléatoire ; "
+                    "l'optimiseur repart de zéro")
+    ap.add_argument("--it0", type=int, default=0, help="première itération (reprise : banques, instantanés et ligne de log suivent)")
+    ap.add_argument("--eval-first", action="store_true", help="évaluation complète aussi après la première itération (vérifie "
+                    "tous les chemins dès le début)")
     ap.add_argument("--precompile", type=int, default=0,
                     help="compile d'avance les fonctions lourdes avec X fils en parallèle (0 : à la volée ; mémoire : ~X fois le pic)")
     ap.add_argument("--prof", type=int, default=0, help="à la fin : chronométrer act, step_batch, act_step... X fois sur l'état du rollout")
@@ -474,15 +479,18 @@ def main():
     rng = np.random.default_rng(a.seed)
     print(f"jax {jax.__version__} {jax.devices()[0].device_kind} ; B={a.b} steps={a.steps} d={a.d}", flush=True)
     params = model.init(jax.random.fold_in(key, 0), a.d, a.card_layers, a.layers)
+    if a.init:
+        params = load_params(a.init)
+        print("départ :", a.init, flush=True)
     print("paramètres :", sum(x.size for x in jax.tree.leaves(params)), flush=True)
     opt = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(a.lr))
     opt_state = opt.init(params)
     ref = load_params(a.ref_ckpt) if a.ref_ckpt else None
-    snaps = {0: params}                                # versions passées pour l'évaluation (itération → paramètres)
+    snaps = {a.it0: params}                                # versions passées pour l'évaluation (itération → paramètres)
     env = Env(a.b, a.frac, a.decks)
     eval_env = env if a.eval_b == a.b else Env(a.eval_b, a.frac)
     fns = act, values, act_step, gae, update, enc, obs_b = make_fns(a, opt)
-    bank_seed = a.seed * 100_000
+    bank_seed = a.seed * 100_000 + a.it0 // a.bank_every
     tot_dec, tot_games = 0, 0
     # adversaires par emplacement du lot, fixes pour tout le run : self-play (side -1), heuristique à style (kind 3)
     # ou ancienne version de la ligue (kind 1) ; le réseau joue le côté b % 2 de ces parties
@@ -499,7 +507,7 @@ def main():
         ce = jax.eval_shape(enc, params, *model.card_tokens(bank_of(a.eval_bank, a)[1]))
         opp_tr = (params, ce, kind_tr, sty) if a.mix_heur + a.mix_old > 0 else (params, ce, jnp.asarray(0))
         precompile(a, env, eval_env, fns, params, opt_state, side_tr, opp_tr, a.precompile)
-    for it in range(a.iters):
+    for it in range(a.it0, a.iters):
         t0 = time.time()
         t_games = 0.0                         # parties neuves : decks NumPy + new_game + legal (hors boucle comprise)
 
@@ -511,7 +519,7 @@ def main():
             jax.block_until_ready(r)
             return r, time.time() - t1
 
-        if it % a.bank_every == 0:
+        if it % a.bank_every == 0 or it == a.it0:
             cset, bank = bank_of(bank_seed, a, a.gen_revive, a.arch)
             bank_seed += 1
             tok, msk = model.card_tokens(bank)
@@ -581,7 +589,8 @@ def main():
         line = (f"it {it} : {nd} décisions ({nd / (time.time() - t0):.0f}/s), {ng} parties finies ({time.time() - t0:.1f} s ; "
                 f"rollout {t_roll:.1f} s, dont parties neuves {t_games:.1f} s, act_step {t_loop:.1f} s = "
                 f"{1000 * t_loop / a.steps:.0f} ms/appel) | " + " ".join(f"{k} {float(v):.3f}" for k, v in st.items()))
-        if a.eval_every and (it + 1) % a.eval_every == 0:
+        first = a.eval_first and it == a.it0
+        if a.eval_every and ((it + 1) % a.eval_every == 0 or first):
             key, k1, k2, k3 = jax.random.split(key, 4)
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k1, 0, pre="rnd"))
             line += " | " + fmt(evaluate(a, eval_env, fns, params, k2, 2, pre="heur"))
@@ -594,7 +603,7 @@ def main():
             if ref is not None:
                 key, k5 = jax.random.split(key)
                 line += " | " + fmt(evaluate(a, eval_env, fns, params, k5, 1, ref, pre="ref", struct=True))
-            if a.bench_every and (it + 1) % a.bench_every == 0:
+            if a.bench_every and ((it + 1) % a.bench_every == 0 or first):
                 key, k1, k2 = jax.random.split(key, 3)
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k1, 0, pre="vrai_rnd"))
                 line += " | " + fmt(real_bench(a, eval_env, fns, params, k2, 2, pre="vrai_heur"))
