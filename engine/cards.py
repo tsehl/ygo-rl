@@ -95,10 +95,10 @@ def LABEL(r, target=False): return (OP_LABEL, r, int(target), 0)            # e:
 def COND_LABEL(): return (OP_COND_LABEL, 0, 0, 0)   # à la résolution : le label est mis
 def YESNO(): return (OP_YESNO, 0, 0, 0)             # Duel.SelectYesNo : non arrête l'effet
 def LOCK(r): return (OP_LOCK, r, 0, 0)  # ME ne peut plus activer les effets des cartes de ce nom ce tour
-def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False):
+def MODIFY(r, code, val=0, mode=MV_CONST, dur=TD_TURN, rd=False, nrc=False):
     """MC_*, valeur val ou MV_* ; durée TD_* (fin du tour par défaut) ; rd : RESET_DISABLE (effet de la carte sur
-    elle-même, effacé si ses effets sont annulés)."""
-    return (OP_MODIFY, r, code | (mode << 5) | (dur << 9) | (int(rd) << 13), val)
+    elle-même, effacé si ses effets sont annulés) ; nrc : Duel.NegateRelatedChain des cartes juste avant."""
+    return (OP_MODIFY, r, code | (mode << 5) | (dur << 9) | (int(rd) << 13) | (int(nrc) << 14), val)
 def COND_PHASE(ph): return (OP_COND_PHASE, ph, 0, 0)      # pendant l'une des phases ph (masque PH_*)
 def FUSMAT(dst, src): return (OP_FUSMAT, dst, src, 0)     # matériaux du monstre fusion de src, choisis un par un
 def RITMAT(dst, src, mode): return (OP_RITMAT, dst, src, mode)  # libérations du monstre rituel de src (RIT_*), une par une
@@ -296,11 +296,11 @@ CARDS = {
     82732705: [act(cost=[PAY_LP(1000)]),                                                                   # Skill Drain
                cont(Z_SZONE, MC_DISABLE, 0, tgt=F(me=Z_MZONE, op=Z_MZONE, typ=TYPE_EFFECT))],
     25789292: [act(target=[FILTER(0, FACEUP_MON, tgt=True), CHOOSE(1, 0, 1)], dmg=STAT_DS,                 # Forbidden Chalice
-                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 400), MODIFY(2, MC_DISABLE)])],
+                   resolve=[FILTER(2, FACEUP_MON, within=1), MODIFY(2, MC_ATK, 400), MODIFY(2, MC_DISABLE, nrc=True)])],
     97268402: [quick(Z_HAND, cost=[COND_TURN(OPP), COND_PHASE(PH_MAIN1 | PH_MAIN2), SELF(0), MOVE(0)],         # Effect Veiler
                      target=[FILTER(1, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_EFFECT, nodis=1), tgt=True), CHOOSE(2, 1, 1)],
                      resolve=[FILTER(3, F(op=Z_MZONE, pos=P_FACEUP, typ=TYPE_MONSTER, nodis=1), within=2),
-                              MODIFY(3, MC_DISABLE)])],
+                              MODIFY(3, MC_DISABLE, nrc=True)])],
     # jalon 5, volet a : fusion
     24094653: [act(target=[FILTER(0, F(me=Z_EXTRA, fus=1)), REQ(0, 1)],                                    # Polymerization
                    resolve=[FILTER(0, F(me=Z_EXTRA, fus=1)), CHOOSE(1, 0, 1), FUSMAT(2, 1), MOVE(2, reason=core.REASON_EFFECT | core.REASON_MATERIAL | core.REASON_FUSION),

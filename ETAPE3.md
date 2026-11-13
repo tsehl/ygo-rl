@@ -774,3 +774,23 @@ optionnel, le caractère remboursable du compteur et la nature publique du
 maillon. Encodeur et politique des anciens checkpoints sont vérifiés contre
 une extension nulle des poids. Scénarios ciblés et mesures CPU :
 `notes/codex-pieges-compteurs-2026-11-07.md`. Aucun entraînement CPU.
+
+### Tête d'activation par jeton d'effet, E = 4 (2026-11-13)
+
+Avant, la tête d'action produisait une colonne par effet (`act` : d → V_ACT0 + E). Le
+réseau dépendait donc de E, et un modèle entraîné à E=2 ne pouvait pas jouer une carte à
+4 effets. Maintenant :
+
+- l'encodeur de cartes rend le jeton d'en-tête et un jeton par effet (`cemb` [C, 1+E, d]) ;
+- `act` ne produit plus que les V_ACT0 actions sans effet et une colonne commune aux
+  activations ;
+- le logit de l'activation de l'effet e d'une carte est cette colonne commune plus
+  `eo(gelu(eq(x_carte) + ek(jeton_e)))`, où `eo` est initialisé à zéro.
+
+Aucun poids ne dépend de E : `pos_e` a E_MAX = 16 lignes et LC = 64 jetons (46 au plus
+observés à E=4). Pour un ancien checkpoint, `complete()` remplace les colonnes d'effet
+d'`act` par leur moyenne et ajoute `eq` / `ek` / `eo`. Le nouveau terme vaut zéro au
+départ : un modèle repris ne fait plus la différence entre ses effets jusqu'à ce que
+`eo` apprenne. C'est la perte acceptée pour avoir un réseau indépendant de E. Le
+générateur tire 1 à 4 effets par monstre à effet (banque 0 : 94 / 50 / 38 / 20 cartes à
+1 / 2 / 3 / 4 effets).

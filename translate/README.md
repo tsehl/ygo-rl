@@ -426,3 +426,31 @@ Raigeki, Prison Dimensionnelle, Trappe). Catalogue **773 / 13 541** ; seulement
 6 / 250 magies d'équipement : refus suivants « plus de 2 effets » (31),
 arguments supplémentaires de la procédure (26), `GetEquipTarget` (13),
 `SetUniqueOnField` (12).
+
+## E = 4 et règles de chaîne trouvées par le générateur multi-effets (2026-11-13)
+
+`core.E` passe de 2 à 4 (86 % des scripts ont au plus 4 effets). Les bits de
+compteurs par effet (`ST_CNT`, `ST_CNTN`) sont déplacés au-dessus du bit 17 et
+dimensionnés par E. Les branches d'activation par effet sont regroupées en une
+seule branche à effet dynamique : leur coût ne grandit plus avec E. Les banques
+créées avec moins d'effets (`train/realbank.npz`) sont complétées par des effets
+vides au chargement. Catalogue à E=4 : **815 / 13 541**.
+
+Le générateur tire maintenant 1 à 4 effets par monstre à effet (poids
+0,45 / 0,30 / 0,17 / 0,08). `compare_gen` a ainsi trouvé deux règles qui
+manquaient au moteur :
+
+- Une carte qui ira au cimetière en fin de chaîne (`ST_LEAVE`, soit
+  STATUS_LEAVE_CONFIRMED : magie / piège résolu ou activation niée) ne peut
+  plus être renvoyée en main (`card::is_capable_send_to_hand`). Exemple : un
+  renvoi en main qui cible le contre-piège qui lui répond.
+- `Duel.NegateRelatedChain(tc, RESET_TURN_SET)`, appelé par les annulations à
+  la Effect Veiler, annule aussi les maillons en cours de `tc` encore liés à
+  leur carte, avec un EFFECT_DISABLE_CHAIN qui reste même si `tc` quitte ensuite
+  le terrain. C'est le bit `nrc` de `MODIFY(..., MC_DISABLE, nrc=True)` (bit 14
+  de l'opérande). Il est posé par le générateur, Effect Veiler et Forbidden
+  Chalice.
+
+Le traducteur refuse encore `Duel.NegateRelatedChain` (101 scripts officiels
+l'appellent) : c'est une cible facile, il suffit de poser `nrc` sur le MODIFY
+MC_DISABLE qui suit.

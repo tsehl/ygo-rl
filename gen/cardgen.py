@@ -52,6 +52,7 @@ ARROWS = [LM_BL, LM_B, LM_BR, LM_L, LM_R, LM_TL, LM_T, LM_TR]
 STAT_BUDGET = {1: 1200, 2: 1900, 3: 2500, 4: 3200, 5: 3700, 6: 4200, 7: 4700, 8: 5200, 9: 5500, 10: 5800,
                11: 6000, 12: 6200}                # ATK + DEF d'un monstre normal de ce niveau (≈ 1000 par « carte »)
 LV_W = np.array([5, 8, 10, 24, 8, 8, 8, 9, 4, 4, 1, 1], float)  # niveaux des monstres du deck principal
+N_EFF_W = [0.45, 0.30, 0.17, 0.08]  # 1, 2, 3, 4 effets (avant le 2026-11-13 : 0,65 / 0,35, E = 2)
 CARD_CAP = 2.6                                    # valeur maximale d'une carte (magie / piège : avantage net + 1)
 
 
@@ -459,10 +460,15 @@ class Gen:
         return c
 
     def with_effects(self, c, kinds_w, n=None):
-        """Ajoute 1 à 2 effets (genres tirés selon kinds_w), en respectant le budget de la carte."""
-        n = (1 if self.p(0.65) else 2) if n is None else n
+        """Ajoute 1 à E effets (genres tirés selon kinds_w), en respectant le budget de la carte. Nombre d'effets tiré
+        selon N_EFF_W (proche des vraies cartes à effet, coupé à E) ; s'il ne tient pas dans le budget, un de moins."""
+        if n is None:
+            w = N_EFF_W[:E]
+            n = 1 + self.pick(list(range(len(w))), w)
         kinds = list(kinds_w)
-        for _ in range(20):
+        for attempt in range(40):
+            if attempt and attempt % 10 == 0 and n > 1:
+                n -= 1
             effs, used = [], []
             for _ in range(n):
                 # au plus un déclencheur par carte : le moteur ne garde qu'un effet déclenché en attente par carte
@@ -778,7 +784,7 @@ def verb_bricks(c, r):
     if v == "halve":
         return [MODIFY(r, MC_FINAL_ATK, mode=MV_HALF_ATK)]
     if v == "disable":
-        return [MODIFY(r, MC_DISABLE)]
+        return [MODIFY(r, MC_DISABLE, nrc=True)]  # procgen.lua : NegateRelatedChain puis DISABLE
     if v == "indes_battle":
         return [MODIFY(r, MC_INDES_BATTLE, 0)]
     raise ValueError(v)
