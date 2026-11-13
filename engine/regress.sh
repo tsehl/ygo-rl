@@ -11,12 +11,14 @@ mkdir -p "$out"
 jobs=${JOBS:-4}  # ~1,7 Go par compare.py (pic de compilation)
 run=${YGO_PYTHON:-"uv run --quiet --with jax python"}
 
-# Une seule file pour tout : les vérifications longues (sb, sbp : ~16 min, pic ~5,8 Go) d'abord, puis les modes de compare.py.
-printf '%s\n' "sbp" "sb" "vmap" "obs" "trig 100 1000" "quick 80 1600" "cont 100 3000" "dmg 100 4000" "ds 100 5000" "flag 100 6000" "neg 100 7000" "fus 100 8000" "rit 100 9000" "syn 100 10000" "xyz 100 11000" "lnk 100 12000" "xlk 100 13000" "kn 100 14000" "pen 100 15000" "chain 60 1200" "mixed 60 1300" "normal 40 1" \
+# Une seule file pour tout : les vérifications longues d'abord, puis les modes de compare.py. sb puis sbp dans la même
+# entrée, l'un après l'autre : ~7,5 Go chacun à E = 4, deux en même temps dépassent les 15 Go du conteneur (OOM).
+printf '%s\n' "sbs" "vmap" "obs" "trig 100 1000" "quick 80 1600" "cont 100 3000" "dmg 100 4000" "ds 100 5000" "flag 100 6000" "neg 100 7000" "fus 100 8000" "rit 100 9000" "syn 100 10000" "xyz 100 11000" "lnk 100 12000" "xlk 100 13000" "kn 100 14000" "pen 100 15000" "chain 60 1200" "mixed 60 1300" "normal 40 1" \
   | xargs -P "$jobs" -L 1 sh -c '
       case "$0" in
-        sbp) SB_PROC=2 '"$run"' sb_check.py ;;   # banque procédurale : fusions, filtres d ATK
-        sb) '"$run"' sb_check.py ;;
+        sbs) '"$run"' sb_check.py > '"$out"'/sb.log 2>&1; st=$?
+             SB_PROC=2 '"$run"' sb_check.py > '"$out"'/sbp.log 2>&1 || exit 1   # banque procédurale : fusions, filtres d ATK
+             exit $st ;;
         vmap) '"$run"' vmap_check.py ;;
         obs) '"$run"' obs_check.py ;;
         *) '"$run"' compare.py "$1" "$2" "$0" ;;
