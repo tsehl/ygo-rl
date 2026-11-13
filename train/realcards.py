@@ -106,7 +106,10 @@ def load(path=PATH):
     import jax.numpy as jnp
     import core
     z = np.load(path)
-    bank = core.Bank(**{k: jnp.asarray(z["bank_" + k]) for k in core.Bank._fields})
+    c = z["bank_code"].shape[0]
+    # champs optionnels ajoutés après la création du fichier : largeur 0 (chemin éliminé au traçage)
+    get = lambda k: z["bank_" + k] if "bank_" + k in z else np.zeros((c, 0), np.int32)
+    bank = core.Bank(**{k: jnp.asarray(get(k)) for k in core.Bank._fields})
     return bank, list(z["deck_names"]), z["main"], z["extra"]
 
 

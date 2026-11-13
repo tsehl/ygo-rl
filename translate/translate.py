@@ -546,6 +546,11 @@ class Translator:
         if isinstance(st, (A.LocalAssign, A.Assign)):
             for t, v in zip(st.targets, st.values):
                 need(isinstance(t, A.Name), "initial_effect : affectation")
+                if isinstance(v, A.Call) and dotted(v.func) == "aux.AddEquipProcedure":
+                    # l'effet rendu n'est pas modélisé : toute utilisation ultérieure est refusée (valeur opaque)
+                    regs.append(self.equip_procedure(v.args, env))
+                    env[t.id] = object()
+                    continue
                 env[t.id] = self.ie_val(v, env)
             return
         if isinstance(st, A.Invoke):
@@ -585,12 +590,35 @@ class Translator:
             if d == "Pendulum.AddProcedure":
                 regs.append(("pendulum",))
                 return
+            if d == "aux.AddEquipProcedure":
+                regs.append(self.equip_procedure(st.args, env))
+                return
             if d in ("Xyz.AddProcedure", "Synchro.AddProcedure", "Link.AddProcedure", "Fusion.AddProcMix", "Fusion.AddProcMixN"):
                 need(self.proc is None, "deux procédures")
                 self.proc = self.procedure(d, st.args[1:], env)
                 return
             raise Unsupported(f"initial_effect : {d}")
         raise Unsupported(f"initial_effect : instruction {type(st).__name__}")
+
+    def equip_procedure(self, args, env):
+        """aux.AddEquipProcedure(c, p, f) : activation qui cible un monstre recto (de p : 0 moi, 1 adversaire, nil ou
+        PLAYER_ALL les deux) vérifiant f, puis Duel.Equip ; limite d'équipement f (EquipLimit), contrôlée par
+        l'ajustement d'ygopro : seuls les filtres sur des propriétés fixes sont acceptés (la limite reste vraie)."""
+        need(args and isinstance(self.ie_val(args[0], env), Handler), "équipement : carte source")
+        need(all(isinstance(a, A.Nil) for a in args[3:]), "équipement : limite, coût, cible, opération ou condition")
+        pv = self.ie_val(args[1], env) if len(args) > 1 else None
+        need(pv in (None, 0, 1, K["PLAYER_ALL"]), "équipement : joueur")
+        fv = self.ie_val(args[2], env) if len(args) > 2 else None
+        fl = Filt()
+        if fv is not None:
+            self.apply_fn(fl, fv, [Eff(), Player(ME)], env)
+        dflt = Filt().d
+        static = {"typ", "attr", "race", "setc", "code", "lv", "not_typ", "pos"}
+        need(all(v == dflt[k] for k, v in fl.d.items() if k not in static) and fl.ctrl is None
+             and fl.loc & core.Z_MZONE, "équipement : filtre sur une propriété variable")
+        need(fl.d["pos"] in (0, core.P_FACEUP), "équipement : position")
+        fl.set("pos", core.P_FACEUP)
+        return ("equip_spell", fl.build(core.Z_MZONE if pv != 1 else 0, core.Z_MZONE if pv != 0 else 0))
 
     def ritual_procedure(self, name, args, env):
         values = [self.ie_val(a, env) for a in args]
@@ -749,6 +777,11 @@ class Translator:
                     out.append(C.act())
                     self.descs.append(None)
                     continue
+                if e[0] == "equip_spell":
+                    out.append(C.act(target=[C.FILTER(0, e[1], tgt=True), C.CHOOSE(1, 0, 1, tgt=True)],
+                                     resolve=[C.EQUIP(1)]))
+                    self.descs.append(1068)
+                    continue
                 if self.proc is not None or hand_procs or card_type(self.code) & core.TYPE_RITUAL:  # limite portée par la carte
                     continue
                 raise Unsupported("monstre à invocation limitée (EnableReviveLimit)")
@@ -813,7 +846,8 @@ class Translator:
         code = f.get("SetCode", [0])[0] if "SetCode" in f else 0
         T = lambda n: typ & K[n]  # noqa: E731
         for k in ("SetLabel", "SetLabelObject", "SetValue", "SetTargetRange", "SetReset", "SetAbsoluteRange"):
-            need(k not in f or T("EFFECT_TYPE_SINGLE") or T("EFFECT_TYPE_FIELD"), f"effet : {k}")
+            need(k not in f or T("EFFECT_TYPE_SINGLE") or T("EFFECT_TYPE_FIELD") or typ == K["EFFECT_TYPE_EQUIP"],
+                 f"effet : {k}")
         if code == K["EFFECT_SPSUMMON_PROC"]:
             # Conditions et paiements réutilisent le VM ; les procédures ne créent jamais de chaîne.
             need(typ == K["EFFECT_TYPE_FIELD"] and f.get("SetRange") == [core.Z_HAND],
@@ -989,7 +1023,7 @@ class Translator:
                 dmg = C.STAT_DS
             progs = self.programs(e, 0, cond_skip=dmg != 0)
             return C.quick(rng, cost=progs[0], target=progs[1], resolve=progs[2], opt=opt, dmg=dmg)
-        if typ in (K["EFFECT_TYPE_FIELD"], K["EFFECT_TYPE_SINGLE"]) and code in MODC:
+        if typ in (K["EFFECT_TYPE_FIELD"], K["EFFECT_TYPE_SINGLE"], K["EFFECT_TYPE_EQUIP"]) and code in MODC:
             return self.continuous(e, typ, code)
         raise Unsupported(f"type d'effet {self.kname(typ, 'EFFECT_TYPE_')}" + (f" {self.kname(code, 'EFFECT_')}" if code else ""))
 
@@ -997,7 +1031,8 @@ class Translator:
         """Effet continu (FIELD sur des monstres / SINGLE sur la carte) → cont(...)."""
         f = e.f
         mc = MODC[code]
-        need(mc != core.MC_DISABLE or typ == K["EFFECT_TYPE_FIELD"], "DISABLE SINGLE")
+        equip = typ == K["EFFECT_TYPE_EQUIP"]
+        need(mc != core.MC_DISABLE or typ == K["EFFECT_TYPE_FIELD"] or equip, "DISABLE SINGLE")
         prop = f.get("SetProperty", [0])[0] or 0
         need(prop & ~(K["EFFECT_FLAG_SINGLE_RANGE"] | K["EFFECT_FLAG_IGNORE_IMMUNE"] | K["EFFECT_FLAG_CANNOT_DISABLE"]
                       | K["EFFECT_FLAG_SET_AVAILABLE"]) == 0, f"continu : propriétés {prop:#x}")
@@ -1010,6 +1045,10 @@ class Translator:
             rng = core.Z_SZONE
         if typ == K["EFFECT_TYPE_SINGLE"] and not rng:
             rng = core.Z_MZONE
+        if equip:
+            need(not rng and "SetTarget" not in f and "SetTargetRange" not in f, "équipement : zone ou cible")
+            need(mc not in (core.MC_NO_SS, core.MC_P_NO_TRAP), "équipement : interdiction de joueur")
+            rng = core.Z_SZONE
         need(rng in (core.Z_MZONE, core.Z_SZONE), "continu : zone de la carte")
         tgt = None
         kw = {}
@@ -1023,6 +1062,8 @@ class Translator:
             if "SetTarget" in f:
                 self.apply_fn(fl, f["SetTarget"][0], [], {}, two=True)
             tgt = fl.build(tr[0], tr[1])
+        elif equip:
+            tgt = C.EQUIPPED
         else:
             need(not "SetTarget" in f, "continu SINGLE avec cible")
         val = f.get("SetValue", [None])[0]
@@ -1923,7 +1964,8 @@ class Translator:
                     fl.set("pos", core.P_FACEUP)
                 inner = fv.bound[0]
                 need(isinstance(inner, Fn), "filtre composé")
-                self.apply_fn(fl, Fn(inner.node, inner.name, list(fv.bound[1:])), xargs, env)
+                # FilterBoolFunction / FaceupFilter / TargetBoolFunction ignorent les arguments d'appel (utility.lua)
+                self.apply_fn(fl, Fn(inner.node, inner.name, list(fv.bound[1:])), xargs if n.endswith("Ex") else [], env)
                 return
             raise Unsupported(f"filtre {n}")
         node = fv.node

@@ -40,6 +40,7 @@ P_FACEUP = P_FU_ATK | P_FU_DEF
 # types (= TYPE_*)
 TYPE_MONSTER, TYPE_SPELL, TYPE_TRAP, TYPE_NORMAL = 1, 2, 4, 0x10
 TYPE_QUICKPLAY, TYPE_CONTINUOUS, TYPE_COUNTER = 0x10000, 0x20000, 0x100000
+TYPE_EQUIP = 0x40000
 TYPE_FUSION, TYPE_RITUAL, TYPE_SYNCHRO, TYPE_XYZ, TYPE_LINK = 0x40, 0x80, 0x2000, 0x800000, 0x4000000
 TYPE_EXTRA = TYPE_FUSION | TYPE_SYNCHRO | TYPE_XYZ | TYPE_LINK  # monstres de l'Extra Deck
 TYPE_TUNER = 0x1000
@@ -141,10 +142,11 @@ CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
  OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT, OP_LABEL,
- OP_COND_LABEL, OP_YESNO) = range(31)
-N_OPS = 31
+ OP_COND_LABEL, OP_YESNO, OP_EQUIP) = range(32)
+N_OPS = 32
 # OP_LABEL : le maillon retient si le registre a est non vide (e:SetLabel à l'activation) ; OP_COND_LABEL : condition
-# sur ce label à la résolution ; OP_YESNO : le joueur de l'effet choisit de continuer (D_YESNO)
+# sur ce label à la résolution ; OP_YESNO : le joueur de l'effet choisit de continuer (D_YESNO) ; OP_EQUIP :
+# Duel.Equip(tp, handler, première carte du registre a si elle est recto en zone monstres)
 # champs d'un filtre ; les zones sont relatives au joueur de l'effet (moi / adversaire)
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
     F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX, F_REASON, F_NOTTYPE = range(24)
@@ -182,6 +184,8 @@ TD_TURN, TD_DCAL, TD_PERM = range(3)  # TD_PERM : tant que la carte reste sur le
 # filtre 1, condition : joueur du tour (1 : moi, 2 : adversaire), phases (masque PH_*, 0 : toutes), nombre de cartes
 # du filtre 1 dans [M_CMIN, M_CMAX] (si M_CNT ; M_PER et M_CNT s'excluent)
 M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX = range(9)
+# M_SELF : 1 = la carte elle-même (SINGLE_RANGE) ; 2 = le monstre qu'elle équipe (EFFECT_TYPE_EQUIP, trié comme FIELD)
+M_EQUIP = 2
 MW = 9
 KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
 TM = 16         # modificateurs temporaires par tour
@@ -247,12 +251,13 @@ class Bank(NamedTuple):
     rsc: jnp.ndarray    # [C] pendule : échelle droite
     einline: jnp.ndarray # [C,0 ou E] effet proposé lors de l'activation (index + 1, 0 : aucun)
     erefund: jnp.ndarray # [C,0 ou E] EFFECT_COUNT_CODE_OATH : rendre le compte si l'activation est niée
+    equip: jnp.ndarray   # [C,0 ou 1] carte d'équipement ; largeur 0 (aucune dans la banque) élimine le chemin au traçage
 
 
 def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None, etrig=None, eopt=None, attr=None,
               race=None, erng=None, setcode=None, emod=None, edmg=None, fmat=None, fmn=None, erl=None,
               smat=None, syn=None, xmat=None, xct=None, lmat=None, lmin=None, lmax=None, lneed=None, ldiff=None,
-              lsc=None, rsc=None, fsub=None, submat=None, einline=None, erefund=None):
+              lsc=None, rsc=None, fsub=None, submat=None, einline=None, erefund=None, equip=None):
     """df : DEF, ou flèches pour un monstre Link (champ def de la base ygopro) : rangées dans lmark, DEF nulle."""
     c = code.shape[0]
     i = lambda x, shape: jnp.zeros(shape, I32) if x is None else jnp.asarray(x, I32)
@@ -269,7 +274,8 @@ def make_bank(code, atk, df, level, ctype=None, ekind=None, prog=None, filt=None
                 emod=i(emod, (c, E, MW)), edmg=i(edmg, (c, E)), fmat=i(fmat, (c, FK, FW)), fmn=i(fmn, (c,)),
                 fsub=i(fsub, (c,)), submat=i(submat, (c, 0)),
                 erl=i(erl, (c,)), smat=i(smat, (c, 2, FW)), syn=i(syn, (c,)),
-                xmat=i(xmat, (c, FW)), xct=i(xct, (c,)), einline=i(einline, (c, 0)), erefund=i(erefund, (c, 0)))
+                xmat=i(xmat, (c, FW)), xct=i(xct, (c,)), einline=i(einline, (c, 0)), erefund=i(erefund, (c, 0)),
+                equip=i(equip, (c, 0)))
 
 
 def test_prog(prog, c):
@@ -424,6 +430,8 @@ class State(NamedTuple):
     cl_c: jnp.ndarray    # [N] monstre Link co-lié (GetMutualLinkedGroupCount() > 0), calculé par refresh
     psel: jnp.ndarray    # sélection de matériaux d'une procédure en cours (D_TRIBUTE, carte pend) : PS_*, 0 sinon
     ov_par: jnp.ndarray  # [N] Z_OVERLAY : index du Xyz qui porte ce matériau (-1 sinon)
+    eq_t: jnp.ndarray    # [N] carte d'équipement : index du monstre équipé (equiping_target, -1 sinon)
+    eq_mv: jnp.ndarray   # [N] horloge de l'équipement (la carte ou sa cible déplacée depuis : relation rompue)
     ps_used: jnp.ndarray  # invocation pendule faite ce tour (flag 10000000 de proc_pendulum.lua)
     uid: jnp.ndarray     # [N] ordre de création de la carte (cardid d'ygopro : deck 0, Extra 0, deck 1, Extra 1)
     ovf: jnp.ndarray     # débordement des tables (bits) : 1 = plus de KM effets continus actifs, 2 = plus de TM modificateurs
@@ -615,6 +623,27 @@ def detach_fix(s):
         cs = jnp.cumsum(cnt) - cnt
         return s._replace(ov_par=jnp.where(gone, -1, s.ov_par), seq=jnp.where(ov, cs[key] - cs[par * 8], s.seq))
     return _cond(gone.any(), fix, lambda s: s, s)
+
+
+def drop_equips(bank, s):
+    """Relations d'équipement rompues (card::unequip) : une carte d'équipement qui a quitté sa case perd sa cible ;
+    une carte encore en place dont la cible a quitté la zone monstres, est passée verso ou a bougé depuis
+    l'équipement est détruite (REASON_LOST_TARGET + REASON_RULE, après les événements du déplacement, comme
+    field::send_to et change_position). Appelé par refresh, avant drop_overlays (ordre d'ygopro : destroy des
+    équipements puis send_to des matériaux). Sans carte d'équipement dans la banque (largeur 0) : rien au traçage."""
+    if not bank.equip.shape[1]:
+        return s
+    n = s.cid.shape[0]
+    t = jnp.clip(s.eq_t, 0, n - 1)
+    own = s.eq_t >= 0
+    gone = own & ((s.zone != Z_SZONE) | (s.mv > s.eq_mv))
+    lost = own & ~gone & ((s.zone[t] != Z_MZONE) | ((s.pos[t] & P_FACEUP) == 0) | (s.mv[t] > s.eq_mv))
+    s = s._replace(eq_t=jnp.where(gone | lost, -1, s.eq_t))
+
+    def drop(s):
+        s = group_send(s, lost, Z_GRAVE, P_GRAVE, reason=REASON_RULE | REASON_LOST_TARGET | REASON_DESTROY)
+        return raise_ev(s, EV_TO_GRAVE, lost, s.tp)
+    return _cond(lost.any(), drop, lambda s: s, s)
 
 
 def drop_overlays(s):
@@ -985,7 +1014,7 @@ def dmg_send(bank, s):
     s = raise_ev(group_to_grave(bank, s, m, REASON_BATTLE | REASON_DESTROY), EV_BATTLE_DESTROYED, m, s.tp)
     # matériaux d'un Xyz détruit : au cimetière avant la collecte, EVENT_TO_GRAVE du même point d'événement. Ailleurs,
     # chaque instruction finit par un refresh (drop_overlays) avant le point d'événement suivant.
-    return trig_point(bank, drop_overlays(open_quick(s, s.tp, R_DMG2, chained=False)))
+    return trig_point(bank, drop_overlays(drop_equips(bank, open_quick(s, s.tp, R_DMG2, chained=False))))
 
 
 def battle_over(s):
@@ -1203,10 +1232,11 @@ def stats(bank, s):
                 & ((m[M_PH] == 0) | ((m[M_PH] & s.phase) != 0))
                 & ((m[M_CNT] == 0) | ((cnt >= m[M_CMIN]) & (cnt <= m[M_CMAX]))))
         ok &= cond
-        raw = jnp.where(m[M_SELF] != 0, idx == h, filter_mask(bank, s, f[0], p, h, bdes=False))
+        raw = jnp.where(m[M_SELF] != 0, idx == jnp.where(m[M_SELF] == M_EQUIP, s.eq_t[h], h),
+                        filter_mask(bank, s, f[0], p, h, bdes=False))
         tgt = raw & (faceup | (m[M_SELF] != 0))
         val = m[M_VAL] * jnp.where(m[M_PER] != 0, cnt, 1)
-        return (tgt & onf & ok, jnp.where(ok, m[M_CODE], MC_NONE), val, m[M_SELF] != 0, cond, raw & ok, p,
+        return (tgt & onf & ok, jnp.where(ok, m[M_CODE], MC_NONE), val, m[M_SELF] == 1, cond, raw & ok, p,
                 is_trap(bank, s, h))
     ctgt, ccode, cval, cself, ccond, craw, cp, ctrap = jax.vmap(one)(hs, es, live)
     ttgt = s.tm_m & (s.mv <= s.tm_t[:, None]) & onf
@@ -2087,7 +2117,7 @@ def refresh_ex_b(bank, s, mask, frac=8):
 def refresh(bank, s, fus=True):
     """Recalcule les caches (stats, drapeaux, fusions réalisables ; pas ceux de refresh_ex). fus=False : sans fz_c (refresh_b le fait au
     niveau du lot, seulement si une partie a des monstres fusion dans son Extra Deck)."""
-    s = drop_overlays(s)
+    s = drop_overlays(drop_equips(bank, s))
     s = detach_fix(s)
     if fus:
         s = lax.cond(has_fusion(bank, s), lambda s: refresh_fus(bank, s), lambda s: s, s)
@@ -2239,14 +2269,15 @@ def proc_ready(s, card):
 def begin_act(bank, s, c, e, enabled=True):
     """Activation de l'effet e de c par le joueur qui décide : coût puis cible, puis mise en chaîne."""
     n = s.cid.shape[0]
-    leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) == 0)
+    stay = TYPE_CONTINUOUS | TYPE_PENDULUM | TYPE_EQUIP  # restent sur le terrain après la résolution
+    leave = (bank.ekind[s.cid[c], e] == K_ACTIVATE) & ((bank.ctype[s.cid[c]] & stay) == 0)
     p = s.dec_player
     s = use_count(bank, s, c, e, p, enabled=enabled)
     # AddChain : une carte du terrain sous une annulation temporaire (Forbidden Chalice, Effect Veiler :
     # EFFECT_DISABLE_EFFECT) voit son maillon annulé, même si elle quitte ensuite le terrain (avant le coût)
     tdis = (s.tm_m[:, c] & (s.mv[c] <= s.tm_t) & (s.tm_code == MC_DISABLE)).any() & (s.zone[c] == Z_MZONE)
     card_activation = bank.ekind[s.cid[c], e] == K_ACTIVATE
-    continuous = (s.zone[c] == Z_SZONE) & ((bank.ctype[s.cid[c]] & (TYPE_CONTINUOUS | TYPE_PENDULUM)) != 0)
+    continuous = (s.zone[c] == Z_SZONE) & ((bank.ctype[s.cid[c]] & stay) != 0)
     flags = jnp.where(card_activation, CF_ACT, 0) | jnp.where(continuous, CF_CONT, 0)
     s = s._replace(st=s.st.at[c].set(jnp.where(leave, s.st[c] | ST_LEAVE, s.st[c])), ch_dis=tdis, ch_lab=_i(0), ch_flags=flags,
                       ch_src=_i(c), ch_src_mv=s.mv[c], ch_tgt_t=s.clk, ch_eff=_i(e), ch_p=s.dec_player, ch_k=s.n_chain, pg=_i(PG_COST), pc=_i(0),
@@ -2320,6 +2351,10 @@ def exec_one(bank, s):
                ((s.pos[h] & P_FACEUP) != 0) & (s.mv[h] <= s.lk_t[s.ch_k]))
         s = enable(s._replace(st=s.st.at[h].set(jnp.where(on, s.st[h] | ST_ON, s.st[h]))),
                    on & (jnp.arange(s.cid.shape[0]) == h))
+        if bank.equip.shape[1]:  # activation d'équipement résolue sans cible équipée : au cimetière en fin de chaîne
+            free = (((s.lk_flags[s.ch_k] & CF_ACT) != 0) & ((bank.ctype[s.cid[h]] & TYPE_EQUIP) != 0) & (s.eq_t[h] < 0)
+                    & (s.zone[h] == Z_SZONE) & (s.mv[h] <= s.lk_t[s.ch_k]))
+            s = s._replace(st=s.st.at[h].set(jnp.where(free, s.st[h] | ST_LEAVE, s.st[h])))
         return _cond(s.ch_k > 0, lambda s: load_link(bank, s, s.ch_k - 1), lambda s: chain_end(bank, s), s)
 
     def end(s):
@@ -2463,6 +2498,17 @@ def exec_one(bank, s):
         ch_lab=jnp.where(b == 0, s.reg[ra].any().astype(I32), s.ch_lab),
         ch_tgt_t=jnp.where(b == 1, s.clk, s.ch_tgt_t), ch_src_mv=src_retarget(s, b == 1, s.reg[ra])))
     branches[OP_YESNO] = lambda s: s._replace(dec=_i(D_YESNO), dec_player=p)
+    if bank.equip.shape[1]:
+        def equip_(s):  # EquipOperation : la cible (liée au maillon) doit être recto ; la carte, encore à sa place
+            n = s.cid.shape[0]
+            t = jnp.argmax(target(s))
+            ok = (target(s).any() & (s.zone[t] == Z_MZONE) & ((s.pos[t] & P_FACEUP) != 0) & (s.zone[h] == Z_SZONE)
+                  & (s.mv[h] <= s.lk_t[s.ch_k]) & (t != h))
+            s2 = enable(s._replace(eq_t=s.eq_t.at[h].set(t), eq_mv=s.eq_mv.at[h].set(s.clk + 1)), jnp.arange(n) == h)
+            return adv(jax.tree.map(lambda x, y: jnp.where(ok, x, y), s2, s))
+        branches[OP_EQUIP] = equip_
+    else:
+        branches[OP_EQUIP] = adv
     return _switch(op, branches, s)
 
 
@@ -3090,7 +3136,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),
-              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), ps_used=f, uid=uid)
+              xz_c=jnp.zeros(n, bool), lz_c=jnp.zeros(n, bool), cl_c=jnp.zeros(n, bool), psel=_i(0), ov_par=jnp.full(n, -1, I32), eq_t=jnp.full(n, -1, I32), eq_mv=z, ps_used=f, uid=uid)
     for p in (0, 1):
         for _ in range(5):
             s = draw(s, p)
