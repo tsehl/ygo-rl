@@ -473,6 +473,56 @@ IGNORED_CALLS = {"Duel.Hint", "Duel.HintSelection", "Duel.ConfirmCards", "Duel.S
                  "Duel.AdjustInstantly"}
 
 
+def _children(node):
+    for k, v in vars(node).items():
+        if isinstance(v, A.Node):
+            yield node, k, None, v
+        elif isinstance(v, list):
+            for i, x in enumerate(v):
+                if isinstance(x, A.Node):
+                    yield node, k, i, x
+
+
+def _walk(node, loop=False):
+    for parent, k, i, ch in _children(node):
+        yield parent, k, i, ch, loop
+        yield from _walk(ch, loop or isinstance(ch, (A.While, A.Repeat, A.Fornum, A.Forin, A.Function,
+                                                         A.LocalFunction, A.AnonymousFunction, A.Method)))
+
+
+def step_to_summon(fn):
+    """Duel.SpecialSummonStep suivi de Duel.SpecialSummonComplete, une seule invocation hors boucle : réécrit en
+    Duel.SpecialSummon (même signature ; dans un test, SpecialSummon(...)>0) et retire le Complete. Les effets
+    enregistrés entre les deux s'appliquent alors après le déplacement, comme dans ygopro ; seuls les événements
+    d'invocation arrivent plus tôt (à valider contre l'oracle)."""
+    steps, comps = [], []
+    for parent, k, i, ch, loop in _walk(fn.body):
+        if isinstance(ch, A.Call) and dotted(ch.func) == "Duel.SpecialSummonStep":
+            steps.append((parent, k, i, ch, loop))
+        elif isinstance(ch, A.Call) and dotted(ch.func) == "Duel.SpecialSummonComplete":
+            comps.append((parent, k, i, ch, loop))
+    if not steps:
+        return
+    need(len(steps) == 1 and not steps[0][4], "SpecialSummonStep multiple ou en boucle")
+    parent, k, i, call, _ = steps[0]
+    need(len(comps) == 1 and not comps[0][4] and isinstance(comps[0][0], A.Block), "SpecialSummonComplete : forme")
+    blk, j = comps[0][0], comps[0][2]
+    def has(n):
+        return n is call or any(ch is call for *_, ch, _ in _walk(n))
+    # Complete après le Step dans le même bloc, ou dans le corps d'un if dont le test fait le Step
+    owner = next((p for p, kk, _, ch, _ in _walk(fn.body) if ch is blk and kk == "body"), None)
+    need(any(has(st) for st in blk.body[:j]) or isinstance(owner, (A.If, A.ElseIf)) and has(owner.test),
+         "SpecialSummonComplete hors du bloc de SpecialSummonStep")
+    call.func.idx.id = "SpecialSummon"
+    if not isinstance(parent, A.Block):  # dans une expression : vrai si l'invocation a eu lieu
+        new = A.GreaterThanOp(call, A.Number(0))
+        if i is None:
+            setattr(parent, k, new)
+        else:
+            getattr(parent, k)[i] = new
+    del blk.body[j]
+
+
 class Translator:
     def __init__(self, code):
         self.code = code
@@ -1400,6 +1450,7 @@ class Translator:
             self.cur_fn = fn
             return self.run_known(fn.name, prog)
         env = self.fn_env(fn.node)
+        step_to_summon(fn.node)
         self.nrc = None
         self.block(fn.node.body.body, env, prog)
         need(self.nrc is None, "NegateRelatedChain sans EFFECT_DISABLE sur la même carte")
@@ -1505,7 +1556,8 @@ class Translator:
         # if COND then BODY end : la résolution s'arrête si COND est faux ; seulement si rien ne suit
         need(prog.kind == "resolve" or self.always_true(t, env), f"if dans {prog.kind}")
         if not self.always_true(t, env):
-            need(not [s for s in rest if not self.ignorable(s)], "if suivi d'instructions")
+            _r = [s for s in rest if not self.ignorable(s)]
+            need(not _r, "if suivi d'instructions" + (" : " + self.show(_r[0])[:50].split("(")[0] if _r and os.environ.get("TR_DIAG") else ""))
         self.res_cond(t, env, prog)
         return self.block(body, env, prog)
 

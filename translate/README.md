@@ -457,3 +457,26 @@ MC_DISABLE de cette carte reçoit `nrc`. Sinon la carte est refusée. Aucune des
 101 cartes concernées n'est débloquée pour autant : chacune bute d'abord sur un
 autre refus (en tête : « DISABLE avec valeur », 6 cartes ; puis DAMAGE_STEP sans
 StatChange et activation combinée, 4 chacune). Catalogue inchangé : 815.
+
+## SpecialSummonStep / SpecialSummonComplete (2026-11-13)
+
+`step_to_summon` réécrit, avant l'interprétation d'une fonction, un unique
+`Duel.SpecialSummonStep` hors boucle en `Duel.SpecialSummon` (même signature ;
+dans un test, `SpecialSummon(...) > 0`), et retire le `Duel.SpecialSummonComplete`
+correspondant. Celui-ci doit se trouver après le Step dans le même bloc, ou dans le
+corps du `if` dont le test fait le Step. Les effets enregistrés entre les deux
+(annulation, bannissement en quittant le terrain...) s'appliquent après le
+déplacement, comme dans ygopro. Seuls les événements d'invocation arrivent plus tôt
+dans le moteur ; aucun écart n'a été vu contre l'oracle. Plusieurs Step ou un Step
+en boucle sont refusés : ce sont des invocations simultanées, donc des déclencheurs
+groupés.
+
+784 scripts appellent SpecialSummonStep. Catalogue : **826 / 13 541** (+11).
+Validation : 20/20 (graines 5200-5219, `--codes` des 11 cartes, toutes vues en jeu).
+Les autres cartes à SpecialSummonStep butent ensuite surtout sur la vérification de
+Blue-Eyes Spirit Dragon avant deux invocations (28), les Step multiples (22),
+AddCustomActivityCounter (21) et SetLabel (19).
+
+`TR_DIAG=1 translate.py` précise le refus « if suivi d'instructions » par la première
+instruction qui suit le `if`. Sur les 173 cartes, 65 avaient un SpecialSummonComplete
+après le `if`.
