@@ -659,3 +659,28 @@ Voir `notes/codex-pieges-compteurs-2026-11-07.md`.
 | 66d8ea4 (E=4, branche d'activation unique) | 9,0k / 9,0k | 12,2k / 12,2k |
 
 E=4 coûte −9 % à B=1024 et −5 % à B=4096. Regrouper les branches d'activation en une seule branche à effet dynamique n'a pas rendu le coût indépendant de E. Hypothèse non vérifiée : les tableaux par effet (compteurs, tests d'activation) grandissent quand même ; à confirmer par profilage avant d'optimiser.
+
+### Compteurs déterministes du coût (2026-11-14)
+
+`bench/cost_stats.py` (CPU, 35 s, aucun chronométrage : mêmes chiffres à chaque passe) : octets d'état par partie,
+puis par brique le nombre d'opérations StableHLO et les octets écrits (somme des tailles des résultats, toutes
+branches comprises, pour une partie). `--json` / `--ref` comparent deux moteurs. Les octets écrits sont un indice
+relatif, pas un temps : XLA fusionne une grande part de ces opérations.
+
+HEAD (banque procédurale 0, Extra Deck 15) : état 36 477 octets (int32 24 116, bool 12 361). Plus gros champs :
+`tm_v` 19 %, `lk_reg` 14 %, `opt_cid` 10 %, `cav_t` 5 %, `tm_m` 5 %.
+
+| brique | opérations | octets écrits | E=2 (daaf5dc) → E=4 |
+|---|---|---|---|
+| exec_one | 60 582 | 10,6 Mo | +11 % / +17 % |
+| refresh | 8 585 | 9,8 Mo | 0 / 0 |
+| legal | 15 825 | 6,1 Mo | +4 % / +4 % |
+| apply | 29 372 | 5,8 Mo | −3 % / +13 % |
+| refresh_ex | 4 210 | 3,7 Mo | 0 / 0 |
+| trig_eval | 2 334 | 3,0 Mo | 0 / +2 % |
+| pass_priority | 12 495 | 2,8 Mo | +12 % / +24 % |
+| auto_pass | 3 405 | 0,7 Mo | +18 % / +28 % |
+
+Validation sur un coût connu : E=4 avait coûté −9 % (B=1024) / −5 % (B=4096) sur L4 ; les compteurs donnent état
++8,5 %, exec_one +17 %, refresh inchangé. Le coût de E=4 est donc dans exec_one et les passes, pas dans refresh.
+À relever après chaque ajout au moteur ; le débit L4 reste la mesure finale.
