@@ -708,3 +708,43 @@ tailles de lot. ms par tour, états de début de partie (toutes les branches son
   ce bench, même biais : exec_one 3,1 → 3,7 ms de B=64 à 1024, faussement plat.
 - Conséquence : 17 tours × 2,3 ms ≈ 39 ms, soit environ un tiers d'un appel de `step_batch` en milieu de partie
   (113 ms). Les deux tiers restants (settle, passes, apply, legal, sous-lots) ne sont pas encore mesurés proprement.
+
+### Profil interne de step_batch (L4, 2026-11-14)
+
+`bench/sb_profile.py` : une copie de `core.py` est instrumentée à la volée (rien n'est écrit dans `engine/`) ; chaque
+composant de `step_batch` est répété k fois sur la même entrée, dans la fonction compilée, sans changer le résultat
+(vérifié à chaque mesure). Le surcoût d'un appel fixé donne le coût total du composant dans cet appel.
+B=1024, frac=0,1, banque procédurale 0, 3 états de milieu de partie (appels 100, 110, 120), actions aléatoires.
+L'appel instrumenté coûte 196 ms contre ~170 ms sans instrumentation. Précision ±5 ms par case (mesurée sur deux
+cases qui devraient valoir 0) : seules les lignes au-dessus de ~10 ms sont sûres.
+
+Par appel : 2 tours externes, 13,3 tours de settle (7 au premier tour, sur tout le lot), 9,3 tours de run (3 au
+premier tour). Des passes sont jouées à **chaque** tour de settle, ~126 parties par tour.
+
+| composant | 1er tour (B) | tours suivants (B/4) | total | part |
+|---|---|---|---|---|
+| passes (pass_priority ×2, refresh_b, auto_pass) | 43,0 | 22,8 | **65,9** | 34 % |
+| refresh_b dans run | 14,4 | 10,2 | 24,6 | 13 % |
+| trig_eval | 11,8 | 5,6 | 17,5 | 9 % |
+| exec_one dans run | 5,0 | 8,3 | 13,3 | 7 % |
+| refresh_ex_b | 11,5 | 1,8 | 13,3 | 7 % |
+| refresh_b après apply | 7,0 | 6,0 | 13,0 | 7 % |
+| écriture du sous-lot | — | 3,5 | 9,0 | 5 % |
+| forced_m | 5,1 | 2,5 | 7,6 | 4 % |
+| legal | 4,5 | 2,9 | 7,4 | 4 % |
+| apply | 4,0 | 2,5 | 6,4 | 3 % |
+| auto_pass hors passes | 1,6 | 4,6 | 6,2 | 3 % |
+| reste (conditions de boucle, appel Python) | | | 9,3 | 5 % |
+
+- **Le premier poste est la boucle de settle et ses passes (un tiers de l'appel), pas la boucle d'exécution**
+  (exec_one + refresh_b = 38 ms, 19 %, ce qui recoupe 17 tours × 2,3 ms de `brick_scale.py`).
+- Le premier tour, sur tout le lot, coûte ~110 ms à lui seul ; 7 tours de settle y tournent à B=1024 pour ~190
+  parties qui passent et ~140 qui exécutent par tour.
+- Chaque répétition ajoute aussi le coût de l'enveloppe (site témoin : 9 ms pour 9,3 invocations, dans le bruit) :
+  les composants appelés souvent sont un peu surestimés.
+- Pistes, par gain attendu : (1) finir le settle du premier tour dans un sous-lot de B/4 après le premier tour de
+  settle (un tour coûte ÷2,4 à 256) ; l'essai du 2026-11-04 n'avait rien gagné, à refaire avec ce profil comme
+  juge ; (2) enchaîner plusieurs passes par tour de settle pour les parties qui traversent des fenêtres vides ;
+  (3) `refresh_ex_b` : 11,5 ms pour une seule invocation au premier tour.
+- Le script a ensuite été réglé pour plus de précision (`--rep 5 --n 16`, témoin remesuré) ; ces réglages n'ont pas
+  été relancés sur L4.

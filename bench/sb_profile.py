@@ -5,7 +5,9 @@ le coût de refresh_b, apb, etc. dépend du nombre de parties modifiées à chaq
 modifiée à la volée (jamais écrite dans engine/) : chaque composant de step_batch est enveloppé dans une boucle qui
 le répète REPS[site] fois sur la même entrée et garde le dernier résultat. Avec REPS = 1 partout, le résultat est
 celui de step_batch. Sur un appel fixé (même état, mêmes actions), passer un site à 3 répétitions ajoute exactement
-deux fois le coût total de ce composant dans l'appel, sans changer le déroulement : coût = (T_3 − T_1) / 2.
+deux fois le coût total de ce composant dans l'appel, sans changer le déroulement : coût = (T_rep − T_1) / (rep − 1).
+Bruit : les deux sites « sous-lot » n'existent pas au premier tour, leur colonne « 1er tour » doit valoir 0 ; l'écart
+donne la précision des autres lignes (±5 ms avec --rep 3 --n 8 sur L4).
 La répétition ne peut pas être sortie de la boucle ni supprimée par XLA : l'entrée est perturbée par un zéro inconnu
 du compilateur, porté par la boucle.
 
@@ -27,7 +29,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--b", type=int, default=1024)
 ap.add_argument("--calls", type=int, default=100)
 ap.add_argument("--points", type=int, default=3, help="états de mesure (un tous les 10 appels après --calls)")
-ap.add_argument("--n", type=int, default=8, help="répétitions du chronométrage par site")
+ap.add_argument("--n", type=int, default=16, help="répétitions du chronométrage par site")
+ap.add_argument("--rep", type=int, default=5, help="répétitions du composant mesuré (coût = (T_rep − T_1) / (rep − 1))")
 ap.add_argument("--proc", type=int, default=0)
 ap.add_argument("--frac", type=float, default=0.1)
 a = ap.parse_args()
@@ -150,11 +153,12 @@ for t in range(a.calls + 10 * a.points):
         for ph in (0, 1):
             for i in range(len(SITES)):
                 rp = ones.copy()
-                rp[ph * OFF + i] = 3
+                rp[ph * OFF + i] = a.rep
                 T3, r3 = timed(s, act, jnp.asarray(rp))
+                T1 = (T1 + timed(s, act, base)[0]) / 2 if i % 4 == 3 else T1   # dérive du GPU : témoin remesuré
                 same = all(np.array_equal(u, np.asarray(v)) for u, v in zip(jax.tree.leaves(ref), jax.tree.leaves(r3[:3])))
                 assert same, f"site {SITES[i]} : la répétition a changé le résultat"
-                tot[ph, i] += (T3 - T1) / 2
+                tot[ph, i] += (T3 - T1) / (a.rep - 1)
         pt += 1
         print(f"point {pt} (appel {t}) : {T1:.1f} ms", flush=True)
     s, m, f, c = sb(bank, s, act, base)
