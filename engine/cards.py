@@ -74,6 +74,10 @@ def SPSUMMON(r, pos, proc=False, *, fusion=False, tag=0):
     if not 0 <= tag <= 65535:
         raise ValueError("marqueur d'invocation hors limites")
     return (OP_SPSUMMON, r, pos, -(tag + 1) if tag else 2 if fusion else int(proc))  # proc : invocation correcte (rituel / fusion)
+def SSLOCK(f, who=ME, unless=None):  # ce tour, who ne peut plus invoquer spécialement f, sauf les cartes du filtre unless
+    return (core.OP_SSLOCK, who, f, unless or 0)
+def FILTER_NOT(r, f, within=None):  # cartes qui ne répondent pas à f (∩ within)
+    return (OP_FILTER, r, f, (0 if within is None else within + 1) | (1 << 21))
 def DRAW(who, n): return (OP_DRAW, who, n, 0)
 def DAMAGE(who, n, per=None): return (OP_DAMAGE, who, n, 0 if per is None else per + 1)  # n × |registre per|
 def RECOVER(who, n): return (OP_RECOVER, who, n, 0)
@@ -383,10 +387,14 @@ def assemble(codes, cards=CARDS, fusion=None, synchro=None, xyz=None, link=None,
                 assert len(pr) < P, (code, g)  # toujours au moins un OP_END
                 assert g == PG_RESOLVE or len(pr) <= PT, (code, g)  # test_ok ne lit que PT instructions
                 for j, (op, a, b, cc) in enumerate(pr):
-                    if op == OP_FILTER:
+                    if op in (OP_FILTER, core.OP_SSLOCK):
                         if b not in fl:
                             fl.append(b)
                         b = fl.index(b)
+                    if op == core.OP_SSLOCK and cc:  # filtre des exceptions
+                        if cc not in fl:
+                            fl.append(cc)
+                        cc = fl.index(cc) + 1
                     prog[i, e, g, j] = (op, a, b, cc)
                     equip[i] |= op == core.OP_EQUIP
             assert len(fl) <= NF, code

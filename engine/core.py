@@ -128,6 +128,9 @@ E = 4           # effets par carte (forme des banques ; le réseau n'en dépend 
 ST_CNT = 1 << 17  # ST_CNT << e : effet e déjà utilisé ce tour (SetCountLimit(1) sans code : par carte, effacé si elle bouge)
 ST_CNTN = ST_CNT << E  # ST_CNTN << e : idem, sans remise à zéro au tour suivant (EFFECT_FLAG_NO_TURN_RESET)
 assert 17 + 2 * E <= 31, "bits de st insuffisants pour E"
+ST_SST, ST_SSXT = 1 << 29, 1 << 30  # bits virtuels de filtre (F_ST) : invoquée spécialement ce tour par le joueur
+# du filtre (ss_t), depuis l'Extra Deck pour ST_SSXT ; lus dans filter_mask, jamais stockés dans st
+assert ST_CNTN << (E - 1) < ST_SST
 ST_TURN_RESET = ST_SUMMON_TURN | ST_ATTACKED | ST_FORM_CHANGED | ST_SET_TURN | (ST_CNT * ((1 << E) - 1)) | ST_FLIP_TURN
 P = 12          # instructions par programme
 PT = 6          # instructions testées par programme de coût / cible (test_ok)
@@ -145,8 +148,12 @@ CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
  OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT, OP_LABEL,
- OP_COND_LABEL, OP_YESNO, OP_EQUIP, OP_BLOCK) = range(33)
-N_OPS = 33
+ OP_COND_LABEL, OP_YESNO, OP_EQUIP, OP_BLOCK, OP_SSLOCK) = range(34)
+N_OPS = 34
+# OP_SSLOCK : jusqu'à la fin du tour, le joueur a (relatif) ne peut plus invoquer spécialement les cartes qui
+# répondent au filtre b, sauf celles du filtre c - 1 si c > 0 (EFFECT_CANNOT_SPECIAL_SUMMON enregistré par
+# Duel.RegisterEffect : cible = b ∧ ¬(c - 1)).
+# Approximation : le joueur qui invoque est le contrôleur de la carte invoquée.
 # OP_BLOCK : début d'un bloc conditionnel (if … then … end suivi d'instructions), a = indice de la première instruction
 # après le bloc. Sans effet à l'exécution ; un test faux (ou « non » à OP_YESNO) dans le bloc saute en a au lieu
 # d'arrêter le programme.
@@ -157,7 +164,7 @@ N_OPS = 33
 F_LOC_ME, F_LOC_OP, F_POS, F_TYPE, F_NOT_SELF, F_ATK_LO, F_ATK_HI, F_DEF_LO, F_DEF_HI, F_ATTR, F_RACE, F_SET, \
     F_CODE1, F_CODE2, F_ST, F_LV_LO, F_LV_HI, F_SPSUM, F_NODIS, F_FUS, F_RIT, F_ZX, F_REASON, F_NOTTYPE = range(24)
 FW = 24  # F_ZX : bits ZX_* (co-lié, case principale)
-ZX_COLINK, ZX_MAIN, ZX_EXTRA = 1, 2, 4  # GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
+ZX_COLINK, ZX_MAIN, ZX_EXTRA, ZX_FREE, ZX_FREEANY, ZX_OPFU = 1, 2, 4, 8, 16, 32  # ZX_OPFU : c:IsControler(p) or c:IsFaceup() ; ZX_FREE : Duel.GetMZoneCount(p, c) > 0 ; ZX_FREEANY : ft > 0 or c:GetSequence() < 5 ; GetMutualLinkedGroupCount() > 0 (cache cl_c) ; GetSequence() < 5  # F_RIT : monstre rituel invocable maintenant (cache rz_c) en mode RIT_GREATER ou RIT_EQUAL  # F_FUS : monstre fusion de l'Extra Deck invocable par fusion maintenant (cache fz_c)  # F_ST : l'un des bits de statut ; F_SPSUM : peut être invoquée spécialement (pas de FL_NO_SS) ;
 # F_NODIS : effets non annulés (not IsDisabled)
 NSET = 4  # archétypes (setcode 16 bits) par carte
 # modificateurs de stats (EFFECT_*), effets continus (bank.emod) et temporaires (table tm_* de l'état)
@@ -193,6 +200,7 @@ M_CODE, M_SELF, M_VAL, M_PER, M_TP, M_PH, M_CNT, M_CMIN, M_CMAX = range(9)
 # M_SELF : 1 = la carte elle-même (SINGLE_RANGE) ; 2 = le monstre qu'elle équipe (EFFECT_TYPE_EQUIP, trié comme FIELD)
 M_EQUIP = 2
 MW = 9
+SSL = 4         # restrictions d'invocation spéciale du tour (OP_SSLOCK) ; au-delà, la plus ancienne est remplacée
 KM = 16         # effets continus actifs pris en compte (compaction, comme KC)
 TM = 16         # modificateurs temporaires par tour
 FK = 4          # matériaux de fusion au plus (un filtre par matériau)
@@ -299,7 +307,7 @@ def test_prog(prog, c):
                 if opcode==OP_END:
                     continue
                 if opcode==OP_FILTER:
-                    cc &= 15 | (1 << 20)  # conserve la copie ; les autres bits hauts servent au test dérivé
+                    cc &= 15 | (1 << 20) | (1 << 21)  # conserve la copie et le complément ; les autres bits hauts servent au test dérivé
                 can_join = result and result[-1][0]==OP_FILTER and result[-1][1]==a
                 minimum = (opcode==OP_REQ and cc==0) or (opcode==OP_CHOOSE and a==b)
                 count = cc&15 if opcode==OP_CHOOSE else b
@@ -326,6 +334,7 @@ def test_prog(prog, c):
 class State(NamedTuple):
     reason: jnp.ndarray # [N] dernier masque de raisons natif connu
     suminfo: jnp.ndarray # [N] dernière invocation : type, zone d’origine et joueur
+    ss_t: jnp.ndarray    # [N] invoquée spécialement ce tour (compteurs d'activité ACTIVITY_SPSUMMON), gardé au déplacement
     cid: jnp.ndarray     # [N] index dans la banque
     zone: jnp.ndarray    # [N]
     seq: jnp.ndarray     # [N] case (terrain) ou rang dans la zone (deck : dessus = seq max)
@@ -410,6 +419,8 @@ class State(NamedTuple):
     rpl: jnp.ndarray     # attaque relancée (is_replaying_attack : pas de nouvel EVENT_ATTACK_ANNOUNCE)
     opt_cid: jnp.ndarray   # [2, N*E] clés + 1 des effets « une fois par tour » déjà utilisés
     lock_cid: jnp.ndarray  # [2, N] cid + 1 des cartes dont le joueur ne peut plus activer les effets ce tour
+    ssl: jnp.ndarray       # [SSL, 5] restrictions d'invocation spéciale du tour : (carte source + 1, effet, filtre des
+    #                        cartes visées, filtre des exceptions + 1 ou 0, joueur)
     # stats courantes (cache recalculé par refresh après chaque micro-pas) et modificateurs temporaires
     atk_c: jnp.ndarray   # [N] ATK courante (hors zone monstres : ATK de base)
     df_c: jnp.ndarray    # [N]
@@ -892,7 +903,8 @@ def keep_perm(s):
 def start_turn(s):
     tp = jnp.where(s.turn == 0, 0, 1 - s.tp).astype(I32)
     s = s._replace(turn=s.turn + 1, tp=tp, ns_used=jnp.bool_(False), ps_used=jnp.bool_(False), st=s.st & ~ST_TURN_RESET, phase=_i(PH_DRAW),
-                   tev=jnp.zeros_like(s.tev), tew=jnp.zeros_like(s.tew), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid))
+                   tev=jnp.zeros_like(s.tev), tew=jnp.zeros_like(s.tew), opt_cid=jnp.zeros_like(s.opt_cid), lock_cid=jnp.zeros_like(s.lock_cid),
+                   ssl=jnp.zeros_like(s.ssl), ss_t=jnp.zeros_like(s.ss_t))
     s = keep_perm(s)
     # pioche (sauf au premier tour) puis fenêtre ; ensuite fenêtre de phase
     return _cond(s.turn > 1, lambda s: open_quick(rule_draw(s, tp), tp, R_DP, chained=False),
@@ -1125,6 +1137,26 @@ def set_match(bank, cid, sc):
     return ((cs != 0) & ((cs & 0xFFF) == (sc & 0xFFF)) & ((cs & sc) == sc)).any(-1)
 
 
+def ss_locked(bank, s):
+    """[N] cartes que leur contrôleur ne peut pas invoquer spécialement (restrictions OP_SSLOCK du tour).
+    Les lignes actives sont en tête de table (OP_SSLOCK insère en tête) : une boucle sur elles seulement, un seul
+    filter_mask dans le corps (pas j pair : filtre de la restriction, impair : filtre des exceptions)."""
+    rows = (s.ssl[:, 0] > 0).sum().astype(I32)
+
+    def body(j, carry):
+        out, hit = carry
+        k, alt = j // 2, j % 2
+        h, e, fi, fb, q = s.ssl[k, 0] - 1, s.ssl[k, 1], s.ssl[k, 2], s.ssl[k, 3], s.ssl[k, 4]
+        filt = bank.filt[s.cid[jnp.maximum(h, 0)], jnp.clip(e, 0, E - 1)]
+        m = filter_mask(bank, s, filt[jnp.clip(jnp.where(alt == 0, fi, fb - 1), 0, NF - 1)], q, jnp.maximum(h, 0),
+                        bdes=False)
+        done = out | (hit & ~((fb > 0) & m) & (s.ctrl == q))
+        return jnp.where(alt == 0, out, done), jnp.where(alt == 0, m, hit)
+
+    zero = jnp.zeros(s.cid.shape[0], bool)
+    return lax.fori_loop(0, 2 * rows, body, (zero, zero))[0]
+
+
 def special_allowed(bank, s, proper=False):
     """Invocabilité courante par effet ; une vraie procédure contourne la seule limite de réanimation."""
     revive = (bank.erl[s.cid] == 0) | ((bank.erl[s.cid] == 1) &
@@ -1164,7 +1196,9 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     code = bank.code[s.cid]
     # F_CODE1 < 0 : tout sauf le nom -F_CODE1 (not c:IsCode(id))
     m &= jnp.where(f[F_CODE1] < 0, code != -f[F_CODE1], (f[F_CODE1] == 0) | (code == f[F_CODE1]) | (code == f[F_CODE2]))
-    m &= (f[F_ST] == 0) | jnp.where(f[F_ST] < 0, summon_matches(s.suminfo, f[F_ST]), (s.st & f[F_ST]) != 0)
+    by_p = s.ss_t & (((s.suminfo >> 31) & 1) == p)
+    vst = s.st | jnp.where(by_p, ST_SST, 0) | jnp.where(by_p & (((s.suminfo >> 16) & Z_EXTRA) != 0), ST_SSXT, 0)
+    m &= (f[F_ST] == 0) | jnp.where(f[F_ST] < 0, summon_matches(s.suminfo, f[F_ST]), (vst & f[F_ST]) != 0)
     lv = bank.level[s.cid]
     nolv = (bank.ctype[s.cid] & (TYPE_XYZ | TYPE_LINK)) != 0  # sans niveau : seulement un filtre sans borne
     m &= jnp.where(nolv, (f[F_LV_LO] <= -BIG) & (f[F_LV_HI] >= BIG), (lv >= f[F_LV_LO]) & (lv <= f[F_LV_HI]))
@@ -1187,6 +1221,12 @@ def filter_mask(bank, s, f, p, h, bdes=True, targ=False):
     pend_space = lax.fori_loop(0, need_pend.astype(I32),
         lambda _, previous: pend_extra_zones(bank, s, p).any(), jnp.bool_(True))
     m &= jnp.where(faceup_pend, pend_space, extra_space)
+    # ZX_FREE : Duel.GetMZoneCount(p, c) > 0 : p a une case principale libre, ou c en occupe une et la libère
+    # ZX_FREEANY : même test sans condition de contrôleur sur la carte (ft>0 or c:GetSequence()<5)
+    need_free = (f[F_ZX] & (ZX_FREE | ZX_FREEANY)) != 0
+    free = lax.fori_loop(0, need_free.astype(I32), lambda _, previous: free_main(s, p) > 0, jnp.bool_(True))
+    m &= ~need_free | free | ((s.zone == Z_MZONE) & (s.seq < N_MAIN_ZONES) & ((s.ctrl == p) | ((f[F_ZX] & ZX_FREEANY) != 0)))
+    m &= ((f[F_ZX] & ZX_OPFU) == 0) | (s.ctrl == p) | ((s.pos & P_FACEUP) != 0)
     if targ:
         m &= ~untargetable(bank, s, h)
     # un monstre Link n'a pas de DEF (IsDefense* faux) : seulement un filtre sans borne
@@ -1276,6 +1316,7 @@ def stats(bank, s):
         # continus et temporaires (EFFECT_CANNOT_ATTACK posé par une résolution, Silent Doom…)
         fl |= jnp.where((ctgt & (ccode == c)[:, None]).any(0) | (ttgt & (s.tm_code == c)[:, None]).any(0), b, 0)
     fl |= jnp.where((craw & (ccode == MC_NO_SS)[:, None]).any(0), FL_NO_SS, 0)  # carte visée, où qu'elle soit
+    fl |= jnp.where(ss_locked(bank, s), FL_NO_SS, 0)
     nt = ccode == MC_P_NO_TRAP
     pf = jnp.stack([(nt & ((cval & jnp.where(cp == q, 1, 2)) != 0)).any() for q in (0, 1)]) * PF_NO_TRAP
     # condition redevenue vraie : nouvel id (horloge avancée d'un cran pour tous ceux de ce calcul)
@@ -2157,7 +2198,8 @@ def _pure(bank, s, reg, ok, h, e, p, k, ins, count_asserts=False):
     # Les requêtes / Group:Filter incluent les détruits au combat encore sur le terrain.
     # Seul un ciblage les exclut ici (field::filter_matching_card, is_capable_be_effect_target).
     def filter_():
-        row = (filter_mask(bank, s, bank.filt[s.cid[h], e, jnp.clip(b, 0, NF - 1)], p, h, bdes=False)
+        row = filter_mask(bank, s, bank.filt[s.cid[h], e, jnp.clip(b, 0, NF - 1)], p, h, bdes=False)
+        row = (jnp.where((c & (1 << 21)) != 0, ~row, row)  # c & (1 << 21) : complément du filtre
                                       & within & (((c & 8) == 0) | ((s.st & ST_BDES) == 0))
                                       & ~(((c & 8) != 0) & untargetable(bank, s, h)))
         row = jnp.where((c & (1 << 20)) != 0, within, row)  # copie intégrale du registre
@@ -2426,7 +2468,7 @@ def exec_one(bank, s):
         active = (op == OP_SPSUMMON) & s.reg[ra].any()
         typ = effect_summon_type(c)
         attempted = s.reg[ra] & active
-        s = s._replace(suminfo=jnp.where(attempted, summon_info(typ, s.zone, p), s.suminfo))
+        s = s._replace(suminfo=jnp.where(attempted, summon_info(typ, s.zone, p), s.suminfo), ss_t=s.ss_t | attempted)
         def prepare(_, carry):
             group, failed_space = carry
             lk = (bank.ctype[s.cid] & TYPE_LINK) != 0
@@ -2496,6 +2538,11 @@ def exec_one(bank, s):
         branches[o] = pure
     branches[OP_CHOOSE] = choose
     branches[OP_LOCK] = lock
+
+    def sslock(s):  # ajout en tête de table (la plus ancienne sort si la table est pleine)
+        row = jnp.stack([h + 1, e, b, c, rel(p, a)]).astype(I32)
+        return adv(s._replace(ssl=jnp.concatenate([row[None], s.ssl[:-1]])))
+    branches[OP_SSLOCK] = sslock
     branches[OP_MODIFY] = modify
     branches[OP_FUSMAT] = fusmat
     branches[OP_RITMAT] = ritmat
@@ -2847,7 +2894,7 @@ def apply(bank, s, a):
         typ = jnp.where((ct & TYPE_LINK) != 0, SUMMON_LINK,
                         jnp.where((ct & TYPE_XYZ) != 0, SUMMON_XYZ,
                                   jnp.where((ct & TYPE_SYNCHRO) != 0, SUMMON_SYNCHRO, SUMMON_SPECIAL)))
-        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.tp)))
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.tp)), ss_t=s.ss_t.at[c].set(True))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
         s = raise_ev(brk(s), EV_SPSUMMON, jnp.arange(n) == c, s.tp)  # break_effect après les matériaux
@@ -2875,7 +2922,7 @@ def apply(bank, s, a):
     def pend_place(s):
         c = s.pend
         pos = jnp.where(k == A_POS_ATK, P_FU_ATK, P_FU_DEF)
-        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(SUMMON_PENDULUM,s.zone[c],s.tp)))
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(SUMMON_PENDULUM,s.zone[c],s.tp)), ss_t=s.ss_t.at[c].set(True))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.tp, pos)
         s = s._replace(proc=s.proc.at[c].set(True), st=s.st.at[c].set(ST_SUMMON_TURN | ST_SPSUM | ST_PSTEP))
@@ -2892,7 +2939,7 @@ def apply(bank, s, a):
         proper = current_ins(bank, s)[3]
         completed = proper > 0
         typ = effect_summon_type(proper)
-        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.ch_p)))
+        s = s._replace(suminfo=s.suminfo.at[c].set(summon_info(typ,s.zone[c],s.ch_p)), ss_t=s.ss_t.at[c].set(True))
         s = compact(s, jnp.arange(n) == c)
         s = move(s, c, Z_MZONE, s.zsel, s.ch_p, pos)
         # Duel.SpecialSummon : EVENT_SPSUMMON_SUCCESS avec ep = PLAYER_NONE (operations.cpp, special_summon, étape 4) ;
@@ -3158,7 +3205,7 @@ def new_game(bank, deck0, deck1, key=None, extra0=None, extra1=None, extra_count
               bend_ep=f, atk=_i(-1), atk_tgt=_i(-1), ev_g=jnp.zeros((NEV, n), bool), ev_p=jnp.zeros(NEV, I32),
               pzone=zone0, tev=jnp.zeros((NEV, n), bool), tew=jnp.zeros((NEV, n), bool), teg=jnp.zeros((NEV, n), bool), tg=jnp.zeros(n, bool), tg_e=z,
               tst=_i(0), pt_p=_i(0), pt_passed=f, dstep=_i(DS_NONE), ds_t=_i(0), ds_flip=f, rb_m=jnp.zeros(n, bool), rb_t=_i(0), rpl=f, opt_cid=jnp.zeros((2, n * E), I32),
-              lock_cid=jnp.zeros((2, n), I32), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
+              lock_cid=jnp.zeros((2, n), I32), ssl=jnp.zeros((SSL, 5), I32), ss_t=jnp.zeros(n, bool), atk_c=bank.atk[cid], df_c=bank.df[cid], batk_c=bank.atk[cid], tm_code=jnp.zeros(TM, I32),
               tm_m=jnp.zeros((TM, n), bool), tm_v=jnp.zeros((TM, n), I32), tm_t=jnp.zeros(TM, I32), tm_dur=jnp.zeros(TM, I32), tm_rd=jnp.zeros(TM, bool), tm_src=jnp.full(TM, -1, I32), tm_n=_i(0),
               ovf=_i(0), en_t=z, fl_c=z, ib_c=jnp.full(n, BIG, I32), pf_c=jnp.zeros(2, I32), cav=jnp.zeros((n, E), bool), cav_t=jnp.zeros((n, E), I32),
               proc=jnp.zeros(n, bool), fz_c=jnp.zeros(n, bool), fsel=f, rz_c=z, rsel=_i(0), sz_c=jnp.zeros(n, bool),

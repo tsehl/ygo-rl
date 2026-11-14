@@ -480,3 +480,76 @@ AddCustomActivityCounter (21) et SetLabel (19).
 `TR_DIAG=1 translate.py` précise le refus « if suivi d'instructions » par la première
 instruction qui suit le `if`. Sur les 173 cartes, 65 avaient un SpecialSummonComplete
 après le `if`.
+
+## Blocs conditionnels et Step en boucle (2026-11-14, 38805d6)
+
+Un `if … then … end` suivi d'autres instructions devient un bloc : le traducteur
+émet `OP_BLOCK` (a = première instruction après le bloc). Dans le moteur, un test
+faux ou un « non » à `OP_YESNO` à l'intérieur saute à la fin du bloc au lieu
+d'arrêter l'effet (`block_end`). Refusés : if imbriqué suivi d'instructions,
+`return` dans le bloc, variable de l'environnement réassignée dedans, groupe
+modifié dans le bloc puis relu après, bloc hors de la résolution.
+
+`Duel.SpecialSummonStep` dans un `for … in g` (aux.Next / `:Iter`) est traduit une
+fois pour tout le groupe, comme une invocation simultanée : c'est ce que fait
+`SpecialSummonComplete`. Les tests sur Blue-Eyes Spirit Dragon
+(`CARD_BLUEEYES_SPIRIT`, effet de joueur que le traducteur refuse) sont repliés à
+faux.
+
+Catalogue : **828 / 13 541**. Validation 12/12 (graines 5300-5311). Regress complet
+et compare_gen 0-9 (revive 0 et 4) verts.
+
+## Restrictions d'invocation spéciale, étiquettes constantes, zones libérées (2026-11-14)
+
+- **SSLOCK** (`OP_SSLOCK`, table `ssl`) : « vous ne pouvez plus invoquer
+  spécialement de monstres <filtre> ce tour, sauf <filtre> ». Les huit lignes de
+  `ssl` sont lues par `refresh`, et une carte qui les vérifie reçoit `FL_NO_SS`.
+  `ss_t` marque les cartes invoquées spécialement ce tour, avec les statuts
+  virtuels `ST_SST` / `ST_SSXT` (depuis l'Extra Deck). `FILTER_NOT` donne le
+  complément d'un filtre. Les compteurs d'activité
+  (AddCustomActivityCounter) sont lus par ces filtres. Approximations :
+  invocateur = contrôleur, filtre du compteur statique. Le filtre d'exception
+  compte dans la limite NF = 4 (73534250 et 73979030 refusées ; elles plantaient `assemble`).
+- **Étiquettes constantes** (`fold_labels`) : le traducteur simule
+  `e:SetLabel(k)` / `e:GetLabel()` sur le chemin de vérification (coût et cible
+  avec chk = 0), puis sur le chemin réel (coût, cible, opération). Il replie
+  ensuite les tests décidés et remplace les lectures par leur constante. Restent
+  refusées les valeurs dynamiques (69 cartes : niveaux, comptes, résultat de
+  SelectOption) et les SetLabel conditionnels. Une étiquette numérique
+  demanderait un registre du moteur.
+- **Zones libérées par le coût** : `F_ZX` reçoit trois bits.
+  - `ZX_FREE` : `GetMZoneCount(tp, c) > 0`, ou bien `ft > 0 or (IsControler(tp)
+    and GetSequence() < 5)`. Sans case libre, seuls mes monstres des cases
+    principales passent.
+  - `ZX_FREEANY` : même chose sans condition de contrôleur.
+  - `ZX_OPFU` : `IsControler(tp) or IsFaceup()`.
+
+  Sans `IsLocation(LOCATION_MZONE)`, `GetSequence() < 5` est lu comme une case
+  principale (note).
+- **Forme chk** : `if A then return false end` suivi de `return B` est replié en
+  `return not A and B`.
+- **Activation combinée** : n'importe quel effet offert (QUICK_O / TRIGGER_O /
+  TRIGGER_F en zone magie-piège) est reconnu comme dans `field::get_cteffect`. Le
+  moteur ne gère qu'un FREE_CHAIN unique. Les 88 cartes à déclencheur ou à
+  événement restent refusées.
+
+- **`ss_locked` en boucle** : la première version déroulait 8 lignes × 2 `filter_mask` dans `refresh`.
+  `sbp` était tué à 13,9 Go. Une `fori_loop` sur les seules lignes actives (en tête de table), avec un seul
+  `filter_mask` dans le corps, ramène le pic de sb / sbp à 11,7 Go.
+- **Aides sans effet global** (`fold_helpers`, appliqué au chargement du script) :
+  - `aux.NecroValleyFilter(f)` devient `f` : aucune carte traduite ne pose EFFECT_NECRO_VALLEY.
+  - `aux.SpElimFilter(c, faceup, mzone)` : sans Spirit Elimination, sans `mzone` il devient
+    `c:IsLocation(LOCATION_GRAVE)` ; avec `mzone`, vrai, ou « pas face verso en zone monstres » si `faceup`.
+  - `aux.DoubleSnareValidity` (marque lue par Double Snare seulement) est retirée.
+
+Catalogue : 859 avant les aides, **907 / 13 541** après (+48, aucune perte hors des deux cartes SSLOCK
+refusées).
+
+Validation des 48 cartes (graines 5500-5515, `--k 4`) : 14/16 parties identiques, 22 / 46 cartes vues en jeu.
+Les deux autres parties sont non concluantes : Raidraptor - Nest (8559793) a deux effets sans description, et
+le harnais ne sait pas lequel l'oracle a activé. Aucune divergence n'y est vue.
+
+La campagne a trouvé un bug du traducteur. Un `if` dont le corps n'avait que des appels ignorés
+(`ConfirmCards`) était sauté en entier, même quand son test faisait une action (`Duel.SendtoHand(tc, …) > 0`).
+La résolution de Heraldic Beast Aberconway sortait vide. Correction : on ne saute un tel `if` que si son test
+est pur. Sur tout le catalogue, seule cette carte change.
