@@ -4,6 +4,47 @@ But : couvrir tout le jeu en traduisant les 13 541 scripts officiels (`data/Card
 moteur, et vérifier chaque carte traduite contre l'oracle. Les vraies cartes restent un benchmark : elles ne servent
 qu'à mesurer ce que le moteur sait jouer, jamais à l'entraînement.
 
+## Première cible d'une sélection multiple (codex, 14 novembre 2026)
+
+`SelectTarget` peut sélectionner plusieurs cartes ; `GetFirstTarget()` (un seul
+retour Lua) et `GetChainInfo(0, CHAININFO_TARGET_CARDS):GetFirst()` choisissent
+la première cible du groupe original, avant le filtrage des relations perdues.
+Le traducteur utilise `FIRST(original=True)` puis le test de relation `REQ`
+existant : aucun opcode, champ d'état ou changement du moteur d'exécution ajouté.
+Les programmes à cible unique conservent leur chemin précédent.
+
+Les sélections multiples via `SetTargetCard`, `GetTargetCards` sur plusieurs
+cibles, les retours multiples de `GetFirstTarget` et le `GetFirst` de groupes
+arbitraires restent refusés. Ce lot n'ajoute pas encore de distribution
+procédurale dédiée à la lecture de la première cible ; ce volet reste à traiter
+avant de revendiquer une couverture de cette composition à l'entraînement.
+
+Contrôles :
+
+```sh
+YGO_JAX_CACHE=/tmp/ygo-jax .venv/bin/python -m unittest discover -s tests -p test_source_relation.py
+YGO_JAX_CACHE=/tmp/ygo-jax .venv/bin/python tests/multiple_targets_oracle_check.py
+```
+
+Les six scénarios différentiels couvrent les deux écritures Lua, sans réponse
+puis avec destruction de chacune des deux cibles : **4 736 décisions identiques**,
+avec activation et résolution exigées. Le soin dépend bien de la première cible
+originale, même lorsqu'elle a disparu et que la seconde est encore liée. Les dix
+tests unitaires de relation passent, ainsi que les quinze tests de procédures.
+Ces scénarios ne remplacent pas une campagne de toutes les cartes officielles.
+Comparaison du catalogue épinglé avec `333041c` : **828 → 845 scripts traduits**,
+17 gagnés, aucune perte ni exception interne. Les candidats gagnés ont été
+revérifiés avec la restriction finale sur `SetTargetCard`. Les 17 nouvelles
+acceptations ne sont pas encore toutes validées en jeu. Codes : 2203790, 4929256,
+6343408, 21507589, 25401880, 28357177, 29826127, 36280194, 48976825, 49479374,
+66149377, 77334267, 81191584, 90928333, 93920745, 96947648, 97518132.
+La suite unitaire complète donne 126/129 : les deux tests de compatibilité des
+anciens modèles (`test_inline_activation` et `test_summon_history`) et le test
+de comptage des appels de régression (`test_validation`, 22 appels contre 21
+attendus) échouent aussi avec le traducteur de `333041c`, avant ce lot.
+Le coût GPU de cette composition n'a pas été mesuré ; le lot ne modifie pas le
+graphe d'exécution général mais ajoute une instruction aux résolutions concernées.
+
 ## État et reprise (10 novembre 2026)
 
 La branche `codex` intègre **784 scripts sur 13 541**. Le dernier lot intégré est validé par 1 640 parties historiques, les contrôles d'observation et de vectorisation, 30 parties officielles et 10 parties générées. Une partie identique peut résoudre un effet sans que toutes ses branches soient exercées : les campagnes enregistrent séparément présence, activation et résolution.

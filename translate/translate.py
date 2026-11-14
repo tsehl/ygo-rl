@@ -2400,6 +2400,18 @@ class Translator:
     def union_notself(self, a, b):
         return a[:4] + (a[4] | b[4],) + a[5:]
 
+    def first_target(self, source, prog):
+        if source.one:
+            return source
+        need(prog is not None and prog.kind == "resolve", "première cible multiple hors résolution")
+        # Le registre chargé à la résolution exclut les cartes déplacées. Le
+        # premier élément doit être choisi AVANT ce filtrage, dans lk_reg.
+        need(not any(a == source.r and (op == core.OP_SPSUMMON or op == core.OP_MOVE and c & 1)
+                     for op, a, b, c in prog.ins), "première cible après mutation du groupe")
+        r = prog.reg()
+        prog.emit(C.FIRST(r, source.r, original=True))
+        return Reg(r, source.me, source.op, one=True, target=True)
+
     def call(self, d, args, env, prog, nret):
         E_ = lambda i: self.expr(args[i], env, prog)  # noqa: E731
         if d in IGNORED_CALLS:
@@ -2429,6 +2441,8 @@ class Translator:
         if d == "Duel.GetFirstTarget" or d == "Duel.GetTargetCards":
             need(self.treg is not None, "cibles inconnues")
             need(d != "Duel.GetFirstTarget" or nret == 1, "plusieurs retours de GetFirstTarget")
+            if d == "Duel.GetFirstTarget":
+                return self.first_target(self.treg, prog)
             need(self.treg.one, "groupe de cibles multiples non représenté")
             return self.treg
         if d == "Duel.GetAttacker":
@@ -2457,7 +2471,6 @@ class Translator:
             need(prog is not None and (prog.kind != "resolve" or not tgt), "SelectTarget à la résolution")
             F_, _ = self.mkfilter(args[1], args[8:], args[2], args[3], args[4], args[7] if len(args) > 7 else None, env, tgt=tgt)
             mn, mx = self.cnum(args[5], env), self.cnum(args[6], env)
-            need(not tgt or mx == 1, "sélection de cibles multiples non représentée")
             r = self.select(prog, F_, sp, mn, mx, tgt)
             reg = Reg(r, F_[0], F_[1], one=(mx == 1), target=tgt)
             if tgt:
@@ -2654,6 +2667,8 @@ class Translator:
         if isinstance(obj, ChainEff) and m == "GetHandler":
             return ChainEff(card=True)
         if isinstance(obj, (Reg, Lazy, EventGroup)) and m == "GetFirst":
+            if obj is self.treg:
+                return self.first_target(obj, prog)
             if isinstance(obj, Reg) and obj.one:
                 return obj
             need(prog is not None, "GetFirst sans programme représentable")

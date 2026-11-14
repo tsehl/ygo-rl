@@ -77,6 +77,19 @@ class SourceRelationTests(unittest.TestCase):
                 self.assertEqual(effects[0][6][0], cards.REQ(0, 1, related=True))
                 path.write_text(script.replace('LOCATION_SZONE,0,1,1,e:GetHandler()',
                                                'LOCATION_SZONE,0,1,2,e:GetHandler()'))
+                multiple, *_ = translate.translate(600930051)
+                self.assertEqual(multiple[0][6][0][0], core.OP_MINATK)
+                self.assertEqual(multiple[0][6][0][3], 3)  # FIRST(original=True)
+                self.assertEqual(multiple[0][6][1][0], core.OP_REQ)
+                # Les deux écritures Lua doivent choisir dans le groupe original.
+                path.write_text(path.read_text().replace('Duel.GetFirstTarget()',
+                    'Duel.GetChainInfo(0,CHAININFO_TARGET_CARDS):GetFirst()'))
+                chain_group, *_ = translate.translate(600930051)
+                self.assertEqual(chain_group[0][6], multiple[0][6])
+                # GetTargetCards filtre les cartes non liées : sémantique distincte,
+                # conservée hors périmètre tant que le groupe n'est pas représenté.
+                path.write_text(path.read_text().replace(
+                    'Duel.GetChainInfo(0,CHAININFO_TARGET_CARDS):GetFirst()', 'Duel.GetTargetCards(e)'))
                 with self.assertRaisesRegex(translate.Unsupported, 'cibles multiples'):
                     translate.translate(600930051)
             finally:

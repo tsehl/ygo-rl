@@ -56,3 +56,17 @@ Priorités suivantes à confirmer par ce diagnostic : événements de phase et
 effets différés, puis complétude d'une famille déjà entamée comme l'équipement.
 Le classement du premier refus par carte aide au diagnostic mais ne suffit pas
 à choisir une priorité : regarder aussi les blocages cumulés et la réutilisation.
+
+## Premier sous-lot réalisé
+
+Traduction de la première cible originale après `SelectTarget` multiple, par
+réutilisation de `FIRST(original=True)` et `REQ`. Six scénarios oracle passent
+(4 736 décisions identiques) et dix tests unitaires de relation passent. Détails
+et limites dans `translate/README.md`. Aucun fichier du moteur d'exécution ni
+du réseau modifié. La suite unitaire complète garde trois échecs préexistants,
+reproduits avec le traducteur précédent.
+
+Lots suivants : distribution procédurale de cette composition et observation
+nécessaire au choix ; groupes multiples via `SetTargetCard` / `GetTargetCards` ;
+scénarios de déplacement puis retour. Ne pas assimiler le sous-lot livré à la
+couverture complète des groupes et relations.
