@@ -490,6 +490,78 @@ def _walk(node, loop=False):
                                                          A.LocalFunction, A.AnonymousFunction, A.Method)))
 
 
+# Effets de joueur qu'aucune carte traduite ne pose : le test vaut faux. Blue-Eyes Spirit Dragon (interdit
+# d'invoquer spécialement plus d'un monstre à la fois) pose un effet de joueur, refusé par le traducteur.
+ABSENT_PLAYER_EFFECTS = {"CARD_BLUEEYES_SPIRIT"}
+
+
+def _pure(n):
+    def act(x):
+        return isinstance(x, A.Call) and not re.match(r"Duel\.(Is|Get)", dotted(x.func) or "")
+    return not act(n) and not any(act(ch) for *_, ch, _ in _walk(n))
+
+
+def _fold(n):
+    for parent, k, i, ch in list(_children(n)):
+        new = _fold(ch)
+        if new is not ch:
+            if i is None:
+                setattr(parent, k, new)
+            else:
+                getattr(parent, k)[i] = new
+    T, F = A.TrueExpr, A.FalseExpr
+    if isinstance(n, A.Call) and dotted(n.func) == "Duel.IsPlayerAffectedByEffect" and len(n.args) == 2 \
+            and dotted(n.args[1]) in ABSENT_PLAYER_EFFECTS:
+        return F()
+    if isinstance(n, A.ULNotOp) and isinstance(n.operand, (T, F)):
+        return F() if isinstance(n.operand, T) else T()
+    if isinstance(n, A.AndLoOp):
+        if isinstance(n.left, F) or isinstance(n.right, F) and _pure(n.left):
+            return F()
+        if isinstance(n.left, T):
+            return n.right
+        if isinstance(n.right, T):
+            return n.left
+    if isinstance(n, A.OrLoOp):
+        if isinstance(n.left, T) or isinstance(n.right, T) and _pure(n.left):
+            return T()
+        if isinstance(n.left, F):
+            return n.right
+        if isinstance(n.right, F):
+            return n.left
+    if isinstance(n, A.Block):
+        n.body = [st for st in n.body if not (isinstance(st, A.If) and isinstance(st.test, F) and st.orelse is None)]
+    return n
+
+
+def fold_absent(fn):
+    """Remplace les tests d'effets de joueur absents (ABSENT_PLAYER_EFFECTS) par faux et simplifie."""
+    if any(isinstance(ch, A.Call) and dotted(ch.func) == "Duel.IsPlayerAffectedByEffect" for *_, ch, _ in _walk(fn.body)):
+        _fold(fn.body)
+
+
+BLOCK_END = (core.OP_BLOCK, -1, 0, 0)  # marqueur du traducteur, retiré par allocate
+
+
+def _walk_nofn(node):
+    """Nœuds sous node, sans entrer dans les fonctions imbriquées."""
+    for _, _, _, ch in _children(node):
+        yield ch
+        if not isinstance(ch, (A.Function, A.LocalFunction, A.AnonymousFunction, A.Method)):
+            yield from _walk_nofn(ch)
+
+
+def _path(root, target):
+    """Ancêtres de target sous root (root compris), du plus haut au plus proche."""
+    for _, _, _, ch in _children(root):
+        if ch is target:
+            return [root]
+        sub = _path(ch, target)
+        if sub is not None:
+            return [root] + sub
+    return None
+
+
 def step_to_summon(fn):
     """Duel.SpecialSummonStep suivi de Duel.SpecialSummonComplete, une seule invocation hors boucle : réécrit en
     Duel.SpecialSummon (même signature ; dans un test, SpecialSummon(...)>0) et retire le Complete. Les effets
@@ -503,8 +575,15 @@ def step_to_summon(fn):
             comps.append((parent, k, i, ch, loop))
     if not steps:
         return
-    need(len(steps) == 1 and not steps[0][4], "SpecialSummonStep multiple ou en boucle")
+    need(len(steps) == 1, "SpecialSummonStep multiple")
     parent, k, i, call, _ = steps[0]
+    # Dans un for sur un groupe (aux.Next / :Iter), le corps est traduit une fois pour tout le groupe :
+    # le Step devient une invocation simultanée du groupe, ce que fait Complete.
+    path = _path(fn.body, call)
+    loops = [n for n in path if isinstance(n, (A.While, A.Repeat, A.Fornum, A.Forin, A.Function, A.LocalFunction,
+                                               A.AnonymousFunction, A.Method))]
+    need(not loops or len(loops) == 1 and isinstance(loops[0], A.Forin) and isinstance(parent, A.Block),
+         "SpecialSummonStep en boucle")
     need(len(comps) == 1 and not comps[0][4] and isinstance(comps[0][0], A.Block), "SpecialSummonComplete : forme")
     blk, j = comps[0][0], comps[0][2]
     def has(n):
@@ -1265,7 +1344,15 @@ class Translator:
         # n'est plus utilisée après elle, y compris à travers les phases d'un maillon.
         last_read = {}
         flat = [ins for program in effect[4:7] for ins in program]
+        in_blk, blk_mut, done_mut = False, set(), set()
         for index, (op, a, b, c) in enumerate(flat):
+            if op == core.OP_BLOCK:
+                in_blk = a >= 0
+                if not in_blk:
+                    done_mut |= blk_mut
+                    blk_mut = set()
+            elif in_blk and (op == core.OP_SPSUMMON or op == core.OP_MOVE and c & 1):
+                blk_mut.add(a)
             reads = []
             if op in read_a:
                 reads.append(a)
@@ -1276,6 +1363,7 @@ class Translator:
             if op == core.OP_DAMAGE and c:
                 reads.append(c - 1)
             for reg in reads:
+                need(reg not in done_mut, "groupe modifié dans un if suivi d'instructions, relu après")
                 last_read[reg] = index
         current, queries, entries = {}, {}, []
         next_value = 0
@@ -1355,6 +1443,15 @@ class Translator:
                 lowered[2] += 1
             programs[phase].append((op, *lowered))
         for phase, program in enumerate(programs):
+            out = []
+            for ins in program:  # BLOCK : a = indice de la première instruction après le bloc
+                if ins[0] == core.OP_BLOCK and ins[1] < 0:
+                    start = max(i for i, x in enumerate(out) if x[0] == core.OP_BLOCK and x[1] == 0)
+                    out[start] = (core.OP_BLOCK, len(out), 0, 0)
+                else:
+                    out.append(ins)
+            need(phase == core.PG_RESOLVE or not any(x[0] == core.OP_BLOCK for x in out), "BLOCK hors résolution")
+            programs[phase] = program = out
             limit = core.P-1 if phase == core.PG_RESOLVE else core.PT
             need(len(program) <= limit, f"programme {phase} > {limit} instructions")
         filters = {ins[2] for program in programs for ins in program if ins[0] == core.OP_FILTER}
@@ -1370,6 +1467,7 @@ class Translator:
         self.treg = None  # registre des cibles (SelectTarget)
         self.pending = []  # tests d'activation pas encore émis (fusionnés avec une sélection qui suit)
         self.nrc = None  # registre d'un Duel.NegateRelatedChain en attente de son EFFECT_DISABLE
+        self.in_block = False  # dans un if suivi d'instructions (BLOCK)
         self.hreg = self.egreg = None
         self.chain_field = self.chain_nact = False
         cost = Prog(self, "cost")
@@ -1450,6 +1548,7 @@ class Translator:
             self.cur_fn = fn
             return self.run_known(fn.name, prog)
         env = self.fn_env(fn.node)
+        fold_absent(fn.node)
         step_to_summon(fn.node)
         self.nrc = None
         self.block(fn.node.body.body, env, prog)
@@ -1555,11 +1654,32 @@ class Translator:
                 return self.block(body, env, prog)
         # if COND then BODY end : la résolution s'arrête si COND est faux ; seulement si rien ne suit
         need(prog.kind == "resolve" or self.always_true(t, env), f"if dans {prog.kind}")
-        if not self.always_true(t, env):
-            _r = [s for s in rest if not self.ignorable(s)]
-            need(not _r, "if suivi d'instructions" + (" : " + self.show(_r[0])[:50].split("(")[0] if _r and os.environ.get("TR_DIAG") else ""))
+        if not self.always_true(t, env) and [s for s in rest if not self.ignorable(s)]:
+            return self.if_block(st, env, prog)
         self.res_cond(t, env, prog)
         return self.block(body, env, prog)
+
+    def if_block(self, st, env, prog):
+        """if COND then BODY end suivi d'instructions (résolution) : BLOCK … BLOCK_END. Un test faux (ou un « non » à
+        SelectYesNo) dans le bloc saute à sa fin au lieu d'arrêter l'effet. Les noms liés dans le bloc (locaux,
+        restrictions de res_cond) sont oubliés après."""
+        need(not self.in_block, "if imbriqué suivi d'instructions")
+        inner = list(_walk_nofn(st.body))
+        need(not any(isinstance(n, A.Return) for n in inner), "return dans un if suivi d'instructions")
+        need(not any(isinstance(n, A.Assign) and any(isinstance(x, A.Name) and x.id in env for x in n.targets)
+                     for n in inner), "affectation d'une variable extérieure dans un if suivi d'instructions")
+        saved = dict(env), self.hreg, self.egreg
+        prog.emit(C.BLOCK())
+        self.in_block = True
+        try:
+            self.res_cond(st.test, env, prog)
+            self.block(st.body.body, env, prog)
+        finally:
+            self.in_block = False
+        prog.emit(BLOCK_END)
+        env.clear()
+        env.update(saved[0])
+        self.hreg, self.egreg = saved[1:]
 
     def ignorable(self, st):
         return isinstance(st, A.Call) and dotted(st.func) in IGNORED_CALLS
@@ -1726,8 +1846,8 @@ class Translator:
         if not known:
             return None
         value = self.expr(left, env, None)
-        if x.right.n == 0 and isinstance(x, A.LessOrEqThanOp if negate else A.GreaterThanOp):
-            return (value.player.p, value.zone, 1)
+        if isinstance(x, A.LessOrEqThanOp if negate else A.GreaterThanOp):
+            return (value.player.p, value.zone, x.right.n + 1)
         if not negate and isinstance(x, A.GreaterOrEqThanOp):
             return (value.player.p, value.zone, x.right.n)
         return None
@@ -2574,7 +2694,7 @@ class Translator:
         (Sangan, Witch…) → LOCK."""
         f = ne.f
         need(f.get("SetType", [0])[0] == K["EFFECT_TYPE_FIELD"] and f.get("SetCode", [0])[0] == K["EFFECT_CANNOT_ACTIVATE"],
-             "effet de joueur")
+             "effet de joueur" + (f" {f.get('SetCode')}" if os.environ.get("TR_DIAG") else ""))
         need(f.get("SetTargetRange") == [1, 0], "effet de joueur : joueurs")
         need(f.get("SetReset", [0])[0] == K["RESET_PHASE"] | K["PHASE_END"], "effet de joueur : durée")
         lab = f.get("SetLabel", [None])[0]

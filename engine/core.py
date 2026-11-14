@@ -145,8 +145,11 @@ CH = 12          # maillons de chaîne (au plus 1 ignition + 2 × 5 cases magie/
 (OP_END, OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_CHOOSE, OP_MOVE, OP_SPSUMMON, OP_DRAW,
  OP_DAMAGE, OP_RECOVER, OP_SHUFFLE_HAND, OP_COND_CHAIN, OP_CHAINCARD, OP_NEGATE, OP_PAY_LP, OP_EVENT, OP_COND_TURN,
  OP_COND_EVP, OP_COND_SELF, OP_LOCK, OP_MODIFY, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_FUSMAT, OP_RITMAT, OP_LABEL,
- OP_COND_LABEL, OP_YESNO, OP_EQUIP) = range(32)
-N_OPS = 32
+ OP_COND_LABEL, OP_YESNO, OP_EQUIP, OP_BLOCK) = range(33)
+N_OPS = 33
+# OP_BLOCK : début d'un bloc conditionnel (if … then … end suivi d'instructions), a = indice de la première instruction
+# après le bloc. Sans effet à l'exécution ; un test faux (ou « non » à OP_YESNO) dans le bloc saute en a au lieu
+# d'arrêter le programme.
 # OP_LABEL : le maillon retient si le registre a est non vide (e:SetLabel à l'activation) ; OP_COND_LABEL : condition
 # sur ce label à la résolution ; OP_YESNO : le joueur de l'effet choisit de continuer (D_YESNO) ; OP_EQUIP :
 # Duel.Equip(tp, handler, première carte du registre a si elle est recto en zone monstres)
@@ -2252,6 +2255,14 @@ def current_ins(bank, s):
     return bank.prog[s.cid[s.ch_src], s.ch_eff, s.pg, s.pc]
 
 
+def block_end(bank, s):
+    """Fin du bloc (OP_BLOCK) qui contient l'instruction en cours, ou -1 : un test faux y saute au lieu d'arrêter."""
+    prog = bank.prog[s.cid[s.ch_src], s.ch_eff, s.pg]
+    i = jnp.arange(prog.shape[0])
+    m = (prog[:, 0] == OP_BLOCK) & (i < s.pc) & (prog[:, 1] > s.pc)
+    return jnp.where(m.any(), jnp.max(jnp.where(m, prog[:, 1], 0)), -1).astype(I32)
+
+
 def use_count(bank, s, c, e, p, enabled=True):
     """Consomme la limite d'une activation ou d'une procédure, sans construire de maillon."""
     opt = bank.eopt[s.cid[c], e]
@@ -2370,7 +2381,9 @@ def exec_one(bank, s):
 
     def pure(s):
         reg, ok = _pure(bank, s, s.reg, jnp.bool_(True), h, e, p, s.ch_k, ins)
-        return _cond(ok, adv, end, s._replace(reg=reg))  # condition fausse à la résolution : l'effet s'arrête
+        # condition fausse à la résolution : l'effet s'arrête, ou saute à la fin du bloc qui la contient
+        skip = block_end(bank, s)
+        return _cond(ok, adv, lambda s: _cond(skip >= 0, lambda s: s._replace(pc=skip), end, s), s._replace(reg=reg))
 
     def choose(s):  # au plus (c >> 4) & 15 cartes, moins s'il n'y a pas assez de candidats (rien : pas de décision)
         need = jnp.minimum((c >> 4) & 15, s.reg[jnp.clip(b, 0, R - 1)].sum()).astype(I32)
@@ -2477,6 +2490,7 @@ def exec_one(bank, s):
 
     branches = [lambda s: s] * N_OPS
     branches[OP_END] = end
+    branches[OP_BLOCK] = adv
     for o in (OP_FILTER, OP_SELF, OP_REQ, OP_REQ_FREE, OP_MINATK, OP_COND_CHAIN, OP_CHAINCARD, OP_EVENT, OP_COND_TURN,
               OP_COND_EVP, OP_COND_SELF, OP_COND_ATK, OP_ATTACKER, OP_COND_PHASE, OP_COND_LABEL):
         branches[o] = pure
@@ -2912,7 +2926,7 @@ def apply(bank, s, a):
                             lambda s: _cond(s.dec == D_SELECT, lambda s: sel_finish(bank, s), lambda s: _cond(s.wk == W_TRIG, lambda s: trig_next(bank, s._replace(tst=s.tst + 1)),
                                             lambda s: pass_priority(bank, s), s), s), s),
             lambda s: s._replace(pc=s.pc + 1, dec=_i(D_RUN)),
-            lambda s: s._replace(pc=_i(P - 1), dec=_i(D_RUN)),
+            lambda s: s._replace(pc=jnp.where(block_end(bank, s) >= 0, block_end(bank, s), P - 1), dec=_i(D_RUN)),
             replay_go, battle_over,
             inline_yes, lambda s: s._replace(pg=_i(PG_TARGET), pc=_i(P - 1), dec=_i(D_RUN), zctx=_i(ZC_ACT)),
         ], s)
