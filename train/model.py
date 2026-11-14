@@ -27,7 +27,7 @@ import core  # noqa: E402
 from core import P, NF, FW, MW, NSET, FK, NV, N_SPECIAL, CH, V_ACT0  # noqa: E402
 
 NBITS = 16
-N_OPS = 32
+N_OPS = 48  # marge : la table des opcodes grandit sans changer la forme des poids (complete() complète les anciens)
 N_KIND = 8
 N_DEC = 13
 N_PHASE = 16
@@ -284,6 +284,8 @@ def complete(p):
     c = dict(p["cards"])
     for k, n in dict(head=F_HEAD, eff=F_EFF, ins=F_INS, filt=F_FILT, matf=F_FILT).items():
         c[k] = pad(c[k], n)
+    if c["op"].shape[0] < N_OPS:  # opcodes ajoutés : plongements nuls
+        c["op"] = jnp.concatenate([c["op"], jnp.zeros((N_OPS - c["op"].shape[0], c["op"].shape[1]), c["op"].dtype)])
     p["cards"] = c
     w = p["act"]["w"]
     if w.shape[1] != V_ACT0 + 1:

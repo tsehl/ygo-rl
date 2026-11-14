@@ -104,6 +104,7 @@ def FUSMAT(dst, src): return (OP_FUSMAT, dst, src, 0)     # matériaux du monstr
 def RITMAT(dst, src, mode): return (OP_RITMAT, dst, src, mode)  # libérations du monstre rituel de src (RIT_*), une par une
 def COND_ATK(target=False): return (OP_COND_ATK, int(target), 0, 0)  # la carte attaque (target : est attaquée)
 def ATTACKER(r, tgt=False): return (OP_ATTACKER, r, int(tgt), 0)  # le monstre attaquant (tgt : s'il peut être ciblé)
+def BLOCK(end=0): return (core.OP_BLOCK, end, 0, 0)  # if … then … end suivi d'instructions : un test faux saute à end
 def EQUIP(r): return (core.OP_EQUIP, r, 0, 0)  # Duel.Equip : la carte équipe la cible du registre r (recto, zone monstres)
 
 
