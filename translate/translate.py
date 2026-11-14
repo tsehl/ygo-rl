@@ -399,6 +399,7 @@ class Script:
             self.tree = LA.parse(self.src)
         except Exception as e:  # noqa: BLE001
             raise Unsupported(f"script non parsé ({type(e).__name__})")
+        fold_helpers(self.tree)
         self.fns = {}
         self.vals = {}
         for st in self.tree.body.body:
@@ -534,10 +535,256 @@ def _fold(n):
     return n
 
 
+def _flag(x):
+    """Argument booléen constant (true / false / nil) ou None."""
+    if isinstance(x, A.TrueExpr):
+        return True
+    if isinstance(x, (A.FalseExpr, A.Nil)):
+        return False
+    return None
+
+
+def fold_helpers(tree):
+    """Aides de utility dont le résultat ne dépend que d'effets qu'aucune carte traduite ne pose.
+    aux.NecroValleyFilter(f) = f sans EFFECT_NECRO_VALLEY. aux.SpElimFilter(c, faceup, mzone) sans Spirit
+    Elimination (69832741) : sans mzone, c:IsLocation(LOCATION_GRAVE) ; avec mzone, pas face verso en zone monstres
+    si faceup, sinon vrai. aux.DoubleSnareValidity : marque lue par Double Snare seulement, retirée."""
+    folded = False
+
+    def loc(c, z):
+        return A.Invoke(c, A.Name("IsLocation"), [A.Name(z)])
+
+    def rewrite(n):
+        nonlocal folded
+        if isinstance(n, A.Block):
+            n.body = [st for st in n.body if not (isinstance(st, A.Call) and dotted(st.func) in
+                                                  ("aux.DoubleSnareValidity", "Auxiliary.DoubleSnareValidity"))]
+        for parent, k, i, ch in list(_children(n)):
+            new = rewrite(ch)
+            if new is not ch:
+                if i is None:
+                    setattr(parent, k, new)
+                else:
+                    getattr(parent, k)[i] = new
+        name = dotted(n.func) if isinstance(n, A.Call) else None
+        if name in ("aux.NecroValleyFilter", "Auxiliary.NecroValleyFilter") and len(n.args) == 1:
+            return n.args[0]
+        if name in ("aux.SpElimFilter", "Auxiliary.SpElimFilter") and 1 <= len(n.args) <= 3 \
+                and isinstance(n.args[0], A.Name):
+            faceup, mzone = ([_flag(a) for a in n.args[1:]] + [False, False])[:2]
+            if faceup is None or mzone is None:
+                return n
+            c = n.args[0]
+            if not mzone:
+                return loc(c, "LOCATION_GRAVE")
+            folded = True
+            if not faceup:
+                return A.TrueExpr()
+            return A.OrLoOp(A.Invoke(c, A.Name("IsFaceup"), []), A.ULNotOp(loc(c, "LOCATION_MZONE")))
+        return n
+
+    rewrite(tree)
+    if folded:
+        _fold(tree)
+
+
 def fold_absent(fn):
     """Remplace les tests d'effets de joueur absents (ABSENT_PLAYER_EFFECTS) par faux et simplifie."""
     if any(isinstance(ch, A.Call) and dotted(ch.func) == "Duel.IsPlayerAffectedByEffect" for *_, ch, _ in _walk(fn.body)):
         _fold(fn.body)
+
+
+def negate(t):
+    """Négation d'un test Lua, en inversant les comparaisons."""
+    inv = {A.EqToOp: A.NotEqToOp, A.NotEqToOp: A.EqToOp, A.LessThanOp: A.GreaterOrEqThanOp,
+           A.GreaterOrEqThanOp: A.LessThanOp, A.GreaterThanOp: A.LessOrEqThanOp, A.LessOrEqThanOp: A.GreaterThanOp}
+    if type(t) in inv:
+        return inv[type(t)](t.left, t.right)
+    if isinstance(t, A.ULNotOp):
+        return t.operand
+    return A.ULNotOp(t)
+
+
+class _LabelFold:
+    """e:SetLabel / e:GetLabel à valeurs constantes, entre coût, cible et opération d'une même activation.
+
+    ygopro appelle coût(chk=0) puis cible(chk=0) pour tester l'activation, puis coût, cible et opération.
+    L'étiquette est simulée le long de ces deux chemins ; chaque lecture doit suivre une écriture constante de
+    la même activation (aucune dépendance aux activations précédentes). Les lectures deviennent des nombres,
+    les tests décidés sont remplacés par leur branche et les écritures disparaissent."""
+
+    def __init__(self):
+        self.reads, self.tests, self.writes = {}, {}, set()
+
+    @staticmethod
+    def param(fn):
+        return fn.args[0].id if fn.args and isinstance(fn.args[0], A.Name) else None
+
+    @staticmethod
+    def is_label(n, e, m):
+        return isinstance(n, A.Invoke) and isinstance(n.source, A.Name) and n.source.id == e and n.func.id == m
+
+    def number(self, node):
+        if isinstance(node, A.Number):
+            return node.n
+        if isinstance(node, A.UMinusOp) and isinstance(node.operand, A.Number):
+            return -node.operand.n
+        raise Unsupported("SetLabel : valeur non constante")
+
+    def read(self, node, e, v):
+        for *_, ch, _ in [(None, None, None, node, False)] + list(_walk(node)):
+            if self.is_label(ch, e, "SetLabel"):
+                raise Unsupported("SetLabel dans une expression")
+            if self.is_label(ch, e, "GetLabel"):
+                need(not ch.args and v is not None, "GetLabel sans SetLabel constant préalable")
+                need(self.reads.setdefault(id(ch), v) == v, "GetLabel : valeurs différentes selon le chemin")
+
+    def value(self, t, e, v):
+        """Valeur booléenne du test après substitution, ou None."""
+        def ev(n):
+            if self.is_label(n, e, "GetLabel"):
+                return v
+            if isinstance(n, A.Number):
+                return n.n
+            if isinstance(n, A.UMinusOp):
+                x = ev(n.operand)
+                return None if x is None else -x
+            if isinstance(n, A.TrueExpr):
+                return True
+            if isinstance(n, A.FalseExpr):
+                return False
+            ops = {A.EqToOp: lambda a, b: a == b, A.NotEqToOp: lambda a, b: a != b,
+                   A.LessThanOp: lambda a, b: a < b, A.GreaterThanOp: lambda a, b: a > b,
+                   A.LessOrEqThanOp: lambda a, b: a <= b, A.GreaterOrEqThanOp: lambda a, b: a >= b}
+            if type(n) in ops:
+                a, b = ev(n.left), ev(n.right)
+                return None if a is None or b is None or isinstance(a, bool) or isinstance(b, bool) else ops[type(n)](a, b)
+            if isinstance(n, A.ULNotOp):
+                x = ev(n.operand)
+                return None if x is None else not x
+            if isinstance(n, A.AndLoOp):
+                a, b = ev(n.left), ev(n.right)
+                return False if a is False or (b is False and _pure(n.left)) else (b if a is True else None)
+            if isinstance(n, A.OrLoOp):
+                a, b = ev(n.left), ev(n.right)
+                return True if a is True or (b is True and _pure(n.left)) else (b if a is False else None)
+            return None
+        return ev(t)
+
+    def run(self, stmts, e, v, check):
+        """Simule une suite d'instructions ; renvoie (étiquette, terminé)."""
+        for st in stmts:
+            if isinstance(st, A.If) and isinstance(st.test, A.EqToOp) and isinstance(st.test.left, A.Name) \
+                    and st.test.left.id == "chk":
+                if check:
+                    v, _ = self.run(st.body.body, e, v, check)
+                    return v, True
+                if st.orelse is not None:
+                    need(isinstance(st.orelse, A.Block), "chk==0 avec elseif")
+                    v, done = self.run(st.orelse.body, e, v, check)
+                    if done:
+                        return v, True
+                continue
+            if self.is_label(st, e, "SetLabel"):
+                need(len(st.args) == 1, "SetLabel : plusieurs valeurs")
+                v = self.number(st.args[0])
+                self.writes.add(id(st))
+                continue
+            if isinstance(st, A.If):
+                self.read(st.test, e, v)
+                b = self.value(st.test, e, v)
+                if b is not None and any(self.is_label(ch, e, "GetLabel") for *_, ch, _ in _walk(st.test)) | \
+                        self.is_label(st.test, e, "GetLabel"):
+                    need(self.tests.setdefault(id(st), b) == b, "test d'étiquette : valeurs différentes selon le chemin")
+                    branch = st.body.body if b else (st.orelse.body if isinstance(st.orelse, A.Block) else
+                                                     [st.orelse] if st.orelse is not None else [])
+                    v, done = self.run(branch, e, v, check)
+                    if done:
+                        return v, True
+                    continue
+                for part in [st.body] + ([st.orelse] if st.orelse is not None else []):
+                    need(not any(self.is_label(ch, e, "SetLabel") for *_, ch, _ in _walk(part)), "SetLabel conditionnel")
+                    self.read(part, e, v)
+                continue
+            if isinstance(st, A.Return):
+                self.read(st, e, v)
+                if check:
+                    return v, True
+                continue
+            need(not any(self.is_label(ch, e, "SetLabel") for *_, ch, _ in _walk(st)), "SetLabel imbriqué")
+            self.read(st, e, v)
+        return v, False
+
+    def rewrite(self, block, e):
+        out = []
+        for st in block.body:
+            if id(st) in self.writes:
+                continue
+            if id(st) in self.tests:
+                b = self.tests[id(st)]
+                branch = st.body if b else st.orelse
+                if branch is None:
+                    continue
+                if isinstance(branch, A.Block):
+                    self.rewrite(branch, e)
+                    out.extend(branch.body)
+                    continue
+                st = branch  # elseif
+                if id(st) in self.tests or id(st) in self.writes:
+                    tmp = A.Block([st])
+                    self.rewrite(tmp, e)
+                    out.extend(tmp.body)
+                    continue
+            self.subst(st, e)
+            out.append(st)
+        block.body = out
+
+    def subst(self, node, e):
+        for parent, k, i, ch in list(_children(node)):
+            if self.is_label(ch, e, "GetLabel") and id(ch) in self.reads:
+                new = A.Number(self.reads[id(ch)]) if self.reads[id(ch)] >= 0 else A.UMinusOp(A.Number(-self.reads[id(ch)]))
+                if i is None:
+                    setattr(parent, k, new)
+                else:
+                    getattr(parent, k)[i] = new
+            elif isinstance(ch, A.Block):
+                self.rewrite(ch, e)
+            else:
+                self.subst(ch, e)
+
+
+def fold_labels(f):
+    """Copie des callbacks coût / cible / opération avec l'étiquette constante pliée (voir _LabelFold)."""
+    import copy
+    keys = [k for k in ("SetCost", "SetTarget", "SetOperation") if k in f and isinstance(f[k][0], Fn) and f[k][0].node is not None]
+    def uses(node):
+        e = _LabelFold.param(node)
+        return e is not None and any(_LabelFold.is_label(ch, e, m) for *_, ch, _ in _walk(node.body)
+                                     for m in ("SetLabel", "GetLabel"))
+    if not any(uses(f[k][0].node) for k in keys):
+        return f
+    f = dict(f)
+    nodes = {}
+    for k in keys:
+        nodes[k] = copy.deepcopy(f[k][0].node)
+        f[k] = [Fn(node=nodes[k], name=f[k][0].name, bound=f[k][0].bound), *f[k][1:]]
+    lf = _LabelFold()
+    v = None
+    for check in (True, False):
+        for k in ("SetCost", "SetTarget") + (() if check else ("SetOperation",)):
+            if k in nodes:
+                e = _LabelFold.param(nodes[k])
+                v, _ = lf.run(nodes[k].body.body, e, v, check)
+    for k, node in nodes.items():
+        lf.rewrite(node.body, _LabelFold.param(node))
+        # coût sans test chk : « e:SetLabel(1) return true » ne paie rien
+        if k == "SetCost" and node.body.body and isinstance(node.body.body[-1], A.Return) and \
+                len(node.body.body[-1].values) == 1 and isinstance(node.body.body[-1].values[0], A.TrueExpr):
+            node.body.body = node.body.body[:-1]
+        e = _LabelFold.param(node)
+        need(not any(_LabelFold.is_label(ch, e, m) for *_, ch, _ in _walk(node.body) for m in ("SetLabel", "GetLabel")),
+             "étiquette non pliée")
+    return f
 
 
 BLOCK_END = (core.OP_BLOCK, -1, 0, 0)  # marqueur du traducteur, retiré par allocate
@@ -608,6 +855,7 @@ class Translator:
         self.sc = Script(code)
         self.notes = set()  # approximations faites
         self.proc = None  # recette d'invocation par procédure : ("xyz", F, ct, rang) / ("synchro", F, F) / ("link", F, mn, mx)
+        self.counters = {}  # Duel.AddCustomActivityCounter(id, ACTIVITY_SPSUMMON, f) : id → (bit ST_SST / ST_SSXT, filtre ou None)
 
     # ------------------------------------------------ initial_effect
     def effects(self):
@@ -719,6 +967,16 @@ class Translator:
             if d == "Pendulum.AddProcedure":
                 regs.append(("pendulum",))
                 return
+            if d == "Duel.AddCustomActivityCounter":
+                need(len(st.args) == 3 and dotted(st.args[1]) == "ACTIVITY_SPSUMMON", "compteur d'activité : type")
+                key = self.ie_val(st.args[0], env)
+                fv = self.ie_val(st.args[2], env)
+                need(isinstance(key, int) and isinstance(fv, Fn) and fv.node is not None, "compteur d'activité : filtre")
+                self.counters[key] = self.counter_filter(fv.node)
+                return
+            if d == "aux.addContinuousLizardCheck":
+                self.notes.add("Clock Lizard ignoré")
+                return
             if d == "aux.AddEquipProcedure":
                 regs.append(self.equip_procedure(st.args, env))
                 return
@@ -728,6 +986,49 @@ class Translator:
                 return
             raise Unsupported(f"initial_effect : {d}")
         raise Unsupported(f"initial_effect : instruction {type(st).__name__}")
+
+    STATIC_FIELDS = {"typ", "attr", "race", "setc", "code", "not_typ"}
+
+    def static_filter(self, terms, cvar, why):
+        """Filtre sur des propriétés fixes (type, attribut, race, archétype, nom) : équivalent quand il est évalué
+        après coup sur une carte déjà invoquée."""
+        fl = Filt()
+        for x in terms:
+            self.filter_term(fl, x, {cvar: "CARD"}, cvar=cvar)
+        dflt = Filt().d
+        need(fl.loc == ALLZ and fl.ctrl is None and not fl.tgt and
+             all(fl.d[k] == dflt[k] for k in fl.d if k not in self.STATIC_FIELDS), why)
+        return fl.build(ALLZ | core.Z_OVERLAY, ALLZ | core.Z_OVERLAY)
+
+    def counter_filter(self, node):
+        """Filtre d'un compteur d'activité ACTIVITY_SPSUMMON (cartes qui ne comptent pas) → (bit de statut virtuel
+        des invocations qui comptent, filtre des exceptions ou None) : compte = invoquées ce tour [depuis l'Extra Deck]
+        ∧ ¬exception."""
+        need(len(node.args) >= 1 and len(node.body.body) == 1 and isinstance(node.body.body[0], A.Return),
+             "compteur d'activité : corps")
+        cvar = node.args[0].id
+        x = node.body.body[0].values[0]
+
+        def from_extra(t):
+            if isinstance(t, A.ULNotOp) and isinstance(t.operand, A.Invoke) and t.operand.func.id == "IsSummonLocation":
+                return dotted(t.operand.args[0]) == "LOCATION_EXTRA"
+            if isinstance(t, A.NotEqToOp) and isinstance(t.left, A.Invoke) and t.left.func.id == "GetSummonLocation":
+                return dotted(t.right) == "LOCATION_EXTRA"
+            return False
+        # not (c:IsSummonLocation(LOCATION_EXTRA) and not B) = not c:IsSummonLocation(LOCATION_EXTRA) or B
+        if isinstance(x, A.ULNotOp) and isinstance(x.operand, A.AndLoOp):
+            parts = self.conj(x.operand)
+            need(len(parts) == 2, "compteur d'activité : forme")
+            loc = [t for t in parts if isinstance(t, A.Invoke) and t.func.id == "IsSummonLocation"]
+            neg = [t for t in parts if isinstance(t, A.ULNotOp)]
+            need(len(loc) == 1 and len(neg) == 1 and dotted(loc[0].args[0]) == "LOCATION_EXTRA", "compteur d'activité : forme")
+            return core.ST_SSXT, self.static_filter(self.conj(neg[0].operand), cvar, "compteur d'activité : filtre")
+        terms = self.disj(x)
+        fx = [t for t in terms if from_extra(t)]
+        rest = [t for t in terms if not from_extra(t)]
+        need(len(rest) <= 1 and (rest or fx), "compteur d'activité : disjonction")
+        allowed = self.static_filter(self.conj(rest[0]), cvar, "compteur d'activité : filtre") if rest else None
+        return (core.ST_SSXT if fx else core.ST_SST), allowed
 
     def equip_procedure(self, args, env):
         """aux.AddEquipProcedure(c, p, f) : activation qui cible un monstre recto (de p : 0 moi, 1 adversaire, nil ou
@@ -854,17 +1155,23 @@ class Translator:
         plain_activation = any(isinstance(e, Effect) and e.f.get("SetType") == [K["EFFECT_TYPE_ACTIVATE"]]
                                and e.f.get("SetCode") == [K["EVENT_FREE_CHAIN"]]
                                and not any(k in e.f for k in ("SetCost","SetTarget","SetOperation")) for e in regs)
-        other_field_effect = any(isinstance(e, Effect) and isinstance(e.f.get("SetType",[0])[0], int) and
-                                 isinstance(e.f.get("SetRange",[0])[0], int) and e.f.get("SetType",[0])[0] & (K["EFFECT_TYPE_QUICK_O"] | K["EFFECT_TYPE_TRIGGER_O"] | K["EFFECT_TYPE_TRIGGER_F"])
-                                 and e.f.get("SetRange",[0])[0] & core.Z_SZONE for e in regs)
-        inline = plain_activation and other_field_effect and card_type(self.code) == (core.TYPE_TRAP | core.TYPE_CONTINUOUS)
+        # field::get_cteffect : seuls les effets TRIGGER / QUICK_O à portée de la zone magie/piège sont proposés
+        def offered(e):
+            if not isinstance(e, Effect):
+                return False
+            typ, rng = e.f.get("SetType", [0])[0], e.f.get("SetRange", [0])[0]
+            return isinstance(typ, int) and isinstance(rng, int) and bool(typ & (K["EFFECT_TYPE_QUICK_O"] | K["EFFECT_TYPE_TRIGGER_O"] | K["EFFECT_TYPE_TRIGGER_F"])) \
+                and bool(rng & core.Z_SZONE)
+        offers = [e for e in regs if offered(e)]
+        inline = plain_activation and bool(offers) and card_type(self.code) == (core.TYPE_TRAP | core.TYPE_CONTINUOUS)
+        alt_reg = None
         if inline:
-            need(len(regs) == 2 and all(isinstance(e, Effect) for e in regs),
-                 "activation combinée : plusieurs effets")
-            activation = [e for e in regs if e.f.get("SetType") == [K["EFFECT_TYPE_ACTIVATE"]]]
-            alternate = [e for e in regs if e.f.get("SetType") == [K["EFFECT_TYPE_QUICK_O"]]
-                         and e.f.get("SetCode") == [K["EVENT_FREE_CHAIN"]] and e.f.get("SetRange") == [core.Z_SZONE]]
-            need(len(activation) == len(alternate) == 1 and "SetCountLimit" not in activation[0].f,
+            need(len(offers) == 1, "activation combinée : plusieurs effets")
+            activation = [e for e in regs if isinstance(e, Effect) and e.f.get("SetType") == [K["EFFECT_TYPE_ACTIVATE"]]]
+            alt_reg = offers[0]
+            need(alt_reg.f.get("SetType") == [K["EFFECT_TYPE_QUICK_O"]] and alt_reg.f.get("SetCode") == [K["EVENT_FREE_CHAIN"]]
+                 and alt_reg.f.get("SetRange") == [core.Z_SZONE], "activation combinée : déclencheur ou événement")
+            need(len(activation) == 1 and "SetCountLimit" not in activation[0].f,
                  "activation combinée : événement ou compteur")
         hand_procs = [e for e in regs if isinstance(e, Effect) and e.f.get("SetCode") == [K["EFFECT_SPSUMMON_PROC"]]]
         need(len(hand_procs) <= 1, "plusieurs procédures de main")
@@ -932,12 +1239,14 @@ class Translator:
                         merged = True
                         break
             if not merged:
+                if e is alt_reg:
+                    alt_index = len(out)
                 out.append(compiled)
                 self.descs.append(e.desc)
         need(len(out) <= core.E, f"plus de {core.E} effets")
         if inline:
             initial = next(i for i, e in enumerate(out) if e[0] == core.K_ACTIVATE)
-            alternate = next(i for i, e in enumerate(out) if e[0] == core.K_QUICK)
+            alternate = alt_index
             need(out[alternate][1] == 0 and out[alternate][7].get("dmg", 0) == 0,
                  "activation combinée : damage step")
             effect = out[initial]
@@ -1306,9 +1615,9 @@ class Translator:
         return v.name if isinstance(v, Fn) else None
 
     @staticmethod
-    def vfilter(r, f, within=None, tgt=False):
-        # Ne pas empaqueter le registre virtuel dans les trois bits de l'ISA.
-        return (core.OP_FILTER, r, f, (within, bool(tgt)))
+    def vfilter(r, f, within=None, tgt=False, invert=False):
+        # Ne pas empaqueter le registre virtuel dans les trois bits de l'ISA. invert : complément du filtre.
+        return (core.OP_FILTER, r, f, (within, bool(tgt), False, True) if invert else (within, bool(tgt)))
 
     @staticmethod
     def vcopy(r, source):
@@ -1373,7 +1682,7 @@ class Translator:
                 queries.clear()
             for op, a, b, c in program:
                 index += 1
-                if op == core.OP_FILTER and len(c) == 3 and c[2] and last_read.get(c[0]) == index:
+                if op == core.OP_FILTER and len(c) >= 3 and c[2] and last_read.get(c[0]) == index:
                     need(c[0] in current, "copie d'un registre non initialisé")
                     current[a] = current[c[0]]
                     continue
@@ -1387,7 +1696,7 @@ class Translator:
                     within, target = c[:2]
                     if within is not None:
                         reads[2] = current[within]
-                    operands[2] = int(target) | (2 if len(c) == 3 and c[2] else 0)
+                    operands[2] = int(target) | (2 if len(c) >= 3 and c[2] else 0) | (4 if len(c) == 4 and c[3] else 0)
                 elif op == core.OP_DAMAGE and c:
                     reads[2] = current[c-1]
                 writes = op in definitions or op == core.OP_SPSUMMON or (op == core.OP_MOVE and c & 1)
@@ -1438,7 +1747,7 @@ class Translator:
                     slots[value] = destination
             if op == core.OP_FILTER:
                 lowered[2] = (((lowered[2]+1) if 2 in reads else 0) | (8 if operands[2] & 1 else 0)
-                              | ((1 << 20) if operands[2] & 2 else 0))
+                              | ((1 << 20) if operands[2] & 2 else 0) | ((1 << 21) if operands[2] & 4 else 0))
             elif op == core.OP_DAMAGE and 2 in reads:
                 lowered[2] += 1
             programs[phase].append((op, *lowered))
@@ -1454,14 +1763,15 @@ class Translator:
             programs[phase] = program = out
             limit = core.P-1 if phase == core.PG_RESOLVE else core.PT
             need(len(program) <= limit, f"programme {phase} > {limit} instructions")
-        filters = {ins[2] for program in programs for ins in program if ins[0] == core.OP_FILTER}
+        filters = {ins[2] for program in programs for ins in program if ins[0] in (core.OP_FILTER, core.OP_SSLOCK)}
+        filters |= {ins[3] for program in programs for ins in program if ins[0] == core.OP_SSLOCK and ins[3]}  # exceptions
         if len(effect) > 7:
             filters.update(effect[7].get("filters", ()))
         need(len(filters) <= core.NF, f"plus de {core.NF} filtres")
         return (*effect[:4], *programs, *effect[7:])
 
     def programs(self, e, on, cond_skip=False):
-        f = e.f
+        f = fold_labels(e.f)
         self.on = on
         self.tinfo = {}  # SetTargetPlayer / SetTargetParam
         self.treg = None  # registre des cibles (SelectTarget)
@@ -1617,6 +1927,15 @@ class Translator:
                 and env[t.left.id].name == "chk":
             need(st.orelse is None or isinstance(st.orelse, A.Block), "chk==0 avec elseif")
             b = st.body.body
+            # if A then return false end … return B  →  return (not A) and … and B
+            while len(b) > 1 and isinstance(b[0], A.If) and b[0].orelse is None and len(b[0].body.body) == 1 \
+                    and isinstance(b[0].body.body[0], A.Return) and len(b[0].body.body[0].values) == 1 \
+                    and isinstance(b[0].body.body[0].values[0], A.FalseExpr):
+                rest = b[1:]
+                if len(rest) == 1 and isinstance(rest[0], A.Return) and len(rest[0].values) == 1:
+                    b = [A.Return([A.AndLoOp(negate(b[0].test), rest[0].values[0])])]
+                else:
+                    break
             need(len(b) == 1 and isinstance(b[0], A.Return) and len(b[0].values) == 1, "chk==0 : forme")
             need(prog.kind in ("cost", "target"), "chk==0 hors coût / cible")
             self.check(b[0].values[0], env, prog)
@@ -1631,7 +1950,7 @@ class Translator:
                 self.check(t, env, prog)
                 return self.block(body, env, prog)
         src = self.show(t)
-        if st.orelse is None and all(self.ignorable(b) for b in body):
+        if st.orelse is None and all(self.ignorable(b) for b in body) and _pure(t):  # une action dans le test compte
             return
         if len(body) == 1 and isinstance(body[0], A.Return) and len(body[0].values) == 1 and st.orelse is None and \
                 src in ("not eg", "Duel.IsPlayerAffectedByEffect(tp, EFFECT_DISCARD_COST_CHANGE)"):
@@ -1759,7 +2078,8 @@ class Translator:
                     isinstance(x.left, A.ULengthOP) or
                     isinstance(x.left, A.Name) and isinstance(env.get(x.left.id), Count) or
                     isinstance(x.left, A.Invoke) and x.left.func.id in ("GetCount", "FilterCount") or
-                    isinstance(x.left, A.Call) and dotted(x.left.func) in ("Duel.GetMatchingGroupCount", "Duel.GetFieldGroupCount")):
+                    isinstance(x.left, A.Call) and dotted(x.left.func) in ("Duel.GetMatchingGroupCount", "Duel.GetFieldGroupCount",
+                                                                           "Duel.GetCustomActivityCount", "Duel.GetActivityCount")):
                 value = self.expr(x.left, env, prog)
                 if isinstance(value, Count):
                     self.count_check(value, type(x), x.right.n, prog, negate=negate)
@@ -1917,6 +2237,27 @@ class Translator:
             prog.emit(C.REQ(reg.r, n - int(comparator == A.LessThanOp), maximum=True))
 
     def check_term(self, x, env, prog, cond):
+        # ft>-1 / GetLocationCount(..)>=0 : toujours vrai (le compte n'est jamais négatif)
+        if isinstance(x, (A.GreaterThanOp, A.GreaterOrEqThanOp)) and isinstance(x.right, (A.Number, A.UMinusOp)) and (
+                (isinstance(x.left, A.Name) and isinstance(env.get(x.left.id), FreeCount)) or
+                (isinstance(x.left, A.Call) and dotted(x.left.func) == "Duel.GetLocationCount")):
+            bound = self.fexpr(x.right, env)
+            if bound == (-1 if isinstance(x, A.GreaterThanOp) else 0):
+                return
+        # Duel.GetMZoneCount(tp, e:GetHandler()) > 0 : case libre, ou la carte elle-même en libère une
+        if isinstance(x, (A.GreaterThanOp, A.GreaterOrEqThanOp)) and isinstance(x.left, A.Call) and \
+                dotted(x.left.func) == "Duel.GetMZoneCount" and len(x.left.args) == 2:
+            player, card = x.left.args
+            handler = (isinstance(card, A.Invoke) and card.func.id == "GetHandler" and self.is_name(card.source, env, Eff)) \
+                or self.is_name(card, env, Handler)
+            need(handler and isinstance(env.get(getattr(player, "id", None)), Player) and env[player.id].p == ME
+                 and self.fexpr(x.right, env) == (0 if isinstance(x, A.GreaterThanOp) else 1),
+                 "GetMZoneCount : carte ou seuil")
+            fl = Filt()
+            fl.set("zx", core.ZX_FREE)
+            r = prog.reg()
+            prog.emit(C.SELF(r), self.vfilter(r, fl.build(ALLZ, ALLZ), within=r), C.REQ(r, 1))
+            return
         hc = self.handler_call(x, env)
         if hc is not None:
             m, args = hc
@@ -2161,6 +2502,19 @@ class Translator:
         for x in self.conj(body[0].values[0]):
             self.filter_term(fl, x, fenv, cvar=args[0].id)
 
+    def mzone_free(self, x, env, cvar):
+        """Duel.GetMZoneCount(tp, c[, tp]) > 0 (ou >= 1) sur la carte du filtre."""
+        if not (isinstance(x, (A.GreaterThanOp, A.GreaterOrEqThanOp)) and isinstance(x.left, A.Call)
+                and dotted(x.left.func) == "Duel.GetMZoneCount"):
+            return False
+        args = x.left.args
+        me = lambda a: isinstance(self.fexpr(a, env), Player) and self.fexpr(a, env).p == ME  # noqa: E731
+        need(len(args) in (2, 3) and me(args[0]) and (len(args) == 2 or me(args[2]))
+             and isinstance(args[1], A.Name) and args[1].id == cvar
+             and self.fexpr(x.right, env) == (0 if isinstance(x, A.GreaterThanOp) else 1),
+             "filtre : GetMZoneCount : options")
+        return True
+
     def filter_term(self, fl, x, env, cvar):
         if isinstance(x, A.Invoke) and isinstance(x.source, A.Name) and x.source.id == cvar:
             args = [self.fexpr(a, env) for a in x.args]
@@ -2172,6 +2526,37 @@ class Translator:
                 sub = self.sc.fns.get(d[2:])
                 need(sub is not None, f"filtre : {d}")
                 self.apply_fn(fl, Fn(sub, d), [self.fexpr(a, env) for a in x.args[1:]], env)
+                return
+        # Duel.GetMZoneCount(tp, c) > 0, et sa forme développée ft>0 or (c:IsControler(tp) and c:GetSequence()<5)
+        if self.mzone_free(x, env, cvar):
+            fl.set("zx", fl.d["zx"] | core.ZX_FREE)
+            return
+        if isinstance(x, A.OrLoOp) and (self.mzone_free(x.left, env, cvar) or
+                isinstance(x.left, A.GreaterThanOp) and isinstance(x.left.left, A.Name)
+                and isinstance(env.get(x.left.left.id), FreeCount) and self.fexpr(x.left.right, env) == 0
+                and env[x.left.left.id].player.p == ME and env[x.left.left.id].zone == core.Z_MZONE):
+            mine = self.conj(x.right)
+            ctrl = [t for t in mine if isinstance(t, A.Invoke) and t.func.id == "IsControler" and isinstance(t.source, A.Name)
+                    and t.source.id == cvar and len(t.args) == 1 and isinstance(self.fexpr(t.args[0], env), Player)
+                    and self.fexpr(t.args[0], env).p == ME]
+            main = [t for t in mine if isinstance(t, A.LessThanOp) and isinstance(t.left, A.Invoke) and t.left.func.id == "GetSequence"
+                    and isinstance(t.left.source, A.Name) and t.left.source.id == cvar and self.fexpr(t.right, env) == 5]
+            inmz = [t for t in mine if isinstance(t, A.Invoke) and t.func.id == "IsLocation" and isinstance(t.source, A.Name)
+                    and t.source.id == cvar and len(t.args) == 1 and self.fexpr(t.args[0], env) == core.Z_MZONE]
+            need(len(main) == 1 and len(ctrl) + len(main) + len(inmz) == len(mine), f"filtre : ou {self.show(x)}")
+            if not inmz:
+                self.notes.add("GetSequence()<5 lu comme une case principale de la zone monstres")
+            fl.set("zx", fl.d["zx"] | (core.ZX_FREE if ctrl else core.ZX_FREEANY))
+            return
+        # c:IsControler(tp) or c:IsFaceup() : à moi, ou face recto chez l'adversaire
+        if isinstance(x, A.OrLoOp):
+            parts = self.disj(x)
+            kinds = sorted("ctrl" if isinstance(t, A.Invoke) and t.func.id == "IsControler" and len(t.args) == 1
+                           and isinstance(self.fexpr(t.args[0], env), Player) and self.fexpr(t.args[0], env).p == ME
+                           else "fu" if isinstance(t, A.Invoke) and t.func.id == "IsFaceup" and not t.args else "?"
+                           for t in parts if isinstance(t, A.Invoke) and isinstance(t.source, A.Name) and t.source.id == cvar)
+            if kinds == ["ctrl", "fu"] and len(parts) == 2:
+                fl.set("zx", fl.d["zx"] | core.ZX_OPFU)
                 return
         if isinstance(x, A.OrLoOp):
             # Une union de types ou de raisons réutilise le masque « au moins un bit ».
@@ -2560,6 +2945,27 @@ class Translator:
             need(isinstance(p, Player), "ShuffleHand")
             prog.emit(C.SHUFFLE_HAND(p.p))
             return None
+        if d in ("Duel.GetCustomActivityCount", "Duel.GetActivityCount"):
+            custom = d == "Duel.GetCustomActivityCount"
+            args_ = args[1:] if custom else args
+            need(len(args_) == 2 and dotted(args_[1]) == "ACTIVITY_SPSUMMON", f"{d} : activité")
+            who = self.expr(args_[0], env, prog)
+            need(isinstance(who, Player) and who.p == ME and prog is not None, f"{d} : joueur")
+            if custom:
+                key = self.expr(args[0], env, prog)
+                need(key in self.counters, "compteur d'activité inconnu")
+                bit, allowed = self.counters[key]
+            else:
+                bit, allowed = core.ST_SST, None
+            r = prog.reg()
+            zones = ALLZ | core.Z_OVERLAY
+            if allowed is not None:
+                prog.emit(self.vfilter(r, allowed, invert=True))
+            prog.emit(self.vfilter(r, C.F(me=zones, op=zones, st=bit), within=r if allowed is not None else None))
+            return Count(Reg(r, zones, zones))
+        if d == "aux.addTempLizardCheck":
+            self.notes.add("Clock Lizard ignoré")
+            return None
         if d == "Duel.RegisterEffect":
             ne, p = E_(0), E_(1)
             need(isinstance(ne, NewEff) and isinstance(p, Player) and p.p == ME, "Duel.RegisterEffect")
@@ -2693,6 +3099,8 @@ class Translator:
         """Effet de joueur posé par une résolution : seul « ne peut plus activer les cartes de ce nom ce tour »
         (Sangan, Witch…) → LOCK."""
         f = ne.f
+        if f.get("SetCode", [0])[0] == K["EFFECT_CANNOT_SPECIAL_SUMMON"]:
+            return self.ss_lock(ne, prog)
         need(f.get("SetType", [0])[0] == K["EFFECT_TYPE_FIELD"] and f.get("SetCode", [0])[0] == K["EFFECT_CANNOT_ACTIVATE"],
              "effet de joueur" + (f" {f.get('SetCode')}" if os.environ.get("TR_DIAG") else ""))
         need(f.get("SetTargetRange") == [1, 0], "effet de joueur : joueurs")
@@ -2704,6 +3112,47 @@ class Translator:
         need(self.show(v.node.body.body[0]).replace("\n", " ") == "return re:GetHandler():IsCode(e:GetLabel())",
              "effet de joueur : valeur")
         prog.emit(C.LOCK(lab[1].r))
+
+    def ss_lock(self, ne, prog):
+        """« Ce tour, vous ne pouvez plus invoquer spécialement de monstres, sauf … » : EFFECT_CANNOT_SPECIAL_SUMMON
+        de joueur jusqu'à la fin du tour, cible = filtre des cartes interdites → SSLOCK."""
+        f = ne.f
+        need(f.get("SetType", [0])[0] == K["EFFECT_TYPE_FIELD"], "interdiction d'invocation : type")
+        pr = f.get("SetProperty", [0])[0]
+        ok = K["EFFECT_FLAG_PLAYER_TARGET"] | K["EFFECT_FLAG_CLIENT_HINT"] | K["EFFECT_FLAG_OATH"]
+        need(pr & K["EFFECT_FLAG_PLAYER_TARGET"] and pr & ~ok == 0, f"interdiction d'invocation : propriété {pr:#x}")
+        # OATH posé au coût : levé si l'activation est niée (non modélisé)
+        need(prog.kind != "cost" or not pr & K["EFFECT_FLAG_OATH"], "interdiction d'invocation OATH au coût")
+        need(f.get("SetReset", [0])[0] == K["RESET_PHASE"] | K["PHASE_END"], "interdiction d'invocation : durée")
+        tr = f.get("SetTargetRange")
+        need(tr in ([1, 0], [0, 1], [1, 1]), "interdiction d'invocation : joueurs")
+        need(not set(f) - {"SetType", "SetProperty", "SetCode", "SetReset", "SetTargetRange", "SetTarget",
+                           "SetDescription"}, "interdiction d'invocation : champs " + ",".join(sorted(f)))
+        fl, unless = Filt(), None
+        fv = f.get("SetTarget", [None])[0]
+        if fv is not None:
+            need(isinstance(fv, Fn), "interdiction d'invocation : cible")
+            node = fv.node
+            if node is None:
+                self.apply_fn(fl, fv, [], {}, two=True)
+            else:
+                # cible = termes positifs ∧ not (exception) : l'exception devient un filtre à part (∧ ¬exception)
+                need(len(node.args) >= 2 and len(node.body.body) == 1 and isinstance(node.body.body[0], A.Return),
+                     "interdiction d'invocation : corps")
+                cvar = node.args[1].id
+                terms = self.conj(node.body.body[0].values[0])
+                neg = [t for t in terms if isinstance(t, A.ULNotOp)]
+                need(len(neg) <= 1, "interdiction d'invocation : deux exceptions")
+                for t in terms:
+                    if t not in neg:
+                        self.filter_term(fl, t, {cvar: "CARD"}, cvar=cvar)
+                if neg:
+                    unless = self.static_filter(self.conj(neg[0].operand), cvar, "interdiction d'invocation : exception")
+        need(fl.ctrl is None and not fl.tgt, "interdiction d'invocation : filtre")
+        flt = fl.build(ALLZ, 0)
+        for who in (ME, OPP):
+            if tr[who]:
+                prog.emit(C.SSLOCK(flt, who, unless))
 
     def modifier(self, obj, ne, prog):
         f = ne.f

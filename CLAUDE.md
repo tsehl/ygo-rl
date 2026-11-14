@@ -59,6 +59,7 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
 - Équipement (2026-11-13) : relation `eq_t` / `eq_mv`, brique OP_EQUIP (Duel.Equip), effets EFFECT_TYPE_EQUIP (`cont(tgt=EQUIPPED)`), envoi au cimetière par la règle quand la cible quitte le terrain / passe face verso (`drop_equips`), banque sans équipement = largeur 0. `compare.py` compare la cible d'équipement. Traducteur : `aux.AddEquipProcedure` à filtre fixe, 773 / 13 541 (6 / 250 magies d'équipement ; refus suivants : plus de 2 effets, arguments de procédure, GetEquipTarget). regress complet vert, compare_gen 0-9 100/100 (revive 0 et 4). Voir `translate/README.md`. Suite décidée : E paramétrable (E=4, 86 % des scripts ont ≤ 4 effets), tête d'activation calculée sur les jetons d'effet (réseau indépendant de E), générateur à plus de 2 effets.
 
 - E=4 et réseau indépendant de E (2026-11-13) : `core.E = 4` (bits de compteurs par effet au-dessus du bit 17, une seule branche d'activation à effet dynamique). Réseau : la tête d'activation lit les jetons d'effet de l'encodeur de cartes (`eq` / `ek` / `eo`, logit = base de l'action + terme par jeton) ; plus aucun poids ne dépend de E (`pos_e` à E_MAX=16 lignes, LC=64). Les anciens checkpoints se chargent (`complete()`). Générateur : 1 à 4 effets par monstre à effet. Deux règles trouvées par `compare_gen` et ajoutées : pas de renvoi en main d'une carte ST_LEAVE, `NegateRelatedChain` (bit `nrc` de MODIFY MC_DISABLE). Catalogue 815 / 13 541. Voir `translate/README.md`.
+- Traducteur, 2026-11-14 : blocs conditionnels (OP_BLOCK), Step en boucle, restrictions d'invocation spéciale du tour (OP_SSLOCK, `ss_t`), étiquettes constantes repliées, zones libérées par le coût (ZX_FREE / ZX_FREEANY / ZX_OPFU), aides NecroValley / SpElim / DoubleSnare repliées. Catalogue **907 / 13 541**. `ss_locked` en `fori_loop` (16 copies de `filter_mask` déroulées faisaient tuer sbp à 13,9 Go ; pic sb / sbp 11,7 Go). Voir `translate/README.md`.
 ## Règles
 
 
@@ -76,7 +77,7 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
   - une session Colab sans progrès depuis ~3 min doit être arrêtée tout de suite ;
   - toujours arrêter les sessions à la fin.
 - Le travail mécanique (comptages, scripts d'extraction, grep) peut être confié à des agents Haiku avec une spécification précise.
-- Pour le chantier autonome moteur / traducteur demandé par Thomas, travailler sur `codex` et pousser après chaque commit (branche choisie par Thomas, qui veut voir le code).
+- Branche de travail : `main` (poussée sur origin/main). Ne plus pousser sur `codex` (consigne de Thomas, 2026-11-14).
 - Pousser `main` sur origin/main est autorisé sans demander (accord de Thomas, 2026-11-14).
 
 - Branche `codex` : capacités des compteurs et activations fiabilisées ; voir `translate/README.md`.
