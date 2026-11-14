@@ -684,3 +684,27 @@ HEAD (banque procédurale 0, Extra Deck 15) : état 36 477 octets (int32 24 116,
 Validation sur un coût connu : E=4 avait coûté −9 % (B=1024) / −5 % (B=4096) sur L4 ; les compteurs donnent état
 +8,5 %, exec_one +17 %, refresh inchangé. Le coût de E=4 est donc dans exec_one et les passes, pas dans refresh.
 À relever après chaque ajout au moteur ; le débit L4 reste la mesure finale.
+
+### Coût d'un tour de boucle selon B (L4, 2026-11-14)
+
+`bench/brick_scale.py` : chaque brique vmappée tourne 20 fois dans une boucle compilée (`lax.fori_loop`), à plusieurs
+tailles de lot. ms par tour, états de début de partie (toutes les branches sont calculées quel que soit l'état) :
+
+| brique | B=64 | 256 | 1024 | 4096 |
+|---|---|---|---|---|
+| boucle vide | 0,07 | 0,08 | 0,06 | 0,08 |
+| `where` sur tout l'état (111 champs) | 0,07 | 0,07 | 0,11 | 1,38 |
+| exec_one | 0,56 | 0,57 | 1,32 | 7,29 |
+| refresh (sans fusion) | 0,35 | 0,42 | 0,89 | 4,97 |
+| exec_one + refresh | 0,81 | 0,94 | 2,29 | 12,2 |
+
+- Plancher ~0,8 ms jusqu'à B=256, ×2,4 à B=1024, puis ×5,3 pour ×4 de parties entre 1024 et 4096 (plus que
+  linéaire). Par partie : 3,7 µs à 256, 2,2 µs à 1024, 3,0 µs à 4096 : l'optimum est vers 1024-2048.
+- Un tour de la boucle d'exécution sur un sous-lot de 256 coûterait 0,94 ms au lieu de 2,29 à B=1024 (÷2,4).
+- La copie de l'état (`_where`) est négligeable jusqu'à 1024 : regrouper les champs en paquets ne rapporte rien.
+- **Les chronos par brique pris par appel Python (`loop_stats.py --prof-at`, et « exec_one 2,7 ms, refresh 1,9 ms »
+  dans ETAPE3) surestiment de ~1,5 à 2 ms** : passer les 111 tableaux de l'état à une fonction jit coûte ~1 ms à lui
+  seul (un `where` sur l'état : 1,1 ms par appel Python contre 0,11 ms dans une boucle compilée). Première version de
+  ce bench, même biais : exec_one 3,1 → 3,7 ms de B=64 à 1024, faussement plat.
+- Conséquence : 17 tours × 2,3 ms ≈ 39 ms, soit environ un tiers d'un appel de `step_batch` en milieu de partie
+  (113 ms). Les deux tiers restants (settle, passes, apply, legal, sous-lots) ne sont pas encore mesurés proprement.

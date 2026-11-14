@@ -1,9 +1,9 @@
 """Part fixe et part linéaire du coût de chaque brique du moteur selon la taille du lot (GPU).
 
 Des états de milieu de partie (B0 parties, `--calls` appels de step_batch, politique aléatoire) sont recopiés ou
-coupés à chaque taille de `--sizes`, puis chaque brique vmappée est chronométrée seule. Si le temps est proportionnel
-à B, le GPU est saturé (bande passante) : un sous-lot des parties actives et un état plus petit paient. S'il est
-plat, c'est le nombre d'opérations lancées par tour qui coûte : il faut moins de tours ou des tours fusionnés.
+coupés à chaque taille de `--sizes`, puis chaque brique vmappée est chronométrée seule, dans une boucle compilée. Si le
+temps est proportionnel à B, le GPU est saturé (bande passante) : un sous-lot des parties actives et un état plus petit
+paient. S'il est plat, c'est le nombre d'opérations lancées par tour qui coûte : il faut moins de tours.
 
 Usage : python bench/brick_scale.py [--b0 1024] [--calls 100] [--sizes 64,128,256,512,1024,2048,4096] [--proc 0]"""
 import argparse
@@ -27,7 +27,7 @@ ap.add_argument("--calls", type=int, default=100)
 ap.add_argument("--sizes", default="64,128,256,512,1024,2048,4096")
 ap.add_argument("--proc", type=int, default=0)
 ap.add_argument("--frac", type=float, default=0.1)
-ap.add_argument("--n", type=int, default=20)
+ap.add_argument("--n", type=int, default=5)
 a = ap.parse_args()
 
 cset = cardgen.Gen(a.proc).make_set(400, 80)
@@ -56,25 +56,37 @@ if a.calls:
     print(f"{a.calls} appels en {time.time() - t0:.0f} s ; {int(live.sum())} parties en cours, tour moyen "
           f"{float(np.asarray(s.turn)[live].mean()):.1f}", flush=True)
 
-V = lambda fn: jax.jit(jax.vmap(fn, in_axes=(None, 0)))
-bricks = dict(exec_one=V(core.exec_one), refresh=V(lambda b, s: core.refresh(b, s, fus=False)),
-              legal=V(lambda b, s: core.legal(b, s, fus=False)), pass_priority=V(core.pass_priority),
-              trig_eval=V(core.trig_eval), auto_pass=V(core.auto_pass),
-              copie=jax.jit(lambda b, s: jax.tree.map(lambda x: jnp.where(s.done.reshape((-1,) + (1,) * (x.ndim - 1)), x, x + 0), s)))
+# Chaque brique tourne K fois dans une boucle compilée (lax.fori_loop), comme dans step_batch : un appel Python par
+# brique paie ~1 à 2 ms de passage des 111 tableaux de l'état, ce qui se confond avec une part fixe du GPU.
+K = 20
+V = lambda fn: (lambda bk, s: jax.vmap(fn, in_axes=(None, 0))(bk, s))
+# legal et auto_pass ne sont pas mesurés ici : ils ne modifient pas l'état, et XLA sort de la boucle un calcul qui
+# ne dépend pas du tour (0,13 ms sur CPU, non crédible).
+ref = V(lambda b, s: core.refresh(b, s, fus=False))
+
+
+def where_all(bk, s):
+    m = (s.turn + s.clk) % 2 == 0
+    return jax.tree.map(lambda x: jnp.where(m.reshape((-1,) + (1,) * (x.ndim - 1)), x, ~x if x.dtype == jnp.bool_ else x + 1), s)
+
+
+bricks = dict(vide=lambda bk, s: s._replace(clk=s.clk + 1), where_etat=where_all, exec_one=V(core.exec_one), refresh=ref,
+              exec_refresh=lambda bk, s: ref(bk, V(core.exec_one)(bk, s)), pass_priority=V(core.pass_priority),
+              trig_eval=V(core.trig_eval))
 sizes = [int(v) for v in a.sizes.split(",")]
 res = {k: [] for k in bricks}
 for b in sizes:
     idx = jnp.arange(b) % a.b0
     sx = jax.tree.map(lambda x: x[idx], s)
-    for k, fn in bricks.items():
+    for k, body in bricks.items():
+        fn = jax.jit(lambda bk, s, body=body: jax.lax.fori_loop(0, K, lambda i, s: body(bk, s), s))
         jax.block_until_ready(fn(bank, sx))
         t1 = time.time()
         for _ in range(a.n):
             r = fn(bank, sx)
         jax.block_until_ready(r)
-        res[k].append(1000 * (time.time() - t1) / a.n)
+        res[k].append(1000 * (time.time() - t1) / a.n / K)
     print(f"B={b} fait", flush=True)
-print(f"\nms par appel{'':8s}" + "".join(f"{b:>9d}" for b in sizes) + "   fixe (ms)   µs / partie   part fixe à 1024")
+print(f"\nms par tour{'':9s}" + "".join(f"{b:>9d}" for b in sizes) + "   µs / partie au plus grand B")
 for k, v in res.items():
-    slope, fix = np.polyfit(sizes, v, 1)
-    print(f"{k:20s}" + "".join(f"{t:9.2f}" for t in v) + f"{fix:12.2f}{1000 * slope:14.2f}{100 * fix / (fix + 1024 * slope):18.0f} %")
+    print(f"{k:20s}" + "".join(f"{t:9.3f}" for t in v) + f"{1000 * v[-1] / sizes[-1]:14.2f}")
