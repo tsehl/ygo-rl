@@ -24,7 +24,7 @@ KINDS = "NONE ACTIVATE IGNITION TRIG_F TRIG_O QUICK CONT PROC".split()
 PARTS = ("coût", "cible", "résol")
 EVS = "SUMMON FLIP_SUMMON SPSUMMON ATTACK TO_GRAVE BATTLE_DESTROYED FLIP PRE_DMG".split()
 # arguments significatifs par opcode (les numéros de registre sont des détails d'assemblage : on les retire)
-ARGS = {"REQ": lambda a, b, c: (c,), "MOVE": lambda a, b, c: (b, c), "SPSUMMON": lambda a, b, c: (b, c), "MODIFY": lambda a, b, c: (b,),
+ARGS = {"MINATK": lambda a, b, c: (c,), "REQ": lambda a, b, c: (c,), "MOVE": lambda a, b, c: (b, c), "SPSUMMON": lambda a, b, c: (b, c), "MODIFY": lambda a, b, c: (b,),
         "EVENT": lambda a, b, c: (b,), "COND_PHASE": lambda a, b, c: (a,), "COND_TURN": lambda a, b, c: (a,),
         "COND_EVP": lambda a, b, c: (a, b), "COND_SELF": lambda a, b, c: (a, b, c), "COND_CHAIN": lambda a, b, c: (a, b),
         "COND_ATK": lambda a, b, c: (a,)}

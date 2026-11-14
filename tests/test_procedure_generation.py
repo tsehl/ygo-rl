@@ -11,6 +11,28 @@ import core,cardgen,tolua,model,brick_audit,compare_gen
 
 
 class ProcedureGenerationTests(unittest.TestCase):
+    def test_first_original_is_generated_and_visible_to_the_model(self):
+        found = 0
+        for seed in range(4):
+            specs = cardgen.Gen(seed).make_set(400, 80)
+            bank = cardgen.to_bank(specs)
+            _, mask = model.card_tokens(bank)
+            for index, card in enumerate(specs):
+                for effect, spec in enumerate(card['effects']):
+                    if not any(c.get('first_original') for c in spec.get('clauses', [])):
+                        continue
+                    found += 1
+                    self.assertTrue(cardgen.fits(spec))
+                    self.assertIn('résol MINATK (3,)', brick_audit.features(bank, index))
+                    ins = np.asarray(bank.prog[index, effect, core.PG_RESOLVE])
+                    first = np.flatnonzero((ins[:, 0] == core.OP_MINATK) & (ins[:, 3] == 3))
+                    self.assertEqual(len(first), 1)
+                    # L'instruction et ses arguments doivent survivre au masque de l'encodeur.
+                    self.assertTrue(bool(mask['ins'][index, effect, core.PG_RESOLVE, first[0]]))
+                    table = tolua.spec_table(card, {x['code']: x['lv'] for x in specs})
+                    self.assertTrue(table['effects'][effect]['clauses'][0]['first_original'])
+        self.assertGreater(found, 0)
+
     def test_generated_comparator_reports_failures_to_the_shell(self):
         for ok,expected in ((True,0),(False,1)):
             with patch.object(sys,'argv',['compare_gen.py','--banks','0','--games','1']), \

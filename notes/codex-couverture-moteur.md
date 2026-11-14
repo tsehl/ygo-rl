@@ -70,3 +70,40 @@ Lots suivants : distribution procédurale de cette composition et observation
 nécessaire au choix ; groupes multiples via `SetTargetCard` / `GetTargetCards` ;
 scénarios de déplacement puis retour. Ne pas assimiler le sous-lot livré à la
 couverture complète des groupes et relations.
+
+## Distribution procédurale : première cible originale
+
+Les clauses de déplacement sélectionnant deux cibles peuvent désormais opérer
+sur la première originale (`first_original`). Les autres sélections multiples
+gardent leur comportement. Le coût estimé compte une seule carte affectée.
+Compilation par `FIRST(original=True)`, `REQ(related=True)` et filtre existants :
+aucun opcode, registre ou champ d'état ajouté, formes de banque conservées.
+L'audit des briques distingue désormais MINATK des variantes FIRST par ses bits.
+
+Validations du 14 novembre 2026 :
+
+- `tests/first_target_generation_oracle_check.py` : trois scénarios, 2 146
+  décisions identiques (sans réponse, première ou seconde cible détruite).
+  La seconde clause de récupération ne passe que si la première opération réussit.
+- `gen/compare_gen.py --banks 0-3 --games 5 --seed0 6100` : 20/20 parties
+  identiques à l'oracle sur quatre banques procédurales.
+- `test_procedure_generation.py` : trois tests passent, dont présence effective
+  de la composition tirée par le générateur, budgets et exposition de l'instruction
+  à l'encodeur de cartes. Cela ne valide pas l'observation dynamique des cibles.
+
+Campagne officielle sur une copie figée de `67e0359` : 30/30 parties identiques,
+10 573 décisions, graines 6000–6029, `--k 8`, limitées aux 17 codes gagnés par
+le traducteur. Signature du manifeste :
+`6414baf7331bc91ed00de0ad895d0dda5323767dc8226c150db8ebb823f115ba`.
+Sept cartes ont résolu un effet : 4929256 (8), 28357177 (13), 36280194 (40),
+77334267 (30), 90928333 (30), 93920745 (5), 96947648 (17).
+97518132 a seulement été invoquée. Les neuf autres n'ont exercé aucun effet :
+cette campagne ne prouve donc pas la validité de chacune des 17 traductions,
+ni de chaque branche d'effet des sept cartes exercées.
+
+Prochaine étape nécessaire : l'observation montre les sources de chaîne mais
+pas leurs cibles. Ne pas annoncer une couverture d'apprentissage complète.
+Ne pas reconstruire les cibles par union des registres : ils contiennent aussi
+des candidats et peuvent être réutilisés. La première originale est ordonnée
+par l'oracle natif ; exposer l'UID interne comme information au réseau demande
+une justification de visibilité, pas une simple copie de ce champ.

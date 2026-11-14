@@ -153,7 +153,10 @@ class Gen:
             if sel == "all" and where in ("opp_card", "any_mon") and verb != "destroy":
                 sel = "target"
             k = 2 if sel == "target" and self.p(0.15) else 1
-            return dict(verb=verb, sel=sel, f=f, k=k, v=0)
+            clause = dict(verb=verb, sel=sel, f=f, k=k, v=0)
+            if k == 2 and self.p(0.5):
+                clause["first_original"] = True
+            return clause
         if verb == "tohand":
             if self.p(0.6):  # recherche dans le deck
                 f = self.mon(self.pick([1, 1, 2]), me=Z_DECK) if self.p(0.7) else dict(
@@ -662,6 +665,8 @@ class Gen:
 
 def clause_value(c):
     v, k = c["verb"], c.get("k", 1)
+    if c.get("first_original"):
+        k = 1
     sel = c.get("sel")
     if v == "draw":
         return 1.0 * c["n"]
@@ -817,8 +822,10 @@ def clause_bricks(c, on, first):
             return [], [FILTER(0, _F(f))] + verb_bricks(c, 0), 0
         return [], pre_r + [FILTER(0, _F(f)), CHOOSE(1, 0, k)] + verb_bricks(c, 1), 1
     if sel == "target":
+        select = ([cards.FIRST(2, 1, original=True), REQ(2, 1, related=True)]
+                  if c.get("first_original") else [])
         return (pre_t + [FILTER(0, _F(f), tgt=True), CHOOSE(1, 0, k, tgt=True)],
-                pre_r + [FILTER(2, _F(f), within=1)] + verb_bricks(c, 2), 2)
+                pre_r + select + [FILTER(2, _F(f), within=2 if select else 1)] + verb_bricks(c, 2), 2)
     if sel == "all":
         return [FILTER(0, _F(f)), REQ(0, 1)], [FILTER(2, _F(f))] + verb_bricks(c, 2), 2
     if sel == "pick":
