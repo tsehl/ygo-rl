@@ -77,6 +77,7 @@ Moteur Yu-Gi-Oh complet en JAX, vectorisé (vmap) sur GPU. Les effets des cartes
   - toujours arrêter les sessions à la fin.
 - Le travail mécanique (comptages, scripts d'extraction, grep) peut être confié à des agents Haiku avec une spécification précise.
 - Pour le chantier autonome moteur / traducteur demandé par Thomas, travailler sur `codex` et pousser après chaque commit (branche choisie par Thomas, qui veut voir le code).
+- Pousser `main` sur origin/main est autorisé sans demander (accord de Thomas, 2026-11-14).
 
 - Branche `codex` : capacités des compteurs et activations fiabilisées ; voir `translate/README.md`.
 - Branche `codex` : historique des invocations ; voir `translate/README.md`.
