@@ -794,3 +794,32 @@ départ : un modèle repris ne fait plus la différence entre ses effets jusqu'�
 `eo` apprenne. C'est la perte acceptée pour avoir un réseau indépendant de E. Le
 générateur tire 1 à 4 effets par monstre à effet (banque 0 : 94 / 50 / 38 / 20 cartes à
 1 / 2 / 3 / 4 effets).
+
+### Sonde supervisée sur le choix de cible (2026-11-14)
+
+Question : la cible de résurrection mal choisie vient-elle de la représentation ou du signal de RL ?
+`train/selprobe.py` : 822 décisions D_SELECT entre monstres du cimetière d'ATK distinctes (états visités par le
+run 5 tiré contre l'heuristique ; 4 banques procédurales `revive=4`, B=128, et 90 Monster Reborn sur vraies cartes).
+Tronc figé, tête linéaire d → 1 par candidat, apprise sur 3 banques procédurales (458 décisions), testée sur la
+4e (274) et sur les vraies cartes. CPU, ~25 min de collecte, 1 min de sonde.
+
+| réseau | sonde, banque à l'écart | sonde, Reborn réel | politique sur Reborn réel : plus fort / plus faible |
+|---|---|---|---|
+| hasard | 31 % | 26 % | 26 % / 25 % |
+| non entraîné | 97 % | 53 % | 22 % / 24 % |
+| run 3 (sans thermomètre) | 54 % | 72 % | 27 % / 24 % |
+| run 4 B (120 it) | 98 % | 83 % | 14 % / 30 % |
+| run 6 (120 it, revive) | 97 % | 82 % | **4 % / 74 %** |
+| run 5 (360 it) | 98 % | 82 % | **57 % / 3 %** |
+| run 7 it 60 (suite du run 5) | 96 % | 86 % | 31 % / 19 % |
+
+(sonde = sortie du tronc ; l'entrée du tronc donne les mêmes chiffres à ±5 points ; erreur type ~5 points sur 90.)
+
+- La représentation n'est pas en cause : depuis les features numériques (run 4), « le plus fort candidat » se lit
+  linéairement, y compris sur les vraies cartes avec une tête apprise sur le procédural. Le run 3 ne le portait pas.
+- La politique n'est pas « au hasard » : le run 6 ressuscite le plus faible trois fois sur quatre. Elle apprend une
+  préférence nette dont le signe dépend du run : c'est le signal qui est bruité, pas l'information qui manque.
+- Le run 7 a perdu la moitié de la préférence du run 5 (57 → 31 %), sur des états du run 5 : à confirmer avec plus
+  d'occasions avant de conclure à une régression.
+- Limite : sur la banque procédurale, les destinations sont mélangées (main, terrain, coût) ; seule la ligne Reborn
+  dit si le choix de la politique est bon.
